@@ -186,18 +186,20 @@ class TradeRefund {
         terminalWithoutEvidence: true,
       );
     }
-    final keepCurrent = updateRank < currentRank;
+    final rankAdvances = updateRank > currentRank;
+    String? mergeEvidence(String? current, String? incoming) =>
+        rankAdvances ? incoming ?? current : current ?? incoming;
     return TradeRefund(
       configuredAddress: configuredAddress ?? update.configuredAddress,
       status: preferred.status,
-      txHash: keepCurrent ? txHash : update.txHash ?? txHash,
-      chain: keepCurrent ? chain : update.chain ?? chain,
-      amount: keepCurrent ? amount : update.amount ?? amount,
-      originalAmount: keepCurrent ? originalAmount : update.originalAmount ?? originalAmount,
-      feeDeducted: keepCurrent ? feeDeducted : update.feeDeducted ?? feeDeducted,
-      feeDescription: keepCurrent ? feeDescription : update.feeDescription ?? feeDescription,
-      observedAddress: keepCurrent ? observedAddress : update.observedAddress ?? observedAddress,
-      completedAt: keepCurrent ? completedAt : update.completedAt ?? completedAt,
+      txHash: mergeEvidence(txHash, update.txHash),
+      chain: mergeEvidence(chain, update.chain),
+      amount: mergeEvidence(amount, update.amount),
+      originalAmount: mergeEvidence(originalAmount, update.originalAmount),
+      feeDeducted: mergeEvidence(feeDeducted, update.feeDeducted),
+      feeDescription: mergeEvidence(feeDescription, update.feeDescription),
+      observedAddress: mergeEvidence(observedAddress, update.observedAddress),
+      completedAt: mergeEvidence(completedAt, update.completedAt),
       terminalWithoutEvidence: preferred.terminalWithoutEvidence,
     );
   }

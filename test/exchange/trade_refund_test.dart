@@ -93,4 +93,103 @@ void main() {
     final filled = TradeRefund().merge(TradeRefund(configuredAddress: 'polling-address'));
     expect(filled.configuredAddress, 'polling-address');
   });
+
+  test('preserves and fills evidence for equal-rank broadcasting updates', () {
+    final current = TradeRefund(
+      status: 'broadcasting',
+      chain: 'ETH',
+      amount: '1',
+      originalAmount: '1.1',
+      feeDeducted: '0.1',
+      feeDescription: 'current fee',
+      observedAddress: 'current-address',
+    );
+    final update = TradeRefund(
+      status: 'broadcasting',
+      txHash: 'update-hash',
+      chain: 'BTC',
+      amount: '2',
+      originalAmount: '2.2',
+      feeDeducted: '0.2',
+      feeDescription: 'updated fee',
+      observedAddress: 'updated-address',
+    );
+
+    final merged = current.merge(update);
+    expect(merged.txHash, 'update-hash');
+    expect(merged.chain, 'ETH');
+    expect(merged.amount, '1');
+    expect(merged.originalAmount, '1.1');
+    expect(merged.feeDeducted, '0.1');
+    expect(merged.feeDescription, 'current fee');
+    expect(merged.observedAddress, 'current-address');
+  });
+
+  test('preserves all existing evidence for equal-rank completed updates', () {
+    final current = TradeRefund(
+      status: 'completed',
+      txHash: 'current-hash',
+      chain: 'ETH',
+      amount: '1',
+      originalAmount: '1.1',
+      feeDeducted: '0.1',
+      feeDescription: 'current fee',
+      observedAddress: 'current-address',
+      completedAt: 'current-time',
+    );
+    final update = TradeRefund(
+      status: 'completed',
+      txHash: 'updated-hash',
+      chain: 'BTC',
+      amount: '2',
+      originalAmount: '2.2',
+      feeDeducted: '0.2',
+      feeDescription: 'updated fee',
+      observedAddress: 'updated-address',
+      completedAt: 'updated-time',
+    );
+
+    final merged = current.merge(update);
+    expect(merged.txHash, 'current-hash');
+    expect(merged.chain, 'ETH');
+    expect(merged.amount, '1');
+    expect(merged.originalAmount, '1.1');
+    expect(merged.feeDeducted, '0.1');
+    expect(merged.feeDescription, 'current fee');
+    expect(merged.observedAddress, 'current-address');
+    expect(merged.completedAt, 'current-time');
+  });
+
+  test('fills missing evidence when the refund rank advances', () {
+    final current = TradeRefund(
+      status: 'broadcasting',
+      chain: 'ETH',
+      amount: '1',
+      originalAmount: '1.1',
+      feeDeducted: '0.1',
+      feeDescription: 'current fee',
+      observedAddress: 'current-address',
+    );
+    final update = TradeRefund(
+      status: 'completed',
+      txHash: 'completed-hash',
+      chain: 'BTC',
+      amount: '2',
+      originalAmount: '2.2',
+      feeDeducted: '0.2',
+      feeDescription: 'updated fee',
+      observedAddress: 'updated-address',
+      completedAt: 'completed-time',
+    );
+
+    final merged = current.merge(update);
+    expect(merged.txHash, 'completed-hash');
+    expect(merged.chain, 'BTC');
+    expect(merged.amount, '2');
+    expect(merged.originalAmount, '2.2');
+    expect(merged.feeDeducted, '0.2');
+    expect(merged.feeDescription, 'updated fee');
+    expect(merged.observedAddress, 'updated-address');
+    expect(merged.completedAt, 'completed-time');
+  });
 }
