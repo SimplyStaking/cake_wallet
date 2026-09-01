@@ -258,6 +258,7 @@ import 'package:cake_wallet/view_model/seed_settings_view_model.dart';
 import 'package:cake_wallet/view_model/send/fees_view_model.dart';
 import 'package:cake_wallet/view_model/send/send_template_view_model.dart';
 import 'package:cake_wallet/view_model/send/send_view_model.dart';
+import 'package:cake_wallet/exchange/trade_execution_dispatcher.dart';
 import 'package:cake_wallet/view_model/set_up_2fa_viewmodel.dart';
 import 'package:cake_wallet/view_model/settings/connection_sync_view_model.dart';
 import 'package:cake_wallet/view_model/settings/display_settings_view_model.dart';
@@ -387,6 +388,7 @@ Future<void> setup({
       // nodeListStore: getIt.get<NodeListStore>(),
       themeStore: getIt.get<ThemeStore>()));
   getIt.registerSingleton<TradesStore>(TradesStore(appStore: getIt.get<AppStore>()));
+  getIt.registerSingleton<TradeExecutionDispatcher>(const EmptyTradeExecutionDispatcher());
   getIt.registerSingleton<OrdersStore>(
       OrdersStore(ordersSource: _ordersSource, settingsStore: getIt.get<SettingsStore>()));
   getIt.registerSingleton<BridgeTransfersStore>(BridgeTransfersStore());
@@ -904,7 +906,8 @@ Future<void> setup({
             : null,
         coinTypeToSpendFrom: coinTypeToSpendFrom ?? UnspentCoinType.nonMweb,
         getIt.get<UnspentCoinsListViewModel>(param1: coinTypeToSpendFrom),
-        getIt.get<FeesViewModel>()),
+        getIt.get<FeesViewModel>(),
+        tradeExecutionDispatcher: getIt.get<TradeExecutionDispatcher>()),
   );
 
   getIt.registerFactoryParam<SendPage, PaymentRequest?, UnspentCoinType?>(

@@ -28,11 +28,12 @@ import 'package:cake_wallet/exchange/exchange_provider_description.dart';
 import 'package:cake_wallet/exchange/provider/exchange_provider.dart';
 import 'package:cake_wallet/exchange/provider/jupiter_exchange_provider.dart';
 import 'package:cake_wallet/exchange/provider/near_Intents_exchange_provider.dart';
-import 'package:cake_wallet/exchange/provider/pegaroute_exchange_provider.dart';
 import 'package:cake_wallet/solana/solana.dart';
 import 'package:cake_wallet/exchange/provider/swapsxyz_exchange_provider.dart';
 import 'package:cake_wallet/exchange/provider/thorchain_exchange.provider.dart';
 import 'package:cake_wallet/exchange/trade.dart';
+import 'package:cake_wallet/exchange/trade_execution.dart';
+import 'package:cake_wallet/exchange/trade_execution_dispatcher.dart';
 import 'package:cake_wallet/exchange/trade_state.dart';
 import 'package:cake_wallet/generated/i18n.dart';
 import 'package:cake_wallet/monero/monero.dart';
@@ -100,6 +101,7 @@ abstract class SendViewModelBase extends WalletChangeListenerViewModel with Stor
   }
 
   UnspentCoinsListViewModel unspentCoinsListViewModel;
+  final TradeExecutionDispatcher tradeExecutionDispatcher;
 
   SendViewModelBase(
     this._appStore,
@@ -113,6 +115,7 @@ abstract class SendViewModelBase extends WalletChangeListenerViewModel with Stor
     this.unspentCoinsListViewModel,
     this.feesViewModel, {
     this.coinTypeToSpendFrom = UnspentCoinType.nonMweb,
+    this.tradeExecutionDispatcher = const EmptyTradeExecutionDispatcher(),
   })  : state = InitialExecutionState(),
         currencies = _appStore.wallet!.balance.keys.toList(),
         selectedCryptoCurrency = coinTypeToSpendFrom == UnspentCoinType.lightning
@@ -696,6 +699,26 @@ abstract class SendViewModelBase extends WalletChangeListenerViewModel with Stor
     try {
       if (!(state is IsExecutingState)) state = IsExecutingState();
 
+      if (trade?.executionJson != null && trade!.executionJson!.isNotEmpty) {
+        final execution = TradeExecution.fromJsonString(trade.executionJson!);
+        if (!tradeExecutionDispatcher.supports(execution)) {
+          state = FailureState('Unsupported trade execution');
+          return null;
+        }
+        pendingTransaction = await tradeExecutionDispatcher.prepare(wallet: wallet, trade: trade);
+        if (pendingTransaction == null) {
+          state = FailureState('Unable to prepare trade execution');
+          return null;
+        }
+        state = ExecutedSuccessfullyState();
+        return pendingTransaction;
+      }
+
+      if (trade?.provider == ExchangeProviderDescription.pegaroute) {
+        state = FailureState('Pegaroute execution is unavailable');
+        return null;
+      }
+
       if (wallet.isHardwareWallet) {
         if (walletType == WalletType.monero) {
           _ledgerTxStateTimer = Timer.periodic(Duration(seconds: 1), (timer) {
@@ -1049,9 +1072,6 @@ abstract class SendViewModelBase extends WalletChangeListenerViewModel with Stor
         final provider = _currentTrade!.provider;
         if (provider == ExchangeProviderDescription.swapsXyz) {
           registerSwapsXyzTransaction(_currentTrade!);
-        }
-        if (provider == ExchangeProviderDescription.pegaRoute) {
-          registerPegaRouteTxHash(_currentTrade!);
         }
       }
 
@@ -1729,32 +1749,6 @@ abstract class SendViewModelBase extends WalletChangeListenerViewModel with Stor
       }
     } catch (e) {
       printV('registerSwapsXyzTransaction error: $e');
-    }
-  }
-
-  Future<void> registerPegaRouteTxHash(Trade trade) async {
-    try {
-      final txHash =
-          pendingTransaction?.evmTxHashFromRawHex ?? pendingTransaction?.id ?? trade.txId ?? '';
-
-      if (txHash.isEmpty) {
-        printV('PegaRoute: txHash submission: skipped (txHash empty)');
-        return;
-      }
-
-      printV('PegaRoute: attempting to submit txHash: tradeId = ${trade.id}, txHash = $txHash');
-
-      final submitted = await PegaRouteExchangeProvider.submitTxHash(id: trade.id, txHash: txHash);
-
-      if (submitted) {
-        trade.txId = txHash;
-        await trade.save();
-        printV('PegaRoute: txHash submission: success');
-      } else {
-        printV('PegaRoute: txHash submission: failed');
-      }
-    } catch (e) {
-      printV('registerPegaRouteTxHash error: $e');
     }
   }
 
