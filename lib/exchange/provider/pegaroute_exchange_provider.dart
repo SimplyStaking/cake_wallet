@@ -122,7 +122,7 @@ class PegarouteExchangeProvider extends ExchangeProvider {
         receiveAmount: output.amount,
         payoutAddress: output.address,
         providerName: response.provider?.name ?? response.route.provider,
-        providerId: response.provider?.referenceId,
+        providerId: response.provider?.referenceId ?? input.providerReferenceId,
         refundJson: refundRecord?.encode(),
       );
     } on PegarouteApiError catch (error) {

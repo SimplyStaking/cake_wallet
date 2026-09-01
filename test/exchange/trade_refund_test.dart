@@ -81,4 +81,16 @@ void main() {
     expect(merged.status, isNull);
     expect(merged.observedAddress, isNull);
   });
+
+  test('preserves configured refund intent when polling reports a different address', () {
+    final current = TradeRefund(configuredAddress: 'configured-address');
+    final update = TradeRefund(
+      configuredAddress: 'polling-address',
+      terminalWithoutEvidence: true,
+    );
+    expect(current.merge(update).configuredAddress, 'configured-address');
+
+    final filled = TradeRefund().merge(TradeRefund(configuredAddress: 'polling-address'));
+    expect(filled.configuredAddress, 'polling-address');
+  });
 }

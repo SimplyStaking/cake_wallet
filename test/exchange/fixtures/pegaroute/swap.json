@@ -22,7 +22,7 @@
     "to": "0x0000000000000000000000000000000000000001",
     "data": null,
     "value": {"display": "1", "baseUnits": "1"},
-    "gasLimit": "250000",
+    "gasLimit": null,
     "memo": null,
     "approval": null,
     "transferAmount": null
@@ -30,6 +30,13 @@
   "provider": {
     "name": "instaswap",
     "referenceId": "provider-reference-fixture",
-    "details": {"fixture": true}
+    "details": {
+      "instaswapSwapLite": {
+        "txid": "provider-reference-fixture",
+        "depositAddress": "0x0000000000000000000000000000000000000001",
+        "depositAmountExact": "1",
+        "depositTokenSymbol": "ETH"
+      }
+    }
   }
 }

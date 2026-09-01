@@ -897,14 +897,15 @@ class PegarouteOpenOceanRoute {
 
   factory PegarouteOpenOceanRoute.fromJson(Object? value) {
     final map = _object(value);
+    final hasDexes = map.containsKey('dexes');
     final dexesValue = map['dexes'];
-    if (dexesValue != null && dexesValue is! List) {
+    if (hasDexes && (dexesValue == null || dexesValue is! List)) {
       throw const PegarouteCodecException('openOceanRoute.dexes must be an array');
     }
     return PegarouteOpenOceanRoute(
       dexId: _optionalInt(map, 'dexId'),
       dexCode: _optionalString(map, 'dexCode'),
-      dexes: dexesValue == null
+      dexes: !hasDexes
           ? null
           : (dexesValue as List).map((item) {
               final dex = _object(item);
@@ -1190,12 +1191,16 @@ class PegarouteStreamingProgress {
 
   factory PegarouteStreamingProgress.fromJson(Object? value) {
     final map = _object(value);
+    final hasPartialRefund = map.containsKey('partialRefund');
+    if (hasPartialRefund && map['partialRefund'] == null) {
+      throw const PegarouteCodecException('partialRefund must be an object');
+    }
     return PegarouteStreamingProgress(
       completedSubSwaps: _requiredNum(map, 'completedSubSwaps'),
       totalSubSwaps: _requiredNum(map, 'totalSubSwaps'),
       lastSubSwapTimestamp: _optionalString(map, 'lastSubSwapTimestamp'),
       partialOutput: _optionalString(map, 'partialOutput'),
-      partialRefund: map['partialRefund'] == null ? null : _partialRefund(map['partialRefund']),
+      partialRefund: hasPartialRefund ? _partialRefund(map['partialRefund']) : null,
     );
   }
 
@@ -1661,7 +1666,7 @@ String? _optionalNullableString(Map<String, dynamic> map, String key) {
 
 String? _requiredNullableString(Map<String, dynamic> map, String key) {
   if (!map.containsKey(key)) throw PegarouteCodecException('$key is required');
-  return _optionalString(map, key);
+  return _optionalNullableString(map, key);
 }
 
 int? _requiredNullableInt(Map<String, dynamic> map, String key) {

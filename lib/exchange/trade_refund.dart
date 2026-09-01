@@ -182,13 +182,13 @@ class TradeRefund {
     final preferred = updateRank > currentRank ? update : this;
     if (preferred.terminalWithoutEvidence) {
       return TradeRefund(
-        configuredAddress: update.configuredAddress ?? configuredAddress,
+        configuredAddress: configuredAddress ?? update.configuredAddress,
         terminalWithoutEvidence: true,
       );
     }
     final keepCurrent = updateRank < currentRank;
     return TradeRefund(
-      configuredAddress: update.configuredAddress ?? configuredAddress,
+      configuredAddress: configuredAddress ?? update.configuredAddress,
       status: preferred.status,
       txHash: keepCurrent ? txHash : update.txHash ?? txHash,
       chain: keepCurrent ? chain : update.chain ?? chain,
