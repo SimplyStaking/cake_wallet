@@ -21,6 +21,7 @@ import 'package:cake_wallet/exchange/provider/thorchain_exchange.provider.dart';
 import 'package:cake_wallet/exchange/provider/trocador_exchange_provider.dart';
 import 'package:cake_wallet/exchange/provider/xoswap_exchange_provider.dart';
 import 'package:cake_wallet/exchange/trade.dart';
+import 'package:cake_wallet/exchange/trade_external_funding_policy.dart';
 import 'package:cake_wallet/generated/i18n.dart';
 import 'package:cake_wallet/reactions/wallet_connect.dart';
 import 'package:cake_wallet/src/screens/exchange_trade/exchange_trade_item.dart';
@@ -133,6 +134,8 @@ abstract class ExchangeTradeViewModelBase with Store {
   /// Returns true if the current provider should hide the external send button
   bool get shouldHideExternalSendButton {
     if (_provider == null) return false;
+
+    if (!TradeExternalFundingPolicy.canUse(trade)) return true;
 
     if (!isSwapsXYZCanSendFromExternal) return true;
 
@@ -272,6 +275,7 @@ abstract class ExchangeTradeViewModelBase with Store {
 
     final tagFrom = tradeFrom?.tag != null ? "${tradeFrom!.tag} " : "";
     final tagTo = tradeTo?.tag != null ? "${tradeTo!.tag} " : "";
+    final canUseExternalFunding = TradeExternalFundingPolicy.canUse(trade);
 
     items.clear();
 
@@ -304,30 +308,34 @@ abstract class ExchangeTradeViewModelBase with Store {
           isReceiveDetail: true,
           isExternalSendDetail: false,
         ),
-        ExchangeTradeItem(
-          title: "${S.current.send_to_this_address("$tradeFrom", tagFrom)}:",
-          data: trade.inputAddress ?? '',
-          isCopied: false,
-          isReceiveDetail: false,
-          isExternalSendDetail: true,
-        ),
       ]);
 
-      items.add(
-        isSwapsXYZCanSendFromExternal
-            ? ExchangeTradeItem(
-                title: S.current.send_to_this_address('${tradeFrom}', tagFrom) + ':',
-                data: trade.inputAddress ?? '',
-                isCopied: false,
-                isReceiveDetail: false,
-                isExternalSendDetail: true)
-            : ExchangeTradeItem(
-                title: 'Smart contract call (no address required)',
-                data: 'Wallet will execute a contract call. On-chain transaction',
-                isCopied: false,
-                isReceiveDetail: false,
-                isExternalSendDetail: true),
-      );
+      if (canUseExternalFunding) {
+        items.add(
+          ExchangeTradeItem(
+            title: "${S.current.send_to_this_address("$tradeFrom", tagFrom)}:",
+            data: trade.inputAddress ?? '',
+            isCopied: false,
+            isReceiveDetail: false,
+            isExternalSendDetail: true,
+          ),
+        );
+        items.add(
+          isSwapsXYZCanSendFromExternal
+              ? ExchangeTradeItem(
+                  title: S.current.send_to_this_address('${tradeFrom}', tagFrom) + ':',
+                  data: trade.inputAddress ?? '',
+                  isCopied: false,
+                  isReceiveDetail: false,
+                  isExternalSendDetail: true)
+              : ExchangeTradeItem(
+                  title: 'Smart contract call (no address required)',
+                  data: 'Wallet will execute a contract call. On-chain transaction',
+                  isCopied: false,
+                  isReceiveDetail: false,
+                  isExternalSendDetail: true),
+        );
+      }
     }
 
     final isExtraIdExist = trade.extraId != null && trade.extraId!.isNotEmpty;
@@ -424,6 +432,8 @@ abstract class ExchangeTradeViewModelBase with Store {
   }
 
   PaymentURI? get paymentUri {
+    if (!TradeExternalFundingPolicy.canUse(trade)) return null;
+
     final inputAddress = trade.inputAddress;
     final amount = trade.amount;
     final fromCurrency = trade.from;

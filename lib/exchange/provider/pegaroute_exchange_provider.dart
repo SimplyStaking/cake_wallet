@@ -6,7 +6,6 @@ import 'package:cake_wallet/exchange/provider/pegaroute/pegaroute_capability_gat
 import 'package:cake_wallet/exchange/provider/pegaroute/pegaroute_configuration.dart';
 import 'package:cake_wallet/exchange/provider/pegaroute/pegaroute_currency_mapper.dart';
 import 'package:cake_wallet/exchange/trade.dart';
-import 'package:cake_wallet/exchange/trade_execution.dart';
 import 'package:cake_wallet/exchange/trade_not_found_exception.dart';
 import 'package:cake_wallet/exchange/trade_refund.dart';
 import 'package:cake_wallet/exchange/trade_request.dart';
@@ -107,36 +106,18 @@ class PegarouteExchangeProvider extends ExchangeProvider {
                   completedAt: refund?.completedAt,
                   terminalWithoutEvidence: response.internalStatus == 'refunded' && refund == null,
                 );
-      final execution = response.execution;
-      final executionJson = execution == null
-          ? null
-          : TradeExecution(
-              family: execution.family,
-              mode: execution.mode,
-              sourceChain: input.chain,
-              sourceToken: input.token,
-              nativeToken: _nativeTokenForChain(input.chain),
-              destinationChain: output.chain,
-              destinationToken: output.token,
-              routeProvider: response.provider?.name ?? response.route.provider,
-              subprovider: response.route.subprovider,
-              privateIntent: response.route.privateValue?.value,
-              payload: execution.toJson(),
-            ).encode();
-
       return Trade(
         id: id,
         from: await _parseCurrency(input.chain, input.token),
         to: await _parseCurrency(output.chain, output.token),
         provider: description,
-        inputAddress: input.address,
+        senderAddress: input.address,
         refundAddress: configuredRefund,
         amount: input.amount,
         state: _tradeState(response.internalStatus, refund?.status),
         outputTransaction: output.txHash,
         receiveAmount: output.amount,
         payoutAddress: output.address,
-        executionJson: executionJson,
         refundJson: refundRecord?.encode(),
       );
     } on PegarouteApiError catch (error) {
@@ -199,14 +180,14 @@ class PegarouteExchangeProvider extends ExchangeProvider {
 
   SPLToken? _firstSolanaToken(List<SPLToken> tokens, String mint) {
     for (final token in tokens) {
-      if (token.mintAddress.toLowerCase() == mint) return token;
+      if (token.mintAddress == mint) return token;
     }
     return null;
   }
 
   TronToken? _firstTronToken(List<TronToken> tokens, String contract) {
     for (final token in tokens) {
-      if (token.contractAddress.toLowerCase() == contract) return token;
+      if (token.contractAddress == contract) return token;
     }
     return null;
   }
@@ -282,35 +263,6 @@ class PegarouteExchangeProvider extends ExchangeProvider {
         return TradeState.refunded;
       default:
         return TradeState.pending;
-    }
-  }
-
-  String _nativeTokenForChain(String chain) {
-    switch (chain.toUpperCase()) {
-      case 'BTC':
-      case 'BCH':
-      case 'LTC':
-      case 'DOGE':
-      case 'DASH':
-      case 'ZEC':
-      case 'XMR':
-      case 'XRP':
-      case 'NEAR':
-      case 'HYPERCORE':
-      case 'CARDANO':
-        return chain.toUpperCase();
-      case 'AVAX':
-        return 'AVAX';
-      case 'BSC':
-        return 'BNB';
-      case 'POLYGON':
-        return 'POL';
-      case 'TRON':
-        return 'TRX';
-      case 'SOL':
-        return 'SOL';
-      default:
-        return 'ETH';
     }
   }
 }

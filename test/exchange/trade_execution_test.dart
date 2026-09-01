@@ -3,33 +3,85 @@ import 'dart:convert';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:cake_wallet/exchange/trade_execution.dart';
 
-void main() {
-  test('round trips exact execution envelope and route metadata', () {
-    final execution = TradeExecution(
-      family: 'evm',
-      mode: 'contract-call',
+Map<String, dynamic> _evmPayload({String mode = 'contract-call'}) => {
+      'chainId': 1,
+      'to': '0x0000000000000000000000000000000000000005',
+      'data': mode == 'contract-call' ? '0xabcdef' : null,
+      'value': mode == 'native-transfer' ? {'display': '1', 'baseUnits': '1'} : null,
+      'gasLimit': '250000',
+      'memo': null,
+      'approval': null,
+      'transferAmount': mode == 'erc20-transfer' ? {'display': '1', 'baseUnits': '1'} : null,
+    };
+
+TradeExecution _execution(
+        {String family = 'evm', String mode = 'contract-call', Map<String, dynamic>? payload}) =>
+    TradeExecution(
+      family: family,
+      mode: mode,
       sourceChain: 'ETH',
-      sourceToken: 'USDC-0x0000000000000000000000000000000000000004',
+      sourceToken: 'ETH',
       nativeToken: 'ETH',
       destinationChain: 'BTC',
       destinationToken: 'BTC',
-      routeProvider: 'openocean',
-      subprovider: 'fixture-dex',
-      privateIntent: false,
-      payload: {
-        'to': '0x0000000000000000000000000000000000000005',
-        'data': '0xabcdef',
-        'value': {'display': '0', 'baseUnits': '000'},
-      },
+      payload: payload ?? _evmPayload(mode: mode),
     );
 
+void main() {
+  test('round trips a valid immutable execution envelope', () {
+    final execution = _execution(mode: 'native-transfer');
     final reloaded = TradeExecution.fromJsonString(execution.encode());
     expect(reloaded.toJson(), execution.toJson());
-    expect(reloaded.payload['value']['baseUnits'], '000');
     expect(
-      () => reloaded.payload['value']['baseUnits'] = 'changed',
+      () => reloaded.payload['value'] = 'changed',
       throwsUnsupportedError,
     );
+  });
+
+  test('accepts every execution variant with its authoritative payload shape', () {
+    expect(
+      () => _execution(mode: 'native-transfer'),
+      returnsNormally,
+    );
+    expect(
+      () => _execution(mode: 'erc20-transfer'),
+      returnsNormally,
+    );
+    expect(
+      () => _execution(
+        family: 'cosmos',
+        mode: 'msg-deposit',
+        payload: {
+          'to': 'cosmos-destination',
+          'amount': {'display': '1', 'baseUnits': '1'},
+          'memo': null,
+          'asset': 'THOR.RUNE',
+          'assetDecimals': 8,
+        },
+      ),
+      returnsNormally,
+    );
+    expect(
+      () => _execution(
+        family: 'solana',
+        mode: 'serialized-tx',
+        payload: {'serializedTransaction': 'base58-tx', 'minOut': null},
+      ),
+      returnsNormally,
+    );
+  });
+
+  test('rejects incomplete, contradictory, and unknown payload fields', () {
+    final payload = _evmPayload();
+    payload['data'] = null;
+    expect(() => _execution(payload: payload), throwsFormatException);
+
+    final native = _evmPayload(mode: 'native-transfer');
+    native['data'] = '0xdeadbeef';
+    expect(() => _execution(mode: 'native-transfer', payload: native), throwsFormatException);
+
+    final unknown = _evmPayload()..['unexpected'] = true;
+    expect(() => _execution(payload: unknown), throwsFormatException);
   });
 
   test('rejects unknown execution family and version', () {
@@ -46,25 +98,13 @@ void main() {
     };
     expect(() => TradeExecution.fromJson(value), throwsFormatException);
     expect(
-      () => TradeExecution.fromJson(
-          {...value, 'version': 2, 'family': 'evm', 'mode': 'native-transfer'}),
+      () => TradeExecution.fromJson({...value, 'version': 2}),
       throwsFormatException,
     );
   });
 
   test('keeps malformed persisted data outside the dispatch model', () {
-    expect(() => TradeExecution.fromJsonString('{"version": 1}'), throwsA(isA<Object>()));
-    expect(
-        json.decode(TradeExecution(
-          family: 'other',
-          mode: 'deposit-transfer',
-          sourceChain: 'XMR',
-          sourceToken: 'XMR',
-          nativeToken: 'XMR',
-          destinationChain: 'BTC',
-          destinationToken: 'BTC',
-          payload: const {},
-        ).encode()),
-        isA<Map<String, dynamic>>());
+    expect(() => TradeExecution.fromJsonString('{"version":1}'), throwsA(isA<Object>()));
+    expect(json.decode(_execution().encode()), isA<Map<String, dynamic>>());
   });
 }

@@ -39,19 +39,29 @@ class RegistryTradeExecutionDispatcher implements TradeExecutionDispatcher {
 
   final List<TradeExecutionHandler> handlers;
 
-  TradeExecutionHandler? _handler(TradeExecution execution) {
-    for (final handler in handlers) {
-      if (handler.supports(execution)) return handler;
-    }
-    return null;
+  List<TradeExecutionHandler> _matchingHandlers(
+    TradeExecution execution, {
+    bool external = false,
+  }) {
+    return handlers
+        .where((handler) => handler.supports(execution))
+        .where((handler) => !external || handler.supportsExternalSend(execution))
+        .toList(growable: false);
+  }
+
+  TradeExecutionHandler? _handler(TradeExecution execution, {bool external = false}) {
+    final matches = _matchingHandlers(execution, external: external);
+    return matches.length == 1 ? matches.single : null;
   }
 
   @override
   bool supports(TradeExecution execution) => _handler(execution) != null;
 
   @override
-  bool supportsExternalSend(TradeExecution execution) =>
-      _handler(execution)?.supportsExternalSend(execution) ?? false;
+  bool supportsExternalSend(TradeExecution execution) {
+    final matches = _matchingHandlers(execution);
+    return matches.length == 1 && matches.single.supportsExternalSend(execution);
+  }
 
   @override
   Future<PendingTransaction?> prepare({required WalletBase wallet, required Trade trade}) {

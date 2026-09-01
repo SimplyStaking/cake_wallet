@@ -12,6 +12,7 @@ import 'package:cake_wallet/routes.dart';
 import 'package:cake_wallet/src/screens/connect_device/connect_device_page.dart';
 import 'package:cake_wallet/src/widgets/new_list_row/new_list_section.dart';
 import 'package:cake_wallet/view_model/exchange/exchange_trade_view_model.dart';
+import 'package:cake_wallet/exchange/trade_external_funding_policy.dart';
 import 'package:cake_wallet/view_model/exchange/exchange_view_model.dart';
 import 'package:cake_wallet/view_model/send/send_view_model_state.dart';
 import 'package:cw_core/amount/money.dart';
@@ -278,7 +279,7 @@ class SwapTransactionDetails extends StatelessWidget {
   }
 
   void _showExternalSendModal(BuildContext context) {
-    if (context.mounted) {
+    if (context.mounted && TradeExternalFundingPolicy.canUse(exchangeTradeViewModel.trade)) {
       showMaterialModalBottomSheet(
           context: context,
           builder: (context) {

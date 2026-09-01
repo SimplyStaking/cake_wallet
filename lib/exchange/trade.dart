@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:cake_wallet/evm/evm.dart';
 import 'package:cake_wallet/exchange/exchange_provider_description.dart';
 import 'package:cake_wallet/exchange/trade_state.dart';
+import 'package:cake_wallet/exchange/trade_refund.dart';
 import 'package:cw_core/crypto_currency.dart';
 import 'package:cw_core/db/sqlite.dart';
 import 'package:cw_core/format_amount.dart';
@@ -195,12 +196,9 @@ class Trade {
     if (updated.providerName != null) providerName = updated.providerName;
     if (updated.memo != null) memo = updated.memo;
     if (updated.txId != null) txId = updated.txId;
-    // The signing payload is a creation-time contract. Status polling may
-    // repeat it, but must not replace a payload already persisted for signing.
-    if ((executionJson == null || executionJson!.isEmpty) && updated.executionJson != null) {
-      executionJson = updated.executionJson;
+    if (updated.refundJson != null) {
+      refundJson = TradeRefund.mergeJson(refundJson, updated.refundJson!);
     }
-    if (updated.refundJson != null) refundJson = updated.refundJson;
   }
 
   Map<String, dynamic> toSqliteMap() {

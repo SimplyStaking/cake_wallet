@@ -9,6 +9,7 @@ import 'package:cake_wallet/generated/i18n.dart';
 import 'package:cake_wallet/core/execution_state.dart';
 import 'package:cake_wallet/view_model/exchange/exchange_trade_view_model.dart';
 import 'package:cake_wallet/view_model/send/send_view_model_state.dart';
+import 'package:cake_wallet/exchange/trade_external_funding_policy.dart';
 import 'package:cake_wallet/src/screens/base_page.dart';
 import 'package:cake_wallet/src/widgets/primary_button.dart';
 import 'package:cake_wallet/src/widgets/scrollable_with_bottom_section.dart';
@@ -36,6 +37,9 @@ class ExchangeTradeExternalSendPage extends BasePage {
 
   @override
   Widget body(BuildContext context) {
+    if (!TradeExternalFundingPolicy.canUse(exchangeTradeViewModel.trade)) {
+      return const SizedBox.shrink();
+    }
     final copyImage = Image.asset(
       'assets/images/copy_content.png',
       height: 16,

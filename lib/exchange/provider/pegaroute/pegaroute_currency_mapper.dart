@@ -24,6 +24,34 @@ class PegarouteAssetId {
 class PegarouteCurrencyMapper {
   const PegarouteCurrencyMapper();
 
+  static const nativeTokenByChain = <String, String>{
+    'ETH': 'ETH',
+    'BSC': 'BNB',
+    'POLYGON': 'POL',
+    'AVAX': 'AVAX',
+    'ARBITRUM': 'ETH',
+    'BASE': 'ETH',
+    'BTC': 'BTC',
+    'BCH': 'BCH',
+    'LTC': 'LTC',
+    'DOGE': 'DOGE',
+    'DASH': 'DASH',
+    'ZEC': 'ZEC',
+    'XMR': 'XMR',
+    'XRP': 'XRP',
+    'TRON': 'TRX',
+    'SOL': 'SOL',
+    'NEAR': 'NEAR',
+    'HYPERCORE': 'HYPE',
+    'CARDANO': 'ADA',
+  };
+
+  static String nativeTokenForChain(String chain) {
+    final native = nativeTokenByChain[chain.trim().toUpperCase()];
+    if (native == null) throw PegarouteCurrencyException('unknown chain $chain');
+    return native;
+  }
+
   PegarouteAssetId map(CryptoCurrency currency) {
     // Explicit token instances must win over title/tag aliases. A token can
     // legitimately share a native ticker (for example a wrapped asset).
@@ -50,19 +78,19 @@ class PegarouteCurrencyMapper {
   }
 
   PegarouteAssetId? _native(String? tag, String title) {
-    if (tag == 'ARB')
+    if (tag == 'ARB' && title == 'ETH')
       return const PegarouteAssetId(chain: 'ARBITRUM', token: 'ETH', nativeToken: 'ETH');
-    if (tag == 'AVAXC')
+    if (tag == 'AVAXC' && title == 'AVAX')
       return const PegarouteAssetId(chain: 'AVAX', token: 'AVAX', nativeToken: 'AVAX');
-    if (tag == 'POL' || (title == 'POL' && (tag == null || tag == 'POL')))
+    if (tag == 'POL' && title == 'POL')
       return const PegarouteAssetId(chain: 'POLYGON', token: 'POL', nativeToken: 'POL');
     if (title == 'TRX' && (tag == null || tag == 'TRX'))
       return const PegarouteAssetId(chain: 'TRON', token: 'TRX', nativeToken: 'TRX');
-    if (title == 'ADA' || title == 'CARDANO')
+    if (title == 'ADA' && (tag == null || tag == 'ADA' || tag == 'CARDANO'))
       return const PegarouteAssetId(chain: 'CARDANO', token: 'ADA', nativeToken: 'ADA');
-    if (title == 'XRP')
+    if (title == 'XRP' && (tag == null || tag == 'XRP'))
       return const PegarouteAssetId(chain: 'XRP', token: 'XRP', nativeToken: 'XRP');
-    if (title == 'NEAR')
+    if (title == 'NEAR' && (tag == null || tag == 'NEAR'))
       return const PegarouteAssetId(chain: 'NEAR', token: 'NEAR', nativeToken: 'NEAR');
     if (tag == 'BSC' && title == 'BNB')
       return const PegarouteAssetId(chain: 'BSC', token: 'BNB', nativeToken: 'BNB');
@@ -125,10 +153,7 @@ class PegarouteCurrencyMapper {
   }
 
   String _nativeForChain(String chain) {
-    if (chain == 'POLYGON') return 'POL';
-    if (chain == 'AVAX') return 'AVAX';
-    if (chain == 'BSC') return 'BNB';
-    return 'ETH';
+    return nativeTokenForChain(chain);
   }
 
   static const _chainAliases = {

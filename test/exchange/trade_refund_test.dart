@@ -28,4 +28,31 @@ void main() {
   test('rejects unknown refund version', () {
     expect(() => TradeRefund.fromJson({'version': 2}), throwsFormatException);
   });
+
+  test('rejects partial and contradictory refund states', () {
+    expect(
+      () => TradeRefund(status: 'pending', chain: 'ETH'),
+      throwsFormatException,
+    );
+    expect(
+      () => TradeRefund(
+        terminalWithoutEvidence: true,
+        status: 'completed',
+      ),
+      throwsFormatException,
+    );
+    expect(
+      () => TradeRefund(
+        status: 'pending',
+        chain: 'ETH',
+        amount: '1',
+        originalAmount: '1',
+        feeDeducted: '0',
+        feeDescription: 'none',
+        observedAddress: 'address',
+        completedAt: 'now',
+      ),
+      throwsFormatException,
+    );
+  });
 }

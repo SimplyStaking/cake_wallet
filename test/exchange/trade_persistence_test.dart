@@ -19,6 +19,7 @@ void main() {
       subprovider: 'fixture',
       privateIntent: false,
       payload: const {
+        'chain': 'XMR',
         'to': 'destination',
         'amount': {'display': '1', 'baseUnits': '1'}
       },
@@ -62,5 +63,40 @@ void main() {
     final trade = Trade(id: 'trade', amount: '1', executionJson: 'original');
     trade.mergeFindTradeByIdResult(Trade(id: 'trade', amount: '1', executionJson: 'replacement'));
     expect(trade.executionJson, 'original');
+  });
+
+  test('does not populate a missing creation execution during status merge', () {
+    final trade = Trade(id: 'trade', amount: '1');
+    trade.mergeFindTradeByIdResult(Trade(id: 'trade', amount: '1', executionJson: 'observed'));
+    expect(trade.executionJson, isNull);
+  });
+
+  test('does not regress completed refund evidence', () {
+    final completed = TradeRefund(
+      status: 'completed',
+      chain: 'ETH',
+      amount: '1',
+      originalAmount: '1.1',
+      feeDeducted: '0.1',
+      feeDescription: 'network fee',
+      observedAddress: 'observed',
+    );
+    final trade = Trade(id: 'trade', amount: '1', refundJson: completed.encode());
+    trade.mergeFindTradeByIdResult(
+      Trade(
+        id: 'trade',
+        amount: '1',
+        refundJson: TradeRefund(
+          status: 'pending',
+          chain: 'ETH',
+          amount: '1',
+          originalAmount: '1.1',
+          feeDeducted: '0.1',
+          feeDescription: 'network fee',
+          observedAddress: 'observed',
+        ).encode(),
+      ),
+    );
+    expect(TradeRefund.fromJsonString(trade.refundJson!).status, 'completed');
   });
 }
