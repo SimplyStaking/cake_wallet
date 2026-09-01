@@ -6,7 +6,7 @@
       "provider": "instaswap",
       "subprovider": "partner-fixture",
       "private": false,
-      "providerType": "aggregator",
+      "providerType": "api-provider",
       "expectedOutput": "0.99",
       "estimatedTimeSeconds": 120,
       "expiry": null,
