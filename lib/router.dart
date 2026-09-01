@@ -1003,7 +1003,7 @@ Route<dynamic> createRoute(RouteSettings settings) {
 
     case Routes.exchangeTradeExternalSendPage:
       if (!TradeExternalFundingPolicy.canUse(getIt.get<ExchangeTradeViewModel>().trade)) {
-        return null;
+        return createRoute(const RouteSettings(name: Routes.empty_no_route));
       }
       return MaterialPageRoute<void>(
         builder: (_) => getIt.get<ExchangeTradeExternalSendPage>(),
