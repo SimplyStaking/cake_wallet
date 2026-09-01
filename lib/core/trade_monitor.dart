@@ -69,8 +69,8 @@ class TradeMonitor {
         return JupiterExchangeProvider();
       case ExchangeProviderDescription.nearIntents:
         return NearIntentsExchangeProvider();
-      case ExchangeProviderDescription.pegaRoute:
-        return PegaRouteExchangeProvider();
+      case ExchangeProviderDescription.pegaroute:
+        return PegarouteExchangeProvider();
     }
     return null;
   }

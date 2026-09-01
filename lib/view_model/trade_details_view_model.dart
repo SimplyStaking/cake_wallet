@@ -85,8 +85,8 @@ abstract class TradeDetailsViewModelBase with Store {
       case ExchangeProviderDescription.nearIntents:
         _provider = NearIntentsExchangeProvider();
         break;
-      case ExchangeProviderDescription.pegaRoute:
-        _provider = PegaRouteExchangeProvider();
+      case ExchangeProviderDescription.pegaroute:
+        _provider = PegarouteExchangeProvider();
         break;
     }
 

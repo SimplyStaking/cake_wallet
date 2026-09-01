@@ -89,7 +89,7 @@ class ExchangeProviderLogEntry {
       ExchangeProviderDescription.swapsXyz,
       ExchangeProviderDescription.nearIntents,
       ExchangeProviderDescription.jupiter,
-      ExchangeProviderDescription.pegaRoute,
+      ExchangeProviderDescription.pegaroute,
     ];
 
     return ExchangeProviderLogEntry(

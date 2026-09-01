@@ -313,7 +313,7 @@ abstract class ExchangeViewModelBase extends WalletChangeListenerViewModel with 
         SwapsXyzExchangeProvider(),
         JupiterExchangeProvider(),
         NearIntentsExchangeProvider(),
-        PegaRouteExchangeProvider(),
+        PegarouteExchangeProvider(),
         TrocadorExchangeProvider(
             useTorOnly: _useTorOnly, providerStates: _settingsStore.trocadorProviderStates),
       ];
@@ -1248,6 +1248,7 @@ abstract class ExchangeViewModelBase extends WalletChangeListenerViewModel with 
           toCurrency: receiveCurrency,
           fromAmount: _depositAmount.toString(),
           toAmount: _receiveAmount.toString(),
+          senderAddress: depositAddress,
           refundAddress: depositAddress,
           toAddress: receiveAddress,
           toAddressExtraId: receiveAddressExtraId.trim(),
