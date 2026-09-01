@@ -2,6 +2,25 @@
   "transactionId": "transaction-fixture",
   "status": "fail",
   "internalStatus": "refunded",
+  "route": {
+    "provider": "instaswap",
+    "providerType": "api-provider",
+    "expectedOutput": "0.99",
+    "estimatedTimeSeconds": 120,
+    "fees": {
+      "affiliate": "0",
+      "liquidity": "0.01",
+      "outbound": "0",
+      "total": "0.01"
+    },
+    "expiry": null,
+    "memo": null,
+    "inboundAddress": null,
+    "router": null,
+    "gasRate": null,
+    "minAmount": null,
+    "resolvedFee": { "feeBps": 0 }
+  },
   "input": {
     "chain": "ETH",
     "token": "ETH",
@@ -15,6 +34,16 @@
     "address": "bc1qfixture",
     "amount": "0.01",
     "txHash": "output-hash-fixture"
+  },
+  "fees": {
+    "affiliate": "0",
+    "liquidity": "0.01",
+    "outbound": "0",
+    "total": "0.01"
+  },
+  "timestamps": {
+    "created": "2026-09-01T12:00:00.000Z",
+    "completed": "2026-09-01T12:01:00.000Z"
   },
   "error": null,
   "refund": {

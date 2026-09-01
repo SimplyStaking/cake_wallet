@@ -136,6 +136,10 @@ abstract class ExchangeTradeViewModelBase with Store {
 
     if (!isSwapsXYZCanSendFromExternal) return true;
 
+    // Pegaroute is intentionally disabled until a signing handler exists.
+    // Never expose a QR that can lead users into an unsupported execution path.
+    if (_provider is PegarouteExchangeProvider) return true;
+
     return _providersThatHideExternalSend.any(
       (providerType) => _provider.runtimeType == providerType,
     );

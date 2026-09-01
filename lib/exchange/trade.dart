@@ -195,7 +195,11 @@ class Trade {
     if (updated.providerName != null) providerName = updated.providerName;
     if (updated.memo != null) memo = updated.memo;
     if (updated.txId != null) txId = updated.txId;
-    if (updated.executionJson != null) executionJson = updated.executionJson;
+    // The signing payload is a creation-time contract. Status polling may
+    // repeat it, but must not replace a payload already persisted for signing.
+    if ((executionJson == null || executionJson!.isEmpty) && updated.executionJson != null) {
+      executionJson = updated.executionJson;
+    }
     if (updated.refundJson != null) refundJson = updated.refundJson;
   }
 

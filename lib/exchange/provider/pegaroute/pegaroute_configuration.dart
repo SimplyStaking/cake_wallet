@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:cake_wallet/.secrets.g.dart' as secrets;
 
 class PegarouteConfiguration {
@@ -34,9 +36,9 @@ class PegarouteConfiguration {
 
   static bool _isLoopback(String host) {
     final normalized = host.toLowerCase();
-    return normalized == 'localhost' ||
-        normalized == '127.0.0.1' ||
-        normalized == '::1' ||
-        normalized == '[::1]';
+    if (normalized == 'localhost' || normalized == '::1' || normalized == '[::1]') return true;
+    final address = InternetAddress.tryParse(normalized);
+    if (address == null || address.type != InternetAddressType.IPv4) return false;
+    return address.rawAddress.first == 127;
   }
 }

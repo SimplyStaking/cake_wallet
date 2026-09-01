@@ -28,6 +28,18 @@ void main() {
     expect(asset.token, 'FIX-0xabc');
   });
 
+  test('does not mistake a token ticker for a native asset', () {
+    final token = Erc20Token(
+      name: 'Wrapped fixture',
+      symbol: 'ETH',
+      contractAddress: '0xAbC',
+      decimal: 18,
+      tag: 'ETH',
+    );
+    final asset = mapper.map(token);
+    expect(asset.token, 'ETH-0xabc');
+  });
+
   test('rejects missing or conflicting token identity', () {
     expect(
       () => mapper.map(Erc20Token(

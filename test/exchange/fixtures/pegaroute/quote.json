@@ -9,16 +9,19 @@
       "providerType": "aggregator",
       "expectedOutput": "0.99",
       "estimatedTimeSeconds": 120,
+      "expiry": null,
       "memo": null,
       "inboundAddress": null,
       "router": null,
+      "gasRate": null,
       "minAmount": "0.01",
       "fees": {
         "affiliate": "0",
         "liquidity": "0.01",
         "outbound": "0",
         "total": "0.01"
-      }
+      },
+      "resolvedFee": { "feeBps": 0 }
     }
   ],
   "warnings": []

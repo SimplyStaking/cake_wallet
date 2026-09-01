@@ -91,21 +91,22 @@ class PegarouteExchangeProvider extends ExchangeProvider {
       final output = response.output;
       final configuredRefund = input.refundAddress ?? input.address;
       final refund = response.refund;
-      final refundRecord = refund == null && configuredRefund == null
-          ? null
-          : TradeRefund(
-              configuredAddress: configuredRefund,
-              status: refund?.status,
-              txHash: refund?.txHash,
-              chain: refund?.chain,
-              amount: refund?.amount,
-              originalAmount: refund?.originalAmount,
-              feeDeducted: refund?.feeDeducted,
-              feeDescription: refund?.feeDescription,
-              observedAddress: refund?.refundAddress,
-              completedAt: refund?.completedAt,
-              terminalWithoutEvidence: response.internalStatus == 'refunded' && refund == null,
-            );
+      final refundRecord =
+          refund == null && configuredRefund == null && response.internalStatus != 'refunded'
+              ? null
+              : TradeRefund(
+                  configuredAddress: configuredRefund,
+                  status: refund?.status,
+                  txHash: refund?.txHash,
+                  chain: refund?.chain,
+                  amount: refund?.amount,
+                  originalAmount: refund?.originalAmount,
+                  feeDeducted: refund?.feeDeducted,
+                  feeDescription: refund?.feeDescription,
+                  observedAddress: refund?.refundAddress,
+                  completedAt: refund?.completedAt,
+                  terminalWithoutEvidence: response.internalStatus == 'refunded' && refund == null,
+                );
       final execution = response.execution;
       final executionJson = execution == null
           ? null
@@ -117,9 +118,9 @@ class PegarouteExchangeProvider extends ExchangeProvider {
               nativeToken: _nativeTokenForChain(input.chain),
               destinationChain: output.chain,
               destinationToken: output.token,
-              routeProvider: response.provider?.name ?? response.route?.provider,
-              subprovider: response.route?.subprovider,
-              privateIntent: response.route?.privateValue?.value,
+              routeProvider: response.provider?.name ?? response.route.provider,
+              subprovider: response.route.subprovider,
+              privateIntent: response.route.privateValue?.value,
               payload: execution.toJson(),
             ).encode();
 
@@ -286,8 +287,22 @@ class PegarouteExchangeProvider extends ExchangeProvider {
 
   String _nativeTokenForChain(String chain) {
     switch (chain.toUpperCase()) {
+      case 'BTC':
+      case 'BCH':
+      case 'LTC':
+      case 'DOGE':
+      case 'DASH':
+      case 'ZEC':
+      case 'XMR':
+      case 'XRP':
+      case 'NEAR':
+      case 'HYPERCORE':
+      case 'CARDANO':
+        return chain.toUpperCase();
       case 'AVAX':
         return 'AVAX';
+      case 'BSC':
+        return 'BNB';
       case 'POLYGON':
         return 'POL';
       case 'TRON':

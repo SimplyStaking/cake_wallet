@@ -25,16 +25,18 @@ class PegarouteCurrencyMapper {
   const PegarouteCurrencyMapper();
 
   PegarouteAssetId map(CryptoCurrency currency) {
-    final tag = currency.tag?.toUpperCase();
-    final title = currency.title.toUpperCase();
-    final native = _native(tag, title);
-    if (native != null) return native;
-
+    // Explicit token instances must win over title/tag aliases. A token can
+    // legitimately share a native ticker (for example a wrapped asset).
     if (currency is Erc20Token) {
       return _evmToken(currency.title, currency.contractAddress, currency.tag, currency.chainId);
     }
     if (currency is SPLToken) return _solanaToken(currency.title, currency.mintAddress);
     if (currency is TronToken) return _tronToken(currency.title, currency.contractAddress);
+
+    final tag = currency.tag?.toUpperCase();
+    final title = currency.title.toUpperCase();
+    final native = _native(tag, title);
+    if (native != null) return native;
 
     final erc20 = TokenUtilities.findErc20TokenForSwap(currency);
     if (erc20 != null)
@@ -56,6 +58,12 @@ class PegarouteCurrencyMapper {
       return const PegarouteAssetId(chain: 'POLYGON', token: 'POL', nativeToken: 'POL');
     if (title == 'TRX' && (tag == null || tag == 'TRX'))
       return const PegarouteAssetId(chain: 'TRON', token: 'TRX', nativeToken: 'TRX');
+    if (title == 'ADA' || title == 'CARDANO')
+      return const PegarouteAssetId(chain: 'CARDANO', token: 'ADA', nativeToken: 'ADA');
+    if (title == 'XRP')
+      return const PegarouteAssetId(chain: 'XRP', token: 'XRP', nativeToken: 'XRP');
+    if (title == 'NEAR')
+      return const PegarouteAssetId(chain: 'NEAR', token: 'NEAR', nativeToken: 'NEAR');
     if (tag == 'BSC' && title == 'BNB')
       return const PegarouteAssetId(chain: 'BSC', token: 'BNB', nativeToken: 'BNB');
     if (tag == 'BASE' && title == 'ETH')
@@ -65,7 +73,7 @@ class PegarouteCurrencyMapper {
     if (title == 'SOL' && (tag == null || tag == 'SOL'))
       return const PegarouteAssetId(chain: 'SOL', token: 'SOL', nativeToken: 'SOL');
 
-    const nativeChains = {'XMR', 'BTC', 'BCH', 'LTC', 'DOGE', 'ZEC'};
+    const nativeChains = {'XMR', 'BTC', 'BCH', 'LTC', 'DOGE', 'DASH', 'ZEC'};
     if (nativeChains.contains(title) && (tag == null || tag == title)) {
       return PegarouteAssetId(chain: title, token: title, nativeToken: title);
     }

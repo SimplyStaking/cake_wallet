@@ -26,6 +26,10 @@ void main() {
     final reloaded = TradeExecution.fromJsonString(execution.encode());
     expect(reloaded.toJson(), execution.toJson());
     expect(reloaded.payload['value']['baseUnits'], '000');
+    expect(
+      () => reloaded.payload['value']['baseUnits'] = 'changed',
+      throwsUnsupportedError,
+    );
   });
 
   test('rejects unknown execution family and version', () {

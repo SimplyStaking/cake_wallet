@@ -57,4 +57,10 @@ void main() {
     expect(trade.refundJson, '{"version":99}');
     expect(trade.toSqliteMap()['executionJson'], '{"version":99}');
   });
+
+  test('does not replace a persisted execution payload during status merge', () {
+    final trade = Trade(id: 'trade', amount: '1', executionJson: 'original');
+    trade.mergeFindTradeByIdResult(Trade(id: 'trade', amount: '1', executionJson: 'replacement'));
+    expect(trade.executionJson, 'original');
+  });
 }

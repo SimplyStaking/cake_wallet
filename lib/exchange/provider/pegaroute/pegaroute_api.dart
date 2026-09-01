@@ -42,6 +42,10 @@ class PegarouteApiError implements Exception {
   factory PegarouteApiError.fromJson(int httpStatus, Object? value) {
     final root = _object(value);
     final error = _object(root['error']);
+    final detailsValue = error['details'];
+    if (detailsValue != null && detailsValue is! Map) {
+      throw const PegarouteCodecException('details must be an object');
+    }
     return PegarouteApiError(
       httpStatus: httpStatus,
       code: _requiredString(error, 'code'),
@@ -50,7 +54,7 @@ class PegarouteApiError implements Exception {
       retryable: _requiredBool(error, 'retryable'),
       retryAfterSeconds: _optionalNum(error, 'retryAfterSeconds'),
       provider: _optionalString(error, 'provider'),
-      details: error['details'] is Map ? Map<String, dynamic>.from(error['details'] as Map) : null,
+      details: detailsValue == null ? null : Map<String, dynamic>.from(detailsValue as Map),
     );
   }
 
@@ -74,7 +78,9 @@ class PegaroutePrivateValue {
 
   factory PegaroutePrivateValue.fromJson(Object? value) {
     if (value is bool) return PegaroutePrivateValue(value);
-    if (value is String && value.trim().isNotEmpty) return PegaroutePrivateValue(value);
+    if (value is String && value.trim().isNotEmpty && value.length <= 64) {
+      return PegaroutePrivateValue(value);
+    }
     throw const PegarouteCodecException('private must be a boolean or non-empty string');
   }
 
@@ -93,6 +99,8 @@ class PegarouteQuoteRequest {
     this.destinationAddress,
     this.senderAddress,
     this.refundAddress,
+    this.privateMode,
+    this.integrationId,
   });
 
   final String fromChain;
@@ -103,6 +111,8 @@ class PegarouteQuoteRequest {
   final String? destinationAddress;
   final String? senderAddress;
   final String? refundAddress;
+  final Object? privateMode;
+  final String? integrationId;
 
   factory PegarouteQuoteRequest.fromIntent({
     required String fromChain,
@@ -111,6 +121,8 @@ class PegarouteQuoteRequest {
     required String toToken,
     required String amount,
     required PegarouteAddressIntent intent,
+    Object? privateMode,
+    String? integrationId,
   }) =>
       PegarouteQuoteRequest(
         fromChain: fromChain,
@@ -121,6 +133,8 @@ class PegarouteQuoteRequest {
         destinationAddress: intent.destinationAddress,
         senderAddress: intent.senderAddress,
         refundAddress: intent.refundAddress,
+        privateMode: privateMode,
+        integrationId: integrationId,
       );
 
   Map<String, String> toQuery() {
@@ -128,16 +142,22 @@ class PegarouteQuoteRequest {
       throw const PegarouteCodecException('refundAddress requires senderAddress');
     }
 
-    return _nonEmpty({
+    final result = _nonEmpty({
       'fromChain': fromChain,
       'fromToken': fromToken,
       'toChain': toChain,
       'toToken': toToken,
       'amount': amount,
+      'private': _privateQueryValue(privateMode),
       'destinationAddress': destinationAddress,
       'senderAddress': senderAddress,
       'refundAddress': refundAddress,
+      'integrationId': integrationId,
     });
+    for (final key in const ['fromChain', 'fromToken', 'toChain', 'toToken', 'amount']) {
+      if (!result.containsKey(key)) throw PegarouteCodecException('$key is required');
+    }
+    return result;
   }
 }
 
@@ -177,6 +197,10 @@ class PegarouteSwapRequest extends PegarouteQuoteRequest {
     String? refundAddress,
     this.quoteId,
     this.routeProvider,
+    Object? privateMode,
+    String? integrationId,
+    this.slippageTolerance,
+    this.streaming,
   }) : super(
           fromChain: fromChain,
           fromToken: fromToken,
@@ -186,10 +210,14 @@ class PegarouteSwapRequest extends PegarouteQuoteRequest {
           destinationAddress: destinationAddress,
           senderAddress: senderAddress,
           refundAddress: refundAddress,
+          privateMode: privateMode,
+          integrationId: integrationId,
         );
 
   final String? quoteId;
   final String? routeProvider;
+  final double? slippageTolerance;
+  final bool? streaming;
 
   factory PegarouteSwapRequest.fromIntent({
     required String fromChain,
@@ -200,6 +228,10 @@ class PegarouteSwapRequest extends PegarouteQuoteRequest {
     required PegarouteAddressIntent intent,
     String? quoteId,
     String? routeProvider,
+    Object? privateMode,
+    String? integrationId,
+    double? slippageTolerance,
+    bool? streaming,
   }) =>
       PegarouteSwapRequest(
         fromChain: fromChain,
@@ -212,13 +244,40 @@ class PegarouteSwapRequest extends PegarouteQuoteRequest {
         refundAddress: intent.refundAddress,
         quoteId: quoteId,
         routeProvider: routeProvider,
+        privateMode: privateMode,
+        integrationId: integrationId,
+        slippageTolerance: slippageTolerance,
+        streaming: streaming,
       );
 
   Map<String, dynamic> toJson() => {
-        ...toQuery(),
+        ..._validatedSwapFields(),
         if (quoteId != null) 'quoteId': quoteId,
         if (routeProvider != null) 'routeProvider': routeProvider,
+        if (slippageTolerance != null) ..._validatedSlippage(),
+        if (streaming != null) 'streaming': streaming,
       };
+
+  Map<String, dynamic> _validatedSwapFields() {
+    final query = toQuery();
+    for (final key in const ['destinationAddress', 'senderAddress']) {
+      if (!query.containsKey(key)) throw PegarouteCodecException('$key is required for swap');
+    }
+    final result = <String, dynamic>{...query};
+    if (privateMode != null) {
+      _privateQueryValue(privateMode);
+      result['private'] = privateMode;
+    }
+    return result;
+  }
+
+  Map<String, dynamic> _validatedSlippage() {
+    final value = slippageTolerance!;
+    if (value.isNaN || value < 0 || value > 1) {
+      throw const PegarouteCodecException('slippageTolerance must be between 0 and 1');
+    }
+    return {'slippageTolerance': value};
+  }
 }
 
 class PegarouteTokenAmount {
@@ -290,27 +349,76 @@ class PegarouteExecution {
     final map = _object(value);
     final family = _requiredString(map, 'family');
     final mode = _requiredString(map, 'mode');
-    final execution = PegarouteExecution(
-      family: family,
-      mode: mode,
-      chainId: _optionalInt(map, 'chainId'),
-      chain: _optionalString(map, 'chain'),
-      to: _optionalString(map, 'to'),
-      data: _optionalString(map, 'data'),
-      value: map['value'] == null ? null : PegarouteTokenAmount.fromJson(map['value']),
-      gasLimit: _optionalString(map, 'gasLimit'),
-      memo: _optionalString(map, 'memo'),
-      approval: map['approval'] == null ? null : PegarouteEvmApproval.fromJson(map['approval']),
-      amount: map['amount'] == null ? null : PegarouteTokenAmount.fromJson(map['amount']),
-      transferAmount: map['transferAmount'] == null
-          ? null
-          : PegarouteTokenAmount.fromJson(map['transferAmount']),
-      asset: _optionalString(map, 'asset'),
-      assetDecimals: _optionalInt(map, 'assetDecimals'),
-      serializedTransaction: _optionalString(map, 'serializedTransaction'),
-      minOut: map['minOut'] == null ? null : PegarouteTokenAmount.fromJson(map['minOut']),
-      gasRate: _optionalString(map, 'gasRate'),
-    );
+    late final PegarouteExecution execution;
+    if (family == 'evm') {
+      execution = PegarouteExecution(
+        family: family,
+        mode: mode,
+        chainId: _requiredInt(map, 'chainId'),
+        to: _requiredString(map, 'to'),
+        data: _requiredNullableString(map, 'data'),
+        value: _requiredNullableTokenAmount(map, 'value'),
+        gasLimit: _requiredNullableString(map, 'gasLimit'),
+        memo: _requiredNullableString(map, 'memo'),
+        approval: _requiredNullableApproval(map, 'approval'),
+        transferAmount: _requiredNullableTokenAmount(map, 'transferAmount'),
+      );
+    } else if (family == 'utxo') {
+      execution = PegarouteExecution(
+        family: family,
+        mode: mode,
+        to: _requiredString(map, 'to'),
+        amount: PegarouteTokenAmount.fromJson(map['amount']),
+        memo: _requiredNullableString(map, 'memo'),
+        gasRate: _requiredNullableString(map, 'gasRate'),
+      );
+    } else if (family == 'cosmos') {
+      execution = PegarouteExecution(
+        family: family,
+        mode: mode,
+        to: _requiredString(map, 'to'),
+        amount: PegarouteTokenAmount.fromJson(map['amount']),
+        memo: _requiredNullableString(map, 'memo'),
+        asset: mode == 'msg-deposit' ? _requiredString(map, 'asset') : null,
+        assetDecimals: mode == 'msg-deposit' ? _requiredInt(map, 'assetDecimals') : null,
+      );
+    } else if (family == 'solana' || family == 'sui') {
+      if (mode == 'serialized-tx') {
+        execution = PegarouteExecution(
+          family: family,
+          mode: mode,
+          serializedTransaction: _requiredString(map, 'serializedTransaction'),
+          minOut: _requiredNullableTokenAmount(map, 'minOut'),
+        );
+      } else {
+        execution = PegarouteExecution(
+          family: family,
+          mode: mode,
+          to: _requiredString(map, 'to'),
+          amount: PegarouteTokenAmount.fromJson(map['amount']),
+          memo: _requiredNullableString(map, 'memo'),
+        );
+      }
+    } else if (const {'xrp', 'tron', 'near', 'hypercore', 'cardano'}.contains(family)) {
+      execution = PegarouteExecution(
+        family: family,
+        mode: mode,
+        to: _requiredString(map, 'to'),
+        amount: PegarouteTokenAmount.fromJson(map['amount']),
+        memo: _requiredNullableString(map, 'memo'),
+      );
+    } else if (family == 'other') {
+      execution = PegarouteExecution(
+        family: family,
+        mode: mode,
+        chain: _requiredString(map, 'chain'),
+        to: _requiredString(map, 'to'),
+        amount: PegarouteTokenAmount.fromJson(map['amount']),
+        memo: _requiredNullableString(map, 'memo'),
+      );
+    } else {
+      throw const PegarouteCodecException('unsupported execution family');
+    }
     execution.validate();
     return execution;
   }
@@ -334,12 +442,11 @@ class PegarouteExecution {
   final String? gasRate;
 
   void validate() {
-    const depositFamilies = {'solana', 'sui', 'xrp', 'tron', 'near', 'hypercore', 'cardano'};
     if (family == 'evm') {
       if (chainId == null || to == null || to!.isEmpty) _invalid('EVM destination');
       switch (mode) {
         case 'contract-call':
-          if (data == null || data!.isEmpty || transferAmount != null) _invalid('EVM call data');
+          if (transferAmount != null) _invalid('EVM call data');
           break;
         case 'native-transfer':
           if (value == null || data != null || approval != null || transferAmount != null) {
@@ -347,7 +454,7 @@ class PegarouteExecution {
           }
           break;
         case 'erc20-transfer':
-          if (transferAmount == null || value != null || approval != null) {
+          if (transferAmount == null || value != null || approval != null || data != null) {
             _invalid('EVM token transfer');
           }
           break;
@@ -367,7 +474,9 @@ class PegarouteExecution {
       }
       return;
     }
-    if ((depositFamilies.contains(family) || family == 'other') && mode == 'deposit-transfer') {
+    if ((const {'solana', 'sui', 'xrp', 'tron', 'near', 'hypercore', 'cardano'}.contains(family) ||
+            family == 'other') &&
+        mode == 'deposit-transfer') {
       _requireTransfer();
       if (family == 'other' && (chain == null || chain!.isEmpty)) _invalid('deposit chain');
       return;
@@ -388,21 +497,49 @@ class PegarouteExecution {
   Map<String, dynamic> toJson() => {
         'family': family,
         'mode': mode,
-        if (chainId != null) 'chainId': chainId,
-        if (chain != null) 'chain': chain,
-        if (to != null) 'to': to,
-        if (data != null) 'data': data,
-        if (value != null) 'value': value!.toJson(),
-        if (gasLimit != null) 'gasLimit': gasLimit,
-        if (memo != null) 'memo': memo,
-        if (approval != null) 'approval': approval!.toJson(),
-        if (amount != null) 'amount': amount!.toJson(),
-        if (transferAmount != null) 'transferAmount': transferAmount!.toJson(),
-        if (asset != null) 'asset': asset,
-        if (assetDecimals != null) 'assetDecimals': assetDecimals,
-        if (serializedTransaction != null) 'serializedTransaction': serializedTransaction,
-        if (minOut != null) 'minOut': minOut!.toJson(),
-        if (gasRate != null) 'gasRate': gasRate,
+        if (family == 'evm') ...{
+          'chainId': chainId,
+          'to': to,
+          'data': data,
+          'value': value?.toJson(),
+          'gasLimit': gasLimit,
+          'memo': memo,
+          'approval': approval?.toJson(),
+          'transferAmount': transferAmount?.toJson(),
+        },
+        if (family == 'utxo') ...{
+          'to': to,
+          'amount': amount?.toJson(),
+          'memo': memo,
+          'gasRate': gasRate,
+        },
+        if (family == 'cosmos') ...{
+          'to': to,
+          'amount': amount?.toJson(),
+          'memo': memo,
+          if (mode == 'msg-deposit') 'asset': asset,
+          if (mode == 'msg-deposit') 'assetDecimals': assetDecimals,
+        },
+        if (family == 'solana' || family == 'sui')
+          if (mode == 'serialized-tx') ...{
+            'serializedTransaction': serializedTransaction,
+            'minOut': minOut?.toJson(),
+          } else ...{
+            'to': to,
+            'amount': amount?.toJson(),
+            'memo': memo,
+          },
+        if (const {'xrp', 'tron', 'near', 'hypercore', 'cardano'}.contains(family)) ...{
+          'to': to,
+          'amount': amount?.toJson(),
+          'memo': memo,
+        },
+        if (family == 'other') ...{
+          'chain': chain,
+          'to': to,
+          'amount': amount?.toJson(),
+          'memo': memo,
+        },
       };
 }
 
@@ -419,22 +556,43 @@ class PegarouteRoute {
     this.minAmount,
     this.estimatedTimeSeconds,
     this.fees,
+    this.expiry,
+    this.gasRate,
+    this.resolvedFee,
+    this.openOceanRoute,
   });
 
   factory PegarouteRoute.fromJson(Object? value) {
     final map = _object(value);
     return PegarouteRoute(
       provider: _requiredString(map, 'provider'),
+      providerType: _requiredString(map, 'providerType'),
       expectedOutput: _requiredString(map, 'expectedOutput'),
-      providerType: _optionalString(map, 'providerType'),
       subprovider: _optionalString(map, 'subprovider'),
       privateValue: map['private'] == null ? null : PegaroutePrivateValue.fromJson(map['private']),
-      memo: _optionalString(map, 'memo'),
-      inboundAddress: _optionalString(map, 'inboundAddress'),
-      router: _optionalString(map, 'router'),
-      minAmount: _optionalString(map, 'minAmount'),
-      estimatedTimeSeconds: _optionalNum(map, 'estimatedTimeSeconds'),
-      fees: map['fees'] == null ? null : PegarouteFees.fromJson(map['fees']),
+      memo: _requiredNullableString(map, 'memo'),
+      inboundAddress: _requiredNullableString(map, 'inboundAddress'),
+      router: _requiredNullableString(map, 'router'),
+      gasRate: _requiredNullableString(map, 'gasRate'),
+      minAmount: _requiredNullableString(map, 'minAmount'),
+      estimatedTimeSeconds: _requiredNum(map, 'estimatedTimeSeconds'),
+      expiry: _requiredNullableStringOrNum(map, 'expiry'),
+      fees: PegarouteFees.fromJson(map['fees']),
+      resolvedFee: _resolvedFee(map['resolvedFee']),
+      openOceanRoute: map['openOceanRoute'] == null ? null : _object(map['openOceanRoute']),
+    );
+  }
+
+  factory PegarouteRoute.fromRouteInfoJson(Object? value) {
+    final map = _object(value);
+    return PegarouteRoute(
+      provider: _requiredString(map, 'provider'),
+      expectedOutput: _requiredString(map, 'expectedOutput'),
+      subprovider: _optionalString(map, 'subprovider'),
+      privateValue: map['private'] == null ? null : PegaroutePrivateValue.fromJson(map['private']),
+      estimatedTimeSeconds: _requiredNum(map, 'estimatedTimeSeconds'),
+      fees: PegarouteFees.fromJson(map['fees']),
+      openOceanRoute: map['openOceanRoute'] == null ? null : _object(map['openOceanRoute']),
     );
   }
 
@@ -449,20 +607,32 @@ class PegarouteRoute {
   final String? minAmount;
   final num? estimatedTimeSeconds;
   final PegarouteFees? fees;
+  final Object? expiry;
+  final String? gasRate;
+  final Map<String, dynamic>? resolvedFee;
+  final Map<String, dynamic>? openOceanRoute;
 }
 
 class PegarouteFees {
   const PegarouteFees(
-      {this.affiliate, this.liquidity, this.outbound, this.subAffiliate, this.total});
+      {this.affiliate,
+      this.liquidity,
+      this.outbound,
+      this.subAffiliate,
+      this.total,
+      this.totalBps,
+      this.slippageBps});
 
   factory PegarouteFees.fromJson(Object? value) {
     final map = _object(value);
     return PegarouteFees(
-      affiliate: _optionalString(map, 'affiliate'),
-      liquidity: _optionalString(map, 'liquidity'),
-      outbound: _optionalString(map, 'outbound'),
+      affiliate: _requiredString(map, 'affiliate'),
+      liquidity: _requiredString(map, 'liquidity'),
+      outbound: _requiredString(map, 'outbound'),
       subAffiliate: _optionalString(map, 'subAffiliate'),
-      total: _optionalString(map, 'total'),
+      total: _requiredString(map, 'total'),
+      totalBps: _optionalNum(map, 'totalBps'),
+      slippageBps: _optionalNum(map, 'slippageBps'),
     );
   }
 
@@ -471,6 +641,8 @@ class PegarouteFees {
   final String? outbound;
   final String? subAffiliate;
   final String? total;
+  final num? totalBps;
+  final num? slippageBps;
 }
 
 class PegarouteWarning {
@@ -526,17 +698,17 @@ class PegarouteProviderInfo {
     final map = _object(value);
     return PegarouteProviderInfo(
       name: _requiredString(map, 'name'),
-      referenceId: _optionalString(map, 'referenceId'),
-      details: map['details'] is Map ? Map<String, dynamic>.from(map['details'] as Map) : null,
+      referenceId: _requiredNullableString(map, 'referenceId'),
+      details: _requiredNullableValue(map, 'details'),
     );
   }
 
   final String name;
   final String? referenceId;
-  final Map<String, dynamic>? details;
+  final Object? details;
 
   PegarouteInstaswapSnapshot? get instaswapSwapLite {
-    final value = details?['instaswapSwapLite'];
+    final value = details is Map ? (details as Map)['instaswapSwapLite'] : null;
     return value == null ? null : PegarouteInstaswapSnapshot.fromJson(value);
   }
 }
@@ -626,8 +798,12 @@ class PegarouteRefund {
 
   factory PegarouteRefund.fromJson(Object? value) {
     final map = _object(value);
+    final status = _requiredString(map, 'status');
+    if (!const {'pending', 'broadcasting', 'completed'}.contains(status)) {
+      throw const PegarouteCodecException('refund status is invalid');
+    }
     return PegarouteRefund(
-      status: _requiredString(map, 'status'),
+      status: status,
       chain: _requiredString(map, 'chain'),
       amount: _requiredString(map, 'amount'),
       originalAmount: _requiredString(map, 'originalAmount'),
@@ -665,7 +841,7 @@ class PegarouteStreamingProgress {
       totalSubSwaps: _requiredNum(map, 'totalSubSwaps'),
       lastSubSwapTimestamp: _optionalString(map, 'lastSubSwapTimestamp'),
       partialOutput: _optionalString(map, 'partialOutput'),
-      partialRefund: map['partialRefund'] == null ? null : _object(map['partialRefund']),
+      partialRefund: map['partialRefund'] == null ? null : _partialRefund(map['partialRefund']),
     );
   }
 
@@ -683,7 +859,9 @@ class PegarouteStatusResponse {
       required this.internalStatus,
       required this.input,
       required this.output,
-      this.route,
+      required this.fees,
+      required this.timestamps,
+      required this.route,
       this.error,
       this.refund,
       this.streamingProgress,
@@ -692,18 +870,38 @@ class PegarouteStatusResponse {
 
   factory PegarouteStatusResponse.fromJson(Object? value) {
     final map = _object(value);
+    final status = _requiredString(map, 'status');
+    final internalStatus = _requiredString(map, 'internalStatus');
+    if (!const {'pending', 'executing', 'success', 'fail'}.contains(status)) {
+      throw const PegarouteCodecException('status is invalid');
+    }
+    if (!const {
+      'pending',
+      'submitted',
+      'executing',
+      'confirming',
+      'completed',
+      'failed',
+      'refunded'
+    }.contains(internalStatus)) {
+      throw const PegarouteCodecException('internalStatus is invalid');
+    }
+    final errorValue = _requiredNullableValue(map, 'error');
+    final refundValue = _requiredNullableValue(map, 'refund');
+    final progressValue = _requiredNullableValue(map, 'streamingProgress');
     return PegarouteStatusResponse(
       transactionId: _requiredString(map, 'transactionId'),
-      status: _requiredString(map, 'status'),
-      internalStatus: _requiredString(map, 'internalStatus'),
+      status: status,
+      internalStatus: internalStatus,
       input: PegarouteStatusInput.fromJson(map['input']),
       output: PegarouteStatusOutput.fromJson(map['output']),
-      route: map['route'] == null ? null : PegarouteRoute.fromJson(map['route']),
-      error: map['error'] == null ? null : PegarouteApiTransactionError.fromJson(map['error']),
-      refund: map['refund'] == null ? null : PegarouteRefund.fromJson(map['refund']),
-      streamingProgress: map['streamingProgress'] == null
-          ? null
-          : PegarouteStreamingProgress.fromJson(map['streamingProgress']),
+      fees: PegarouteFees.fromJson(map['fees']),
+      timestamps: PegarouteStatusTimestamps.fromJson(map['timestamps']),
+      route: PegarouteRoute.fromRouteInfoJson(map['route']),
+      error: errorValue == null ? null : PegarouteApiTransactionError.fromJson(errorValue),
+      refund: refundValue == null ? null : PegarouteRefund.fromJson(refundValue),
+      streamingProgress:
+          progressValue == null ? null : PegarouteStreamingProgress.fromJson(progressValue),
       execution: map['execution'] == null ? null : PegarouteExecution.fromJson(map['execution']),
       provider: map['provider'] == null ? null : PegarouteProviderInfo.fromJson(map['provider']),
     );
@@ -714,12 +912,38 @@ class PegarouteStatusResponse {
   final String internalStatus;
   final PegarouteStatusInput input;
   final PegarouteStatusOutput output;
-  final PegarouteRoute? route;
+  final PegarouteFees fees;
+  final PegarouteStatusTimestamps timestamps;
+  final PegarouteRoute route;
   final PegarouteApiTransactionError? error;
   final PegarouteRefund? refund;
   final PegarouteStreamingProgress? streamingProgress;
   final PegarouteExecution? execution;
   final PegarouteProviderInfo? provider;
+}
+
+class PegarouteStatusTimestamps {
+  const PegarouteStatusTimestamps({
+    required this.created,
+    this.submitted,
+    this.confirmed,
+    this.completed,
+  });
+
+  factory PegarouteStatusTimestamps.fromJson(Object? value) {
+    final map = _object(value);
+    return PegarouteStatusTimestamps(
+      created: _requiredString(map, 'created'),
+      submitted: _optionalString(map, 'submitted'),
+      confirmed: _optionalString(map, 'confirmed'),
+      completed: _optionalString(map, 'completed'),
+    );
+  }
+
+  final String created;
+  final String? submitted;
+  final String? confirmed;
+  final String? completed;
 }
 
 class PegarouteStatusInput {
@@ -802,7 +1026,7 @@ class PegarouteCatalogChain {
     return PegarouteCatalogChain(
       id: _requiredString(map, 'id'),
       name: _requiredString(map, 'name'),
-      chainId: _optionalInt(map, 'chainId'),
+      chainId: _requiredNullableInt(map, 'chainId'),
     );
   }
 
@@ -874,7 +1098,7 @@ class PegarouteApiClient {
   final PegarouteGet _get;
   final PegaroutePost _post;
 
-  Map<String, String> get _headers => {'X-API-Key': configuration.apiKey};
+  Map<String, String> get _headers => {'X-API-Key': configuration.apiKey.trim()};
 
   Uri _uri(String path, [Map<String, String>? query]) {
     final origin = configuration.origin;
@@ -949,6 +1173,7 @@ class PegarouteSwapResponse {
   const PegarouteSwapResponse(
       {required this.transactionId,
       required this.status,
+      required this.providerType,
       required this.route,
       required this.execution,
       required this.provider});
@@ -960,7 +1185,8 @@ class PegarouteSwapResponse {
     return PegarouteSwapResponse(
       transactionId: _requiredString(map, 'transactionId'),
       status: status,
-      route: PegarouteRoute.fromJson(map['route']),
+      providerType: _requiredString(map, 'providerType'),
+      route: PegarouteRoute.fromRouteInfoJson(map['route']),
       execution: PegarouteExecution.fromJson(map['execution']),
       provider: PegarouteProviderInfo.fromJson(map['provider']),
     );
@@ -968,16 +1194,29 @@ class PegarouteSwapResponse {
 
   final String transactionId;
   final String status;
+  final String providerType;
   final PegarouteRoute route;
   final PegarouteExecution execution;
   final PegarouteProviderInfo provider;
 }
 
 Map<String, String> _nonEmpty(Map<String, String?> values) => Map.fromEntries(
-      values.entries.where((entry) => entry.value != null && entry.value!.isNotEmpty).map(
-            (entry) => MapEntry(entry.key, entry.value!),
-          ),
+      values.entries.where((entry) {
+        if (entry.value != null && entry.value!.trim().isEmpty) {
+          throw PegarouteCodecException('${entry.key} must not be blank');
+        }
+        return entry.value != null;
+      }).map(
+        (entry) => MapEntry(entry.key, entry.value!),
+      ),
     );
+
+String? _privateQueryValue(Object? value) {
+  if (value == null) return null;
+  if (value is bool) return value.toString();
+  if (value is String && value.isNotEmpty && value.length <= 64) return value;
+  throw const PegarouteCodecException('private must be a boolean or non-empty string');
+}
 
 Map<String, dynamic> _object(Object? value) {
   if (value is! Map) throw const PegarouteCodecException('expected JSON object');
@@ -1003,6 +1242,63 @@ String? _optionalString(Map<String, dynamic> map, String key) {
   return value;
 }
 
+String? _requiredNullableString(Map<String, dynamic> map, String key) {
+  if (!map.containsKey(key)) throw PegarouteCodecException('$key is required');
+  return _optionalString(map, key);
+}
+
+int? _requiredNullableInt(Map<String, dynamic> map, String key) {
+  if (!map.containsKey(key)) throw PegarouteCodecException('$key is required');
+  final value = map[key];
+  if (value == null) return null;
+  if (value is! int) throw PegarouteCodecException('$key must be an integer or null');
+  return value;
+}
+
+Object? _requiredNullableValue(Map<String, dynamic> map, String key) {
+  if (!map.containsKey(key)) throw PegarouteCodecException('$key is required');
+  return map[key];
+}
+
+Object? _requiredNullableStringOrNum(Map<String, dynamic> map, String key) {
+  if (!map.containsKey(key)) throw PegarouteCodecException('$key is required');
+  final value = map[key];
+  if (value == null || value is String || value is num) return value;
+  throw PegarouteCodecException('$key must be a string, number, or null');
+}
+
+PegarouteTokenAmount? _requiredNullableTokenAmount(Map<String, dynamic> map, String key) {
+  if (!map.containsKey(key)) throw PegarouteCodecException('$key is required');
+  final value = map[key];
+  return value == null ? null : PegarouteTokenAmount.fromJson(value);
+}
+
+PegarouteEvmApproval? _requiredNullableApproval(Map<String, dynamic> map, String key) {
+  if (!map.containsKey(key)) throw PegarouteCodecException('$key is required');
+  final value = map[key];
+  return value == null ? null : PegarouteEvmApproval.fromJson(value);
+}
+
+int _requiredInt(Map<String, dynamic> map, String key) {
+  final value = map[key];
+  if (value is! int) throw PegarouteCodecException('$key must be an integer');
+  return value;
+}
+
+Map<String, dynamic> _partialRefund(Object? value) {
+  final map = _object(value);
+  _requiredString(map, 'amount');
+  _requiredString(map, 'chain');
+  _requiredString(map, 'token');
+  return map;
+}
+
+Map<String, dynamic> _resolvedFee(Object? value) {
+  final map = _object(value);
+  if (map['feeBps'] is! num) throw const PegarouteCodecException('feeBps must be numeric');
+  return map;
+}
+
 bool _requiredBool(Map<String, dynamic> map, String key) {
   if (map[key] is! bool) throw PegarouteCodecException('$key must be boolean');
   return map[key] as bool;
@@ -1018,13 +1314,6 @@ num? _optionalNum(Map<String, dynamic> map, String key) {
 num _requiredNum(Map<String, dynamic> map, String key) {
   final value = map[key];
   if (value is! num) throw PegarouteCodecException('$key must be numeric');
-  return value;
-}
-
-int? _optionalInt(Map<String, dynamic> map, String key) {
-  final value = map[key];
-  if (value == null) return null;
-  if (value is! int) throw PegarouteCodecException('$key must be an integer or null');
   return value;
 }
 

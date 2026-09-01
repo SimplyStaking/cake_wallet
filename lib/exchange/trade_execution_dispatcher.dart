@@ -57,7 +57,12 @@ class RegistryTradeExecutionDispatcher implements TradeExecutionDispatcher {
   Future<PendingTransaction?> prepare({required WalletBase wallet, required Trade trade}) {
     final raw = trade.executionJson;
     if (raw == null || raw.isEmpty) return Future.value(null);
-    final execution = TradeExecution.fromJsonString(raw);
+    late final TradeExecution execution;
+    try {
+      execution = TradeExecution.fromJsonString(raw);
+    } catch (_) {
+      return Future.value(null);
+    }
     final handler = _handler(execution);
     if (handler == null) return Future.value(null);
     return handler.prepare(wallet: wallet, trade: trade, execution: execution);

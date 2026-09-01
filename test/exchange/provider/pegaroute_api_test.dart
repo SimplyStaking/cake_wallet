@@ -1,5 +1,4 @@
 import 'dart:convert';
-import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -7,7 +6,7 @@ import 'package:cake_wallet/exchange/provider/pegaroute/pegaroute_api.dart';
 import 'package:cake_wallet/exchange/provider/pegaroute/pegaroute_configuration.dart';
 import 'package:cake_wallet/exchange/provider/pegaroute_exchange_provider.dart';
 import 'package:cw_core/crypto_currency.dart';
-import 'package:http/http.dart';
+import 'package:http/http.dart' as very_insecure_http_do_not_use;
 
 String _fixture(String name) => File('test/exchange/fixtures/pegaroute/$name').readAsStringSync();
 
@@ -15,6 +14,8 @@ void main() {
   test('validates full origins and only permits loopback HTTP', () {
     expect(
         PegarouteConfiguration(baseUrl: 'http://localhost:4000', apiKey: 'test').isValid, isTrue);
+    expect(
+        PegarouteConfiguration(baseUrl: 'http://127.42.0.9:4000', apiKey: 'test').isValid, isTrue);
     expect(PegarouteConfiguration(baseUrl: 'https://api.example.test:443/', apiKey: 'test').isValid,
         isTrue);
     expect(
@@ -93,6 +94,20 @@ void main() {
     expect(swap.toJson()['refundAddress'], quote.toQuery()['refundAddress']);
   });
 
+  test('preserves private mode as a JSON boolean for swaps', () {
+    final request = PegarouteSwapRequest(
+      fromChain: 'ETH',
+      fromToken: 'ETH',
+      toChain: 'BTC',
+      toToken: 'BTC',
+      amount: '1',
+      destinationAddress: 'destination',
+      senderAddress: 'sender',
+      privateMode: true,
+    );
+    expect(request.toJson()['private'], isTrue);
+  });
+
   test('omits a refund address equivalent to the normalized sender', () {
     final intent = PegarouteAddressIntent(
       destinationAddress: ' destination ',
@@ -105,11 +120,13 @@ void main() {
   test('injects transport and never exposes credentials in response parsing', () async {
     final calls = <String>[];
     final client = PegarouteApiClient(
-      configuration: const PegarouteConfiguration(baseUrl: 'https://example.test', apiKey: 'test'),
+      configuration:
+          const PegarouteConfiguration(baseUrl: 'https://example.test', apiKey: ' test '),
       get: (uri, headers) async {
         calls.add('${uri.path}?${uri.query}');
         expect(headers.keys, contains('X-API-Key'));
-        return Response(_fixture('quote.json'), 200);
+        expect(headers['X-API-Key'], 'test');
+        return very_insecure_http_do_not_use.Response(_fixture('quote.json'), 200);
       },
     );
     final result = await client.quote(const PegarouteQuoteRequest(
@@ -129,13 +146,57 @@ void main() {
     expect(() => PegarouteSwapResponse.fromJson(value), throwsA(isA<PegarouteCodecException>()));
   });
 
+  test('rejects schema omissions instead of accepting partial routes', () {
+    final value = json.decode(_fixture('quote.json')) as Map<String, dynamic>;
+    final route = (value['routes'] as List).single as Map<String, dynamic>;
+    route.remove('fees');
+    expect(() => PegarouteQuoteResponse.fromJson(value), throwsA(isA<PegarouteCodecException>()));
+  });
+
+  test('accepts the compact route shape used by swap status responses', () {
+    final value = json.decode(_fixture('status_refund.json')) as Map<String, dynamic>;
+    final route = value['route'] as Map<String, dynamic>;
+    route.remove('providerType');
+    route.remove('expiry');
+    route.remove('memo');
+    route.remove('inboundAddress');
+    route.remove('router');
+    route.remove('gasRate');
+    route.remove('minAmount');
+    route.remove('resolvedFee');
+    expect(PegarouteStatusResponse.fromJson(value).route.provider, 'instaswap');
+  });
+
+  test('rejects incompatible EVM execution fields', () {
+    final value = json.decode(_fixture('swap.json')) as Map<String, dynamic>;
+    final execution = value['execution'] as Map<String, dynamic>;
+    execution['mode'] = 'native-transfer';
+    execution['data'] = '0xdeadbeef';
+    expect(() => PegarouteSwapResponse.fromJson(value), throwsA(isA<PegarouteCodecException>()));
+  });
+
+  test('rejects invalid refund lifecycle values', () {
+    expect(
+      () => PegarouteRefund.fromJson({
+        'status': 'sent',
+        'chain': 'ETH',
+        'amount': '1',
+        'originalAmount': '1',
+        'feeDeducted': '0',
+        'feeDescription': 'none',
+        'refundAddress': 'address',
+      }),
+      throwsA(isA<PegarouteCodecException>()),
+    );
+  });
+
   test('keeps configured but handler-less Pegaroute out of provider I/O', () async {
     var calls = 0;
     final api = PegarouteApiClient(
       configuration: const PegarouteConfiguration(baseUrl: 'https://example.test', apiKey: 'test'),
       get: (uri, headers) async {
         calls++;
-        return Response('{}', 500);
+        return very_insecure_http_do_not_use.Response('{}', 500);
       },
     );
     final provider = PegarouteExchangeProvider(apiClient: api);

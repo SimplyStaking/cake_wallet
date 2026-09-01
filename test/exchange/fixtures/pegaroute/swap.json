@@ -6,7 +6,22 @@
     "provider": "instaswap",
     "subprovider": "partner-fixture",
     "private": false,
-    "expectedOutput": "0.99"
+    "providerType": "api-provider",
+    "expectedOutput": "0.99",
+    "estimatedTimeSeconds": 120,
+    "fees": {
+      "affiliate": "0",
+      "liquidity": "0.01",
+      "outbound": "0",
+      "total": "0.01"
+    },
+    "expiry": null,
+    "memo": null,
+    "inboundAddress": null,
+    "router": null,
+    "gasRate": null,
+    "minAmount": null,
+    "resolvedFee": { "feeBps": 0 }
   },
   "execution": {
     "family": "evm",
@@ -16,7 +31,9 @@
     "data": "0xabcdef",
     "value": {"display": "0", "baseUnits": "0"},
     "gasLimit": "250000",
-    "memo": null
+    "memo": null,
+    "approval": null,
+    "transferAmount": null
   },
   "provider": {
     "name": "openocean",

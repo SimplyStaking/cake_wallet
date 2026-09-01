@@ -40,7 +40,7 @@ class TradeExecution {
       routeProvider: _optional(map, 'routeProvider'),
       subprovider: _optional(map, 'subprovider'),
       privateIntent: map['privateIntent'],
-      payload: Map<String, dynamic>.from(payload),
+      payload: _freezeMap(payload),
     );
     final privateIntent = execution.privateIntent;
     if (privateIntent != null && privateIntent is! bool && privateIntent is! String) {
@@ -118,5 +118,22 @@ String? _optional(Map<String, dynamic> map, String key) {
   final value = map[key];
   if (value == null) return null;
   if (value is! String || value.isEmpty) throw FormatException('$key must be a string');
+  return value;
+}
+
+Map<String, dynamic> _freezeMap(Map<dynamic, dynamic> value) {
+  final result = <String, dynamic>{};
+  for (final entry in value.entries) {
+    if (entry.key is! String) {
+      throw const FormatException('execution payload keys must be strings');
+    }
+    result[entry.key as String] = _freezeValue(entry.value);
+  }
+  return Map<String, dynamic>.unmodifiable(result);
+}
+
+Object? _freezeValue(Object? value) {
+  if (value is Map) return _freezeMap(value);
+  if (value is List) return List<Object?>.unmodifiable(value.map(_freezeValue));
   return value;
 }

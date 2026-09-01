@@ -699,8 +699,21 @@ abstract class SendViewModelBase extends WalletChangeListenerViewModel with Stor
     try {
       if (!(state is IsExecutingState)) state = IsExecutingState();
 
+      // Pegaroute remains disabled until a provider-specific signing handler
+      // is deliberately registered in a later phase.
+      if (trade?.provider == ExchangeProviderDescription.pegaroute) {
+        state = FailureState('Pegaroute execution is unavailable');
+        return null;
+      }
+
       if (trade?.executionJson != null && trade!.executionJson!.isNotEmpty) {
-        final execution = TradeExecution.fromJsonString(trade.executionJson!);
+        late final TradeExecution execution;
+        try {
+          execution = TradeExecution.fromJsonString(trade.executionJson!);
+        } catch (_) {
+          state = FailureState('Invalid trade execution');
+          return null;
+        }
         if (!tradeExecutionDispatcher.supports(execution)) {
           state = FailureState('Unsupported trade execution');
           return null;
@@ -712,11 +725,6 @@ abstract class SendViewModelBase extends WalletChangeListenerViewModel with Stor
         }
         state = ExecutedSuccessfullyState();
         return pendingTransaction;
-      }
-
-      if (trade?.provider == ExchangeProviderDescription.pegaroute) {
-        state = FailureState('Pegaroute execution is unavailable');
-        return null;
       }
 
       if (wallet.isHardwareWallet) {

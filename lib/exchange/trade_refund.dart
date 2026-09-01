@@ -26,6 +26,9 @@ class TradeRefund {
     }
     final status = map['status'];
     if (status != null && status is! String) throw const FormatException('invalid refund status');
+    if (status != null && !const {'pending', 'broadcasting', 'completed'}.contains(status)) {
+      throw const FormatException('invalid refund status');
+    }
     if (map['terminalWithoutEvidence'] != null && map['terminalWithoutEvidence'] is! bool) {
       throw const FormatException('invalid refund terminal flag');
     }
