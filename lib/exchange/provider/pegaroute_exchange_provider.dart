@@ -86,9 +86,12 @@ class PegarouteExchangeProvider extends ExchangeProvider {
   Future<Trade> findTradeById({required String id}) async {
     try {
       final response = await _apiClient.status(id);
+      if (response.transactionId != id.trim()) {
+        throw const PegarouteCodecException('status transactionId does not match requested id');
+      }
       final input = response.input;
       final output = response.output;
-      final configuredRefund = input.refundAddress ?? input.address;
+      final configuredRefund = input.refundAddress;
       final refund = response.refund;
       final refundRecord =
           refund == null && configuredRefund == null && response.internalStatus != 'refunded'
@@ -118,6 +121,8 @@ class PegarouteExchangeProvider extends ExchangeProvider {
         outputTransaction: output.txHash,
         receiveAmount: output.amount,
         payoutAddress: output.address,
+        providerName: response.provider?.name ?? response.route.provider,
+        providerId: response.provider?.referenceId,
         refundJson: refundRecord?.encode(),
       );
     } on PegarouteApiError catch (error) {

@@ -22,7 +22,7 @@ import 'package:cake_wallet/entities/qr_view_data.dart';
 import 'package:cake_wallet/entities/wallet_edit_page_arguments.dart';
 import 'package:cake_wallet/exchange/trade.dart';
 import 'package:cake_wallet/exchange/trade_external_funding_policy.dart';
-import 'package:cake_wallet/view_model/exchange/exchange_trade_view_model.dart';
+import 'package:cake_wallet/store/dashboard/trades_store.dart';
 import 'package:cake_wallet/generated/i18n.dart';
 import 'package:cake_wallet/routes.dart';
 import 'package:cake_wallet/src/screens/anonpay_details/anonpay_details_page.dart';
@@ -1002,7 +1002,7 @@ Route<dynamic> createRoute(RouteSettings settings) {
       );
 
     case Routes.exchangeTradeExternalSendPage:
-      if (!TradeExternalFundingPolicy.canUse(getIt.get<ExchangeTradeViewModel>().trade)) {
+      if (!TradeExternalFundingPolicy.canOpenRoute(getIt.get<TradesStore>().trade)) {
         return createRoute(const RouteSettings(name: Routes.empty_no_route));
       }
       return MaterialPageRoute<void>(

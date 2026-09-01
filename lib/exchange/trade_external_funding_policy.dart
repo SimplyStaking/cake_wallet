@@ -8,4 +8,6 @@ class TradeExternalFundingPolicy {
   const TradeExternalFundingPolicy._();
 
   static bool canUse(Trade trade) => trade.provider != ExchangeProviderDescription.pegaroute;
+
+  static bool canOpenRoute(Trade? trade) => trade != null && canUse(trade);
 }

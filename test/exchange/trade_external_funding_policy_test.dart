@@ -4,6 +4,10 @@ import 'package:cake_wallet/exchange/trade_external_funding_policy.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  test('route access fails closed without a current trade', () {
+    expect(TradeExternalFundingPolicy.canOpenRoute(null), isFalse);
+  });
+
   test('fails closed for Pegaroute while preserving other providers', () {
     final pegaroute = Trade(
       id: 'pegaroute',
