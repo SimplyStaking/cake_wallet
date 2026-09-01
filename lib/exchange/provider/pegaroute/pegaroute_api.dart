@@ -150,8 +150,11 @@ class PegarouteQuoteRequest {
         toToken = _requiredRequestId(toToken, 'toToken'),
         amount = _positiveAmount(amount),
         destinationAddress = _optionalRequestId(destinationAddress, 'destinationAddress'),
-        senderAddress = _optionalRequestId(senderAddress, 'senderAddress'),
-        refundAddress = _normalizeRequestRefund(senderAddress, refundAddress),
+        senderAddress = _normalizeRequestSender(senderAddress),
+        refundAddress = _normalizeRequestRefund(
+          _normalizeRequestSender(senderAddress),
+          refundAddress,
+        ),
         integrationId = _optionalRequestId(integrationId, 'integrationId');
 
   final String fromChain;
@@ -1633,6 +1636,8 @@ String? _optionalRequestId(String? value, String key) {
   if (value == null) return null;
   return _requiredRequestId(value, key);
 }
+
+String? _normalizeRequestSender(String? sender) => _optionalRequestId(sender, 'senderAddress');
 
 String? _normalizeRequestRefund(String? sender, String? refund) {
   final normalized = _optionalRequestId(refund, 'refundAddress');

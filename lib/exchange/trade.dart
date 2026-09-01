@@ -202,7 +202,12 @@ class Trade {
     if (updated.memo != null) memo = updated.memo;
     if (updated.txId != null) txId = updated.txId;
     if (updated.refundJson != null) {
-      refundJson = TradeRefund.mergeJson(refundJson, updated.refundJson!);
+      final currentRefundJson = refundJson?.isNotEmpty == true
+          ? refundJson
+          : refundAddress == null
+              ? null
+              : TradeRefund(configuredAddress: refundAddress).encode();
+      refundJson = TradeRefund.mergeJson(currentRefundJson, updated.refundJson!);
     }
   }
 

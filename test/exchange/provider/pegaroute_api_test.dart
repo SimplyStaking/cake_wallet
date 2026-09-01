@@ -243,6 +243,32 @@ void main() {
     expect(intent.refundAddress, isNull);
   });
 
+  test('omits sender-equivalent refunds in direct request constructors', () {
+    final quote = PegarouteQuoteRequest(
+      fromChain: 'ETH',
+      fromToken: 'ETH',
+      toChain: 'BTC',
+      toToken: 'BTC',
+      amount: '1',
+      senderAddress: ' sender ',
+      refundAddress: 'sender',
+    );
+    final swap = PegarouteSwapRequest(
+      fromChain: 'ETH',
+      fromToken: 'ETH',
+      toChain: 'BTC',
+      toToken: 'BTC',
+      amount: '1',
+      destinationAddress: 'destination',
+      senderAddress: ' sender ',
+      refundAddress: 'sender',
+    );
+    expect(quote.senderAddress, 'sender');
+    expect(quote.refundAddress, isNull);
+    expect(swap.senderAddress, 'sender');
+    expect(swap.refundAddress, isNull);
+  });
+
   test('injects transport and never exposes credentials in response parsing', () async {
     final calls = <String>[];
     final client = PegarouteApiClient(
@@ -551,7 +577,6 @@ void main() {
 
   test('falls back to the status input provider reference ID', () async {
     final value = json.decode(_fixture('status_refund.json')) as Map<String, dynamic>;
-    (value['provider'] as Map<String, dynamic>)['referenceId'] = null;
     (value['input'] as Map<String, dynamic>)['providerReferenceId'] = 'input-reference';
     final client = PegarouteApiClient(
       configuration: const PegarouteConfiguration(baseUrl: 'https://example.test', apiKey: 'test'),

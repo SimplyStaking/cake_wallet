@@ -103,6 +103,24 @@ void main() {
     expect(TradeRefund.fromJsonString(trade.refundJson!).configuredAddress, 'configured');
   });
 
+  test('seeds missing refund envelope from persisted configured intent', () {
+    final trade = Trade(
+      id: 'persisted',
+      amount: '1',
+      refundAddress: 'configured',
+    );
+    trade.mergeFindTradeByIdResult(
+      Trade(
+        id: 'persisted',
+        amount: '1',
+        refundAddress: 'different',
+        refundJson: TradeRefund(configuredAddress: 'different').encode(),
+      ),
+    );
+    expect(trade.refundAddress, 'configured');
+    expect(TradeRefund.fromJsonString(trade.refundJson!).configuredAddress, 'configured');
+  });
+
   test('preserves unknown current-version envelopes during status merge', () {
     const unknownExecution = '{"version":1,"future":true}';
     const unknownRefund = '{"version":1,"future":true}';
