@@ -94,15 +94,13 @@ List<Map<String, dynamic>> _executionVariants() => [
         'near',
         'hypercore',
         'cardano',
-      ].map((family) => {
-        return {
-          'family': family,
-          'mode': 'deposit-transfer',
-          'to': 'deposit-destination',
-          'amount': _amount(),
-          'memo': null,
-        };
-      }),
+      ].map((family) => <String, dynamic>{
+            'family': family,
+            'mode': 'deposit-transfer',
+            'to': 'deposit-destination',
+            'amount': _amount(),
+            'memo': null,
+          }),
       {
         'family': 'other',
         'mode': 'deposit-transfer',
@@ -557,8 +555,7 @@ void main() {
     (value['input'] as Map<String, dynamic>)['providerReferenceId'] = 'input-reference';
     final client = PegarouteApiClient(
       configuration: const PegarouteConfiguration(baseUrl: 'https://example.test', apiKey: 'test'),
-      get: (uri, headers) async =>
-          very_insecure_http_do_not_use.Response(json.encode(value), 200),
+      get: (uri, headers) async => very_insecure_http_do_not_use.Response(json.encode(value), 200),
     );
     final trade = await PegarouteExchangeProvider(apiClient: client).findTradeById(
       id: 'transaction-fixture',
