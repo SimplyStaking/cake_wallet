@@ -91,6 +91,64 @@ void main() {
     expect(mapper.map(CryptoCurrency.rune).token, 'RUNE');
   });
 
+  test('maps cataloged built-in aliases to exact identities', () {
+    final cases = <CryptoCurrency, String>{
+      CryptoCurrency.ape: 'ETH/APE-0x4d224452801aced8b2f0aebe155379bb5d594381',
+      CryptoCurrency.dai: 'ETH/DAI-0x6b175474e89094c44da98b954eedeac495271d0f',
+      CryptoCurrency.matic: 'ETH/MATIC-0x7d1afa7b718fb893db30a3abc0cfc608aacfebb0',
+      CryptoCurrency.wbtc: 'ETH/WBTC-0x2260fac5e5542a773aa44fbcfedf7c193bc2c599',
+      CryptoCurrency.weth: 'ETH/WETH-0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2',
+      CryptoCurrency.usdterc20: 'ETH/USDT-0xdac17f958d2ee523a2206206994597c13d831ec7',
+      CryptoCurrency.usdtPoly: 'POLYGON/USDT-0xc2132d05d31c914a87c6611c10748aeb04b58e8f',
+      CryptoCurrency.usdcEPoly: 'POLYGON/USDC.E-0x2791bca1f2de4661ed88a30c99a7a9449aa84174',
+      CryptoCurrency.usdtbsc: 'BSC/USDT-0x55d398326f99059ff775485246999027b3197955',
+      CryptoCurrency.usde: 'BASE/USDE-0x5d3a1ff2b6bab83b63cd9ad0787074081a52ef34',
+      CryptoCurrency.usdcArb: 'ARBITRUM/USDC-0xaf88d065e77c8cc2239327c5edb3a432268e5831',
+      CryptoCurrency.usdtArb: 'ARBITRUM/USDT-0xfd086bc7cd5c481dcc9c85ebe478a1c0b69fcbb9',
+      CryptoCurrency.pepe: 'ETH/PEPE-0x6982508145454ce325ddbe47a25d4ec3d2311933',
+      CryptoCurrency.shib: 'ETH/SHIB-0x95ad61b0a150d79219dcf64e1e6cc01f0b64c4ce',
+      CryptoCurrency.paxg: 'ETH/PAXG-0x45804880de22913dafe09f4980848ece6ecbaf78',
+    };
+    for (final entry in cases.entries) {
+      final asset = mapper.map(entry.key);
+      expect('${asset.chain}/${asset.token}', entry.value);
+    }
+  });
+
+  test('maps cataloged SPL defaults without changing address case', () {
+    final cases = <Map<String, String>>[
+      {'symbol': 'PYTH', 'mint': 'HZ1JovNiVvGrGNiiYvEozEVgZ58xaU3RKwX8eACQBCt3'},
+      {'symbol': 'GMT', 'mint': '7i5KKsX2weiTkry7jA4ZwSuXGhs5eJBEjY8vVxR4pfRx'},
+      {'symbol': 'TBB', 'mint': '42cXQvAAr7hcPBPWAS4ocVtDyeJ4Fa6gRR2uG4gppump'},
+      {'symbol': 'GOOGLx', 'mint': 'XsCPL9dNWBMvFtTmwcCA5v3xWPSMEBCszbQdiLLq6aN'},
+      {'symbol': 'AMZNx', 'mint': 'Xs3eBt7uRfJX8QUs4suhyU8p2M6DoUDrJyWBa8LLZsg'},
+      {'symbol': 'AAPLx', 'mint': 'XsbEhLAtcf6HdfpFZ5xEMdqW8nfAvcsP5bdudRLJzJp'},
+      {'symbol': 'CRCLx', 'mint': 'XsueG8BtpquVJX9LVLLEGuViXUungE6WmK5YZ3p3bd1'},
+      {'symbol': 'COINx', 'mint': 'Xs7ZdzSHLU9ftNJsii5fCeJhoRWSC32SQGzGQtePxNu'},
+      {'symbol': 'DFDVx', 'mint': 'Xs2yquAgsHByNzx68WJC55WHjHBvG9JsMB7CWjTLyPy'},
+      {'symbol': 'MCDx', 'mint': 'XsqE9cRRpzxcGKDXj1BJ7Xmg4GRhZoyY1KpmGSxAWT2'},
+      {'symbol': 'METAx', 'mint': 'Xsa62P5mvPszXL1krVUnU5ar38bBSVcWAB6fmPCo5Zu'},
+      {'symbol': 'MSTRx', 'mint': 'XsP7xzNPvEHS1m6qfanPUGjNmdnmsLKEoNAnHjdxxyZ'},
+      {'symbol': 'QQQx', 'mint': 'Xs8S1uUs1zvS2p7iwtsG3b6fkhpvmwz4GYU3gWAmWHZ'},
+      {'symbol': 'NVDAx', 'mint': 'Xsc9qvGR1efVDFGLrVsmkzv3qi45LTBjeUKSPmx9qEh'},
+      {'symbol': 'PGx', 'mint': 'XsYdjDjNUygZ7yGKfQaB6TxLh2gC6RRjzLtLAGJrhzV'},
+      {'symbol': 'SPYx', 'mint': 'XsoCS1TfEyfFhfvj8EtZ528L3CaKBDBRqRapnBbDF2W'},
+      {'symbol': 'TSLAx', 'mint': 'XsDoVfqeBukxuZHWhdvWHBhgEHjGNst4MLodqsJHzoB'},
+      {'symbol': 'UNHx', 'mint': 'XszvaiXGPwvk2nwb3o9C1CX4K6zH8sez11E6uyup6fe'},
+    ];
+    for (final value in cases) {
+      final asset = mapper.map(SPLToken(
+        name: value['symbol']!,
+        symbol: value['symbol']!,
+        mintAddress: value['mint']!,
+        decimal: 8,
+        mint: value['symbol']!,
+      ));
+      expect('${asset.chain}/${asset.token}',
+          'SOL/${value['symbol']!.toUpperCase()}-${value['mint']}');
+    }
+  });
+
   test('rejects unsupported native and case-sensitive token identities', () {
     expect(() => mapper.map(CryptoCurrency.near), throwsA(isA<PegarouteCurrencyException>()));
     expect(() => mapper.map(CryptoCurrency.ltcmweb), throwsA(isA<PegarouteCurrencyException>()));
@@ -113,5 +171,7 @@ void main() {
       )),
       throwsA(isA<PegarouteCurrencyException>()),
     );
+    expect(() => mapper.map(CryptoCurrency.usdttrc20), throwsA(isA<PegarouteCurrencyException>()));
+    expect(() => mapper.map(CryptoCurrency.usdcTrc20), throwsA(isA<PegarouteCurrencyException>()));
   });
 }
