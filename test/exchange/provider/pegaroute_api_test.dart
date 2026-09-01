@@ -1,5 +1,4 @@
 import 'dart:convert';
-import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -38,8 +37,8 @@ void main() {
 
     final swap = PegarouteSwapResponse.fromJson(json.decode(_fixture('swap.json')));
     expect(swap.execution.family, 'evm');
-    expect(swap.execution.mode, 'contract-call');
-    expect(swap.execution.value!.baseUnits, '0');
+    expect(swap.execution.mode, 'native-transfer');
+    expect(swap.execution.value!.baseUnits, '1');
     expect(swap.provider.instaswapSwapLite, isNull);
   });
 
@@ -47,8 +46,7 @@ void main() {
     final status = PegarouteStatusResponse.fromJson(json.decode(_fixture('status_refund.json')));
     expect(status.internalStatus, 'refunded');
     expect(status.input.refundAddress, isNotNull);
-    expect(status.refund!.status, 'completed');
-    expect(status.refund!.txHash, 'refund-hash-fixture');
+    expect(status.refund, isNull);
     expect(status.output.txHash, 'output-hash-fixture');
     expect(status.affiliateFeeBreakdown!.pegasusNetUsd, '0.01');
   });
@@ -171,8 +169,9 @@ void main() {
   test('rejects incompatible EVM execution fields', () {
     final value = json.decode(_fixture('swap.json')) as Map<String, dynamic>;
     final execution = value['execution'] as Map<String, dynamic>;
-    execution['mode'] = 'native-transfer';
+    execution['mode'] = 'contract-call';
     execution['data'] = '0xdeadbeef';
+    execution['transferAmount'] = {'display': '1', 'baseUnits': '1'};
     expect(() => PegarouteSwapResponse.fromJson(value), throwsA(isA<PegarouteCodecException>()));
   });
 
@@ -211,6 +210,7 @@ void main() {
     expect(trade.executionJson, isNull);
     expect(trade.senderAddress, '0x0000000000000000000000000000000000000002');
     expect(trade.inputAddress, isNull);
+    expect(trade.providerName, 'instaswap');
   });
 
   test('rejects invalid refund lifecycle values', () {
@@ -318,6 +318,60 @@ void main() {
         configuration:
             const PegarouteConfiguration(baseUrl: 'https://example.test', apiKey: 'test'),
       ).tokens(' '),
+      throwsA(isA<PegarouteCodecException>()),
+    );
+  });
+
+  test('rejects explicit null for optional non-nullable response fields', () {
+    final quote = json.decode(_fixture('quote.json')) as Map<String, dynamic>;
+    final route = (quote['routes'] as List).single as Map<String, dynamic>;
+    route['subprovider'] = null;
+    expect(() => PegarouteQuoteResponse.fromJson(quote), throwsA(isA<PegarouteCodecException>()));
+
+    final status = json.decode(_fixture('status_refund.json')) as Map<String, dynamic>;
+    (status['timestamps'] as Map<String, dynamic>)['completed'] = null;
+    expect(() => PegarouteStatusResponse.fromJson(status), throwsA(isA<PegarouteCodecException>()));
+
+    final statusProvider = json.decode(_fixture('status_refund.json')) as Map<String, dynamic>;
+    statusProvider['provider'] = null;
+    expect(() => PegarouteStatusResponse.fromJson(statusProvider),
+        throwsA(isA<PegarouteCodecException>()));
+
+    final openOcean = json.decode(_fixture('quote.json')) as Map<String, dynamic>;
+    (openOcean['routes'] as List).single['openOceanRoute'] = null;
+    expect(
+        () => PegarouteQuoteResponse.fromJson(openOcean), throwsA(isA<PegarouteCodecException>()));
+
+    final snapshot = json.decode(_fixture('status_refund.json')) as Map<String, dynamic>;
+    (snapshot['input'] as Map<String, dynamic>)['instaswapSwapLite'] = null;
+    expect(
+        () => PegarouteStatusResponse.fromJson(snapshot), throwsA(isA<PegarouteCodecException>()));
+
+    expect(
+      () => PegarouteInstaswapSnapshot.fromJson({
+        'txid': 'fixture',
+        'depositAddress': 'address',
+        'feeBreakdown': null,
+      }),
+      throwsA(isA<PegarouteCodecException>()),
+    );
+  });
+
+  test('rejects blank and mismatched status IDs before returning trade data', () async {
+    final calls = <String>[];
+    final client = PegarouteApiClient(
+      configuration: const PegarouteConfiguration(baseUrl: 'https://example.test', apiKey: 'test'),
+      get: (uri, headers) async {
+        calls.add(uri.path);
+        return very_insecure_http_do_not_use.Response(_fixture('status_refund.json'), 200);
+      },
+    );
+    await expectLater(client.status(' '), throwsA(isA<PegarouteCodecException>()));
+    expect(calls, isEmpty);
+
+    final provider = PegarouteExchangeProvider(apiClient: client);
+    await expectLater(
+      provider.findTradeById(id: 'different-id'),
       throwsA(isA<PegarouteCodecException>()),
     );
   });

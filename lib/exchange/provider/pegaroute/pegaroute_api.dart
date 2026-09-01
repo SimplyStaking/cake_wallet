@@ -46,7 +46,7 @@ class PegarouteApiError implements Exception {
     final root = _object(value);
     final error = _object(root['error']);
     final detailsValue = error['details'];
-    if (detailsValue != null && detailsValue is! Map) {
+    if (error.containsKey('details') && (detailsValue == null || detailsValue is! Map)) {
       throw const PegarouteCodecException('details must be an object');
     }
     final code = _requiredString(error, 'code');
@@ -67,7 +67,7 @@ class PegarouteApiError implements Exception {
       message: _requiredString(error, 'message'),
       userMessage: _requiredString(error, 'userMessage'),
       retryable: _requiredBool(error, 'retryable'),
-      retryAfterSeconds: _optionalNum(error, 'retryAfterSeconds'),
+      retryAfterSeconds: _optionalNullableNum(error, 'retryAfterSeconds'),
       provider: _optionalString(error, 'provider'),
       details: detailsValue == null ? null : Map<String, dynamic>.from(detailsValue as Map),
       newQuote: code == 'PROVIDER_CHANGED' ? PegarouteQuoteResponse.fromJson(newQuote) : null,
@@ -833,7 +833,8 @@ class PegarouteRoute {
       providerType: _requiredString(map, 'providerType'),
       expectedOutput: _requiredString(map, 'expectedOutput'),
       subprovider: _optionalString(map, 'subprovider'),
-      privateValue: map['private'] == null ? null : PegaroutePrivateValue.fromJson(map['private']),
+      privateValue:
+          map.containsKey('private') ? PegaroutePrivateValue.fromJson(map['private']) : null,
       memo: _requiredNullableString(map, 'memo'),
       inboundAddress: _requiredNullableString(map, 'inboundAddress'),
       router: _requiredNullableString(map, 'router'),
@@ -843,9 +844,9 @@ class PegarouteRoute {
       expiry: _requiredNullableStringOrNum(map, 'expiry'),
       fees: PegarouteFees.fromJson(map['fees']),
       resolvedFee: _resolvedFee(map['resolvedFee']),
-      openOceanRoute: map['openOceanRoute'] == null
-          ? null
-          : PegarouteOpenOceanRoute.fromJson(map['openOceanRoute']),
+      openOceanRoute: map.containsKey('openOceanRoute')
+          ? PegarouteOpenOceanRoute.fromJson(map['openOceanRoute'])
+          : null,
     );
   }
 
@@ -864,12 +865,13 @@ class PegarouteRoute {
       provider: _requiredString(map, 'provider'),
       expectedOutput: _requiredString(map, 'expectedOutput'),
       subprovider: _optionalString(map, 'subprovider'),
-      privateValue: map['private'] == null ? null : PegaroutePrivateValue.fromJson(map['private']),
+      privateValue:
+          map.containsKey('private') ? PegaroutePrivateValue.fromJson(map['private']) : null,
       estimatedTimeSeconds: _requiredNum(map, 'estimatedTimeSeconds'),
       fees: PegarouteFees.fromJson(map['fees']),
-      openOceanRoute: map['openOceanRoute'] == null
-          ? null
-          : PegarouteOpenOceanRoute.fromJson(map['openOceanRoute']),
+      openOceanRoute: map.containsKey('openOceanRoute')
+          ? PegarouteOpenOceanRoute.fromJson(map['openOceanRoute'])
+          : null,
     );
   }
 
@@ -1091,12 +1093,12 @@ class PegarouteInstaswapSnapshot {
       depositAmount: _optionalNum(map, 'depositAmount'),
       depositAmountExact: _optionalString(map, 'depositAmountExact'),
       depositAmountUsd: _optionalNum(map, 'depositAmountUsd'),
-      feeBreakdown: map['feeBreakdown'] == null
-          ? null
-          : _list(map, 'feeBreakdown').map(PegarouteInstaswapFeeLine.fromJson).toList(),
+      feeBreakdown: map.containsKey('feeBreakdown')
+          ? _list(map, 'feeBreakdown').map(PegarouteInstaswapFeeLine.fromJson).toList()
+          : null,
       etaSeconds: _optionalNum(map, 'etaSeconds'),
       depositTokenSymbol: _optionalString(map, 'depositTokenSymbol'),
-      expiresAt: _optionalString(map, 'expiresAt'),
+      expiresAt: _optionalNullableString(map, 'expiresAt'),
       instructions: _optionalString(map, 'instructions'),
     );
   }
@@ -1244,7 +1246,7 @@ class PegarouteStatusResponse {
     final progressValue = _requiredNullableValue(map, 'streamingProgress');
     final route = PegarouteRoute.fromRouteInfoJson(map['route']);
     final provider =
-        map['provider'] == null ? null : PegarouteProviderInfo.fromJson(map['provider']);
+        map.containsKey('provider') ? PegarouteProviderInfo.fromJson(map['provider']) : null;
     if (provider != null && provider.name != route.provider) {
       throw const PegarouteCodecException('route and provider identities disagree');
     }
@@ -1257,14 +1259,15 @@ class PegarouteStatusResponse {
       fees: PegarouteFees.fromJson(map['fees']),
       timestamps: PegarouteStatusTimestamps.fromJson(map['timestamps']),
       route: route,
-      affiliateFeeBreakdown: map['affiliateFeeBreakdown'] == null
-          ? null
-          : PegarouteAffiliateFeeBreakdown.fromJson(map['affiliateFeeBreakdown']),
+      affiliateFeeBreakdown: map.containsKey('affiliateFeeBreakdown')
+          ? PegarouteAffiliateFeeBreakdown.fromJson(map['affiliateFeeBreakdown'])
+          : null,
       error: errorValue == null ? null : PegarouteApiTransactionError.fromJson(errorValue),
       refund: refundValue == null ? null : PegarouteRefund.fromJson(refundValue),
       streamingProgress:
           progressValue == null ? null : PegarouteStreamingProgress.fromJson(progressValue),
-      execution: map['execution'] == null ? null : PegarouteExecution.fromJson(map['execution']),
+      execution:
+          map.containsKey('execution') ? PegarouteExecution.fromJson(map['execution']) : null,
       provider: provider,
     );
   }
@@ -1330,9 +1333,9 @@ class PegarouteStatusInput {
       refundAddress: _optionalString(map, 'refundAddress'),
       txHash: _optionalString(map, 'txHash'),
       providerReferenceId: _optionalString(map, 'providerReferenceId'),
-      instaswapSwapLite: map['instaswapSwapLite'] == null
-          ? null
-          : PegarouteInstaswapSnapshot.fromJson(map['instaswapSwapLite']),
+      instaswapSwapLite: map.containsKey('instaswapSwapLite')
+          ? PegarouteInstaswapSnapshot.fromJson(map['instaswapSwapLite'])
+          : null,
     );
   }
 
@@ -1487,7 +1490,9 @@ class PegarouteApiClient {
   }
 
   Future<PegarouteStatusResponse> status(String id) async {
-    final response = await _get(_uri('/swap/$id'), _headers);
+    final normalized = id.trim();
+    if (normalized.isEmpty) throw const PegarouteCodecException('id must not be blank');
+    final response = await _get(_uri('/swap/$normalized'), _headers);
     return _decode(response, PegarouteStatusResponse.fromJson, expectedStatus: 200);
   }
 
@@ -1546,6 +1551,8 @@ class PegarouteSwapResponse {
 
   factory PegarouteSwapResponse.fromJson(Object? value) {
     final map = _object(value);
+    _rejectUnknown(
+        map, const {'transactionId', 'status', 'providerType', 'route', 'execution', 'provider'});
     final status = _requiredString(map, 'status');
     if (status != 'pending') throw const PegarouteCodecException('swap status must be pending');
     final route = PegarouteRoute.fromRouteInfoJson(map['route']);
@@ -1638,6 +1645,14 @@ String _positiveAmount(String value) {
 }
 
 String? _optionalString(Map<String, dynamic> map, String key) {
+  if (!map.containsKey(key)) return null;
+  final value = map[key];
+  if (value is! String) throw PegarouteCodecException('$key must be a non-null string');
+  return value;
+}
+
+String? _optionalNullableString(Map<String, dynamic> map, String key) {
+  if (!map.containsKey(key)) return null;
   final value = map[key];
   if (value == null) return null;
   if (value is! String) throw PegarouteCodecException('$key must be a string or null');
@@ -1694,9 +1709,9 @@ int _requiredNonnegativeInt(Map<String, dynamic> map, String key) {
 }
 
 int? _optionalInt(Map<String, dynamic> map, String key) {
+  if (!map.containsKey(key)) return null;
   final value = map[key];
-  if (value == null) return null;
-  if (value is! int) throw PegarouteCodecException('$key must be an integer or null');
+  if (value is! int) throw PegarouteCodecException('$key must be a non-null integer');
   return value;
 }
 
@@ -1720,6 +1735,14 @@ bool _requiredBool(Map<String, dynamic> map, String key) {
 }
 
 num? _optionalNum(Map<String, dynamic> map, String key) {
+  if (!map.containsKey(key)) return null;
+  final value = map[key];
+  if (value is! num) throw PegarouteCodecException('$key must be non-null numeric');
+  return value;
+}
+
+num? _optionalNullableNum(Map<String, dynamic> map, String key) {
+  if (!map.containsKey(key)) return null;
   final value = map[key];
   if (value == null) return null;
   if (value is! num) throw PegarouteCodecException('$key must be numeric or null');

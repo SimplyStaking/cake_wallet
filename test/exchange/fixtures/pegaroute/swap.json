@@ -13,16 +13,15 @@
       "liquidity": "0.01",
       "outbound": "0",
       "total": "0.01"
-    },
-    "openOceanRoute": null
+    }
   },
   "execution": {
     "family": "evm",
-    "mode": "contract-call",
+    "mode": "native-transfer",
     "chainId": 1,
     "to": "0x0000000000000000000000000000000000000001",
-    "data": "0xabcdef",
-    "value": {"display": "0", "baseUnits": "0"},
+    "data": null,
+    "value": {"display": "1", "baseUnits": "1"},
     "gasLimit": "250000",
     "memo": null,
     "approval": null,
