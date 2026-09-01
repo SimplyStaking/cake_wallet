@@ -58,6 +58,8 @@ Future<void> generateSecretsConfig(List<String> args) async {
     if (extraInfo['--force'] == 1) {
       await baseConfigFile.delete();
     } else {
+      final existing = json.decode(baseConfigFile.readAsStringSync()) as Map<String, dynamic>;
+      await writeConfig(baseConfigFile, SecretKey.base, existingSecrets: existing);
       return;
     }
   }

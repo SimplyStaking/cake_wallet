@@ -1,0 +1,32 @@
+{
+  "transactionId": "transaction-fixture",
+  "status": "fail",
+  "internalStatus": "refunded",
+  "input": {
+    "chain": "ETH",
+    "token": "ETH",
+    "amount": "1",
+    "address": "0x0000000000000000000000000000000000000002",
+    "refundAddress": "0x0000000000000000000000000000000000000003"
+  },
+  "output": {
+    "chain": "BTC",
+    "token": "BTC",
+    "address": "bc1qfixture",
+    "amount": "0.01",
+    "txHash": "output-hash-fixture"
+  },
+  "error": null,
+  "refund": {
+    "status": "completed",
+    "txHash": "refund-hash-fixture",
+    "chain": "ETH",
+    "amount": "0.99",
+    "originalAmount": "1",
+    "feeDeducted": "0.01",
+    "feeDescription": "fixture fee",
+    "refundAddress": "0x0000000000000000000000000000000000000003",
+    "completedAt": "2026-09-01T12:01:00.000Z"
+  },
+  "streamingProgress": null
+}
