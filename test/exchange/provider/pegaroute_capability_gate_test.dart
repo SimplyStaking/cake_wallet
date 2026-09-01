@@ -1,6 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:cake_wallet/exchange/provider/pegaroute/pegaroute_api.dart';
 import 'package:cake_wallet/exchange/provider/pegaroute/pegaroute_capability_gate.dart';
+import 'package:flutter_test/flutter_test.dart';
 
 void main() {
   test('Phase 1 has no execution capability', () {
@@ -15,7 +16,7 @@ void main() {
           mode: 'deposit-transfer',
           chain: 'XMR',
           to: 'destination',
-          amount: const PegarouteTokenAmount(display: '1', baseUnits: '1'),
+          amount: PegarouteTokenAmount(display: '1', baseUnits: '1'),
         )),
         isFalse);
   });

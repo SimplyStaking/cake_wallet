@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -49,6 +50,7 @@ void main() {
     expect(status.refund!.status, 'completed');
     expect(status.refund!.txHash, 'refund-hash-fixture');
     expect(status.output.txHash, 'output-hash-fixture');
+    expect(status.affiliateFeeBreakdown!.pegasusNetUsd, '0.01');
   });
 
   test('preserves structured error codes and retry metadata', () {
@@ -103,9 +105,8 @@ void main() {
       amount: '1',
       destinationAddress: 'destination',
       senderAddress: 'sender',
-      privateMode: true,
     );
-    expect(request.toJson()['private'], isTrue);
+    expect(request.toJson().containsKey('private'), isFalse);
   });
 
   test('omits a refund address equivalent to the normalized sender', () {
@@ -129,7 +130,7 @@ void main() {
         return very_insecure_http_do_not_use.Response(_fixture('quote.json'), 200);
       },
     );
-    final result = await client.quote(const PegarouteQuoteRequest(
+    final result = await client.quote(PegarouteQuoteRequest(
       fromChain: 'ETH',
       fromToken: 'ETH',
       toChain: 'BTC',
@@ -204,15 +205,76 @@ void main() {
     expect(provider.isEnabled, isFalse);
     expect(provider.supportsMemoOrDestinationTag, isFalse);
     expect(
-      await provider.fetchRate(
+      () => provider.fetchRate(
         from: CryptoCurrency.eth,
         to: CryptoCurrency.btc,
         amount: 1,
         isFixedRateMode: false,
         isReceiveAmount: false,
       ),
-      0,
+      throwsA(isA<PegarouteUnavailableException>()),
     );
     expect(calls, 0);
+  });
+
+  test('accepts empty warning providers but keeps warning fields typed', () {
+    final warning = PegarouteWarning.fromJson({
+      'provider': '',
+      'code': 'NO_PROVIDER',
+      'message': 'none',
+      'userMessage': 'No provider available',
+    });
+    expect(warning.provider, isEmpty);
+    expect(
+      () => PegarouteWarning.fromJson({
+        'provider': 1,
+        'code': 'NO_PROVIDER',
+        'message': 'none',
+        'userMessage': 'No provider available',
+      }),
+      throwsA(isA<PegarouteCodecException>()),
+    );
+  });
+
+  test('retains strict provider changed replacement terms', () {
+    final quote = json.decode(_fixture('quote.json')) as Map<String, dynamic>;
+    final error = PegarouteApiError.fromJson(409, {
+      'error': {
+        'code': 'PROVIDER_CHANGED',
+        'message': 'changed',
+        'userMessage': 'Review terms',
+        'retryable': false,
+      },
+      'newQuote': quote,
+      'originalProvider': 'instaswap',
+      'newProvider': 'thorchain',
+    });
+    expect(error.requiresReview, isTrue);
+    expect(error.newQuote!.quoteId, 'quote-fixture');
+    expect(error.originalProvider, 'instaswap');
+    expect(error.newProvider, 'thorchain');
+  });
+
+  test('rejects non-positive request amounts and empty token queries', () {
+    expect(
+      () => PegarouteQuoteRequest(
+        fromChain: 'ETH',
+        fromToken: 'ETH',
+        toChain: 'BTC',
+        toToken: 'BTC',
+        amount: '0',
+      ),
+      throwsA(isA<PegarouteCodecException>()),
+    );
+    expect(
+      () => PegarouteQuoteRequest(
+        fromChain: 'ETH',
+        fromToken: 'ETH',
+        toChain: 'BTC',
+        toToken: 'BTC',
+        amount: '1',
+      ).toQuery(),
+      returnsNormally,
+    );
   });
 }
