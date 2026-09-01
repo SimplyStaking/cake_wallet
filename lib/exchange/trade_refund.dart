@@ -53,6 +53,23 @@ class TradeRefund {
   factory TradeRefund.fromJson(Object? value) {
     if (value is! Map) throw const FormatException('refund must be an object');
     final map = Map<String, dynamic>.from(value);
+    const keys = {
+      'version',
+      'configuredAddress',
+      'status',
+      'txHash',
+      'chain',
+      'amount',
+      'originalAmount',
+      'feeDeducted',
+      'feeDescription',
+      'observedAddress',
+      'completedAt',
+      'terminalWithoutEvidence',
+    };
+    if (map.keys.any((key) => !keys.contains(key))) {
+      throw const FormatException('refund contains unknown fields');
+    }
     if (map['version'] is! int || map['version'] != 1) {
       throw const FormatException('unsupported refund version');
     }

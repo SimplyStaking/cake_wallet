@@ -1,7 +1,5 @@
 import 'dart:convert';
 
-import 'dart:convert';
-
 class TradeExecution {
   factory TradeExecution({
     required String family,
@@ -56,6 +54,23 @@ class TradeExecution {
   factory TradeExecution.fromJson(Object? value) {
     if (value is! Map) throw const FormatException('execution must be an object');
     final map = Map<String, dynamic>.from(value);
+    const keys = {
+      'version',
+      'family',
+      'mode',
+      'sourceChain',
+      'sourceToken',
+      'nativeToken',
+      'destinationChain',
+      'destinationToken',
+      'routeProvider',
+      'subprovider',
+      'privateIntent',
+      'payload',
+    };
+    if (map.keys.any((key) => !keys.contains(key))) {
+      throw const FormatException('execution contains unknown fields');
+    }
     final version = map['version'];
     if (version is! int || version != 1) {
       throw const FormatException('unsupported execution version');

@@ -33,6 +33,11 @@ void main() {
     );
   });
 
+  test('rejects unknown current-version envelope fields', () {
+    final value = TradeRefund(terminalWithoutEvidence: true).toJson()..['futureField'] = true;
+    expect(() => TradeRefund.fromJson(value), throwsFormatException);
+  });
+
   test('rejects partial and contradictory refund states', () {
     expect(
       () => TradeRefund(status: 'pending', chain: 'ETH'),

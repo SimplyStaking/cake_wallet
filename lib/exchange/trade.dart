@@ -189,7 +189,12 @@ class Trade {
     if (updated.outputTransaction != null) {
       outputTransaction = updated.outputTransaction;
     }
-    if (updated.refundAddress != null) refundAddress = updated.refundAddress;
+    if (senderAddress == null && updated.senderAddress != null) {
+      senderAddress = updated.senderAddress;
+    }
+    if (refundAddress == null && updated.refundAddress != null) {
+      refundAddress = updated.refundAddress;
+    }
     if (updated.payoutAddress != null) payoutAddress = updated.payoutAddress;
     if (updated.password != null) password = updated.password;
     if (updated.providerId != null) providerId = updated.providerId;

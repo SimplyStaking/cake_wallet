@@ -69,6 +69,57 @@ void main() {
       ),
       returnsNormally,
     );
+    final payment = {
+      'to': 'destination',
+      'amount': {'display': '1', 'baseUnits': '1'},
+      'memo': null,
+    };
+    for (final family in const ['solana', 'sui', 'xrp', 'tron', 'near', 'hypercore', 'cardano']) {
+      expect(
+        () => _execution(family: family, mode: 'deposit-transfer', payload: {...payment}),
+        returnsNormally,
+      );
+    }
+    expect(
+      () => _execution(
+        family: 'utxo',
+        mode: 'payment-with-memo',
+        payload: {...payment, 'gasRate': null},
+      ),
+      returnsNormally,
+    );
+    expect(
+      () => _execution(
+        family: 'cosmos',
+        mode: 'bank-send',
+        payload: {...payment},
+      ),
+      returnsNormally,
+    );
+    expect(
+      () => _execution(
+        family: 'cosmos',
+        mode: 'msg-deposit',
+        payload: {...payment, 'asset': 'THOR.RUNE', 'assetDecimals': 8},
+      ),
+      returnsNormally,
+    );
+    expect(
+      () => _execution(
+        family: 'sui',
+        mode: 'serialized-tx',
+        payload: {'serializedTransaction': 'base64-tx', 'minOut': null},
+      ),
+      returnsNormally,
+    );
+    expect(
+      () => _execution(
+        family: 'other',
+        mode: 'deposit-transfer',
+        payload: {...payment, 'chain': 'XMR'},
+      ),
+      returnsNormally,
+    );
   });
 
   test('rejects incomplete, contradictory, and unknown payload fields', () {
@@ -101,6 +152,11 @@ void main() {
       () => TradeExecution.fromJson({...value, 'version': 2}),
       throwsFormatException,
     );
+  });
+
+  test('rejects unknown current-version envelope fields', () {
+    final value = _execution().toJson()..['futureField'] = true;
+    expect(() => TradeExecution.fromJson(value), throwsFormatException);
   });
 
   test('keeps malformed persisted data outside the dispatch model', () {

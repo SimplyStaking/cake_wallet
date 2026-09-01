@@ -21,7 +21,8 @@ void main() {
       payload: const {
         'chain': 'XMR',
         'to': 'destination',
-        'amount': {'display': '1', 'baseUnits': '1'}
+        'amount': {'display': '1', 'baseUnits': '1'},
+        'memo': null,
       },
     );
     final refund = TradeRefund(configuredAddress: 'configured');
@@ -69,6 +70,35 @@ void main() {
     final trade = Trade(id: 'trade', amount: '1');
     trade.mergeFindTradeByIdResult(Trade(id: 'trade', amount: '1', executionJson: 'observed'));
     expect(trade.executionJson, isNull);
+  });
+
+  test('fills a missing sender once but never replaces persisted sender intent', () {
+    final missing = Trade(id: 'missing', amount: '1');
+    missing.mergeFindTradeByIdResult(Trade(id: 'missing', amount: '1', senderAddress: 'observed'));
+    expect(missing.senderAddress, 'observed');
+
+    final persisted = Trade(id: 'persisted', amount: '1', senderAddress: 'configured');
+    persisted.mergeFindTradeByIdResult(
+      Trade(id: 'persisted', amount: '1', senderAddress: 'different'),
+    );
+    expect(persisted.senderAddress, 'configured');
+  });
+
+  test('preserves unknown current-version envelopes during status merge', () {
+    const unknownExecution = '{"version":1,"future":true}';
+    const unknownRefund = '{"version":1,"future":true}';
+    final trade =
+        Trade(id: 'trade', amount: '1', executionJson: unknownExecution, refundJson: unknownRefund);
+    trade.mergeFindTradeByIdResult(
+      Trade(
+        id: 'trade',
+        amount: '1',
+        executionJson: '{"version":1,"future":false}',
+        refundJson: '{"version":1,"future":false}',
+      ),
+    );
+    expect(trade.executionJson, unknownExecution);
+    expect(trade.refundJson, unknownRefund);
   });
 
   test('does not regress completed refund evidence', () {
