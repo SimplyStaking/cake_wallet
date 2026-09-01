@@ -278,7 +278,11 @@ class PegarouteSwapRequest extends PegarouteQuoteRequest {
     String? integrationId,
     double? slippageTolerance,
     bool? streaming,
-  })  : super._(
+  })  : quoteId = _optionalRequestId(quoteId, 'quoteId'),
+        routeProvider = _optionalRequestId(routeProvider, 'routeProvider'),
+        slippageTolerance = slippageTolerance,
+        streaming = streaming,
+        super._(
           fromChain: fromChain,
           fromToken: fromToken,
           toChain: toChain,
@@ -288,11 +292,7 @@ class PegarouteSwapRequest extends PegarouteQuoteRequest {
           senderAddress: senderAddress,
           refundAddress: refundAddress,
           integrationId: integrationId,
-        ),
-        quoteId = _optionalRequestId(quoteId, 'quoteId'),
-        routeProvider = _optionalRequestId(routeProvider, 'routeProvider'),
-        slippageTolerance = slippageTolerance,
-        streaming = streaming {
+        ) {
     if (destinationAddress.trim().isEmpty || senderAddress.trim().isEmpty) {
       throw const PegarouteCodecException('destination and sender are required for swap');
     }
