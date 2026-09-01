@@ -56,6 +56,9 @@ class TradeRefund {
     if (map['version'] is! int || map['version'] != 1) {
       throw const FormatException('unsupported refund version');
     }
+    if (map['terminalWithoutEvidence'] != null && map['terminalWithoutEvidence'] is! bool) {
+      throw const FormatException('terminal refund flag must be boolean');
+    }
     return TradeRefund(
       configuredAddress: _string(map['configuredAddress']),
       status: _string(map['status']),
@@ -160,6 +163,12 @@ class TradeRefund {
     final currentRank = _rank(this);
     final updateRank = _rank(update);
     final preferred = updateRank > currentRank ? update : this;
+    if (preferred.terminalWithoutEvidence) {
+      return TradeRefund(
+        configuredAddress: update.configuredAddress ?? configuredAddress,
+        terminalWithoutEvidence: true,
+      );
+    }
     final keepCurrent = updateRank < currentRank;
     return TradeRefund(
       configuredAddress: update.configuredAddress ?? configuredAddress,

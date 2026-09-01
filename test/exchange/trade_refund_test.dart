@@ -27,6 +27,10 @@ void main() {
 
   test('rejects unknown refund version', () {
     expect(() => TradeRefund.fromJson({'version': 2}), throwsFormatException);
+    expect(
+      () => TradeRefund.fromJson({'version': 1, 'terminalWithoutEvidence': 'true'}),
+      throwsFormatException,
+    );
   });
 
   test('rejects partial and contradictory refund states', () {
@@ -54,5 +58,22 @@ void main() {
       ),
       throwsFormatException,
     );
+  });
+
+  test('terminal refund without evidence discards stale evidence', () {
+    final pending = TradeRefund(
+      status: 'pending',
+      chain: 'ETH',
+      amount: '1',
+      originalAmount: '1',
+      feeDeducted: '0',
+      feeDescription: 'none',
+      observedAddress: 'configured',
+    );
+    final terminal = TradeRefund(terminalWithoutEvidence: true);
+    final merged = pending.merge(terminal);
+    expect(merged.terminalWithoutEvidence, isTrue);
+    expect(merged.status, isNull);
+    expect(merged.observedAddress, isNull);
   });
 }

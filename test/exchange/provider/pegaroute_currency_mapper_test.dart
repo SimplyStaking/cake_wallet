@@ -19,25 +19,25 @@ void main() {
     final token = Erc20Token(
       name: 'Fixture',
       symbol: 'FIX',
-      contractAddress: '0xAbC',
+      contractAddress: '0x00000000000000000000000000000000000000Ab',
       decimal: 6,
       tag: 'ETH',
     );
     final asset = mapper.map(token);
     expect(asset.chain, 'ETH');
-    expect(asset.token, 'FIX-0xabc');
+    expect(asset.token, 'FIX-0x00000000000000000000000000000000000000ab');
   });
 
   test('does not mistake a token ticker for a native asset', () {
     final token = Erc20Token(
       name: 'Wrapped fixture',
       symbol: 'ETH',
-      contractAddress: '0xAbC',
+      contractAddress: '0x00000000000000000000000000000000000000Ab',
       decimal: 18,
       tag: 'ETH',
     );
     final asset = mapper.map(token);
-    expect(asset.token, 'ETH-0xabc');
+    expect(asset.token, 'ETH-0x00000000000000000000000000000000000000ab');
   });
 
   test('rejects missing or conflicting token identity', () {
@@ -55,10 +55,20 @@ void main() {
       () => mapper.map(Erc20Token(
         name: 'Fixture',
         symbol: 'FIX',
-        contractAddress: '0xabc',
+        contractAddress: '0x00000000000000000000000000000000000000ab',
         decimal: 6,
         tag: 'ETH',
         chainId: 137,
+      )),
+      throwsA(isA<PegarouteCurrencyException>()),
+    );
+    expect(
+      () => mapper.map(Erc20Token(
+        name: 'Fixture',
+        symbol: 'FIX',
+        contractAddress: '0xabc',
+        decimal: 6,
+        tag: 'ETH',
       )),
       throwsA(isA<PegarouteCurrencyException>()),
     );

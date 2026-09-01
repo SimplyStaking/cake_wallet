@@ -112,7 +112,9 @@ class PegarouteCurrencyMapper {
   }
 
   PegarouteAssetId _evmToken(String symbol, String contract, String? tag, int? chainId) {
-    if (contract.isEmpty) throw const PegarouteCurrencyException('missing EVM contract');
+    if (!RegExp(r'^0x[0-9a-fA-F]{40}$').hasMatch(contract)) {
+      throw const PegarouteCurrencyException('invalid EVM contract');
+    }
     final chain = _chainFromTagOrId(tag, chainId);
     return PegarouteAssetId(
       chain: chain,

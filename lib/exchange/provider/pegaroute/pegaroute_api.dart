@@ -296,8 +296,8 @@ class PegarouteSwapRequest extends PegarouteQuoteRequest {
     if (destinationAddress.trim().isEmpty || senderAddress.trim().isEmpty) {
       throw const PegarouteCodecException('destination and sender are required for swap');
     }
-    if (slippageTolerance != null &&
-        (!slippageTolerance!.isFinite || slippageTolerance! < 0 || slippageTolerance! > 1)) {
+    final slippage = slippageTolerance;
+    if (slippage != null && (!slippage.isFinite || slippage < 0 || slippage > 1)) {
       throw const PegarouteCodecException('slippageTolerance must be between 0 and 1');
     }
   }
