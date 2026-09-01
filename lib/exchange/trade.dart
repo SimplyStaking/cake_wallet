@@ -192,7 +192,7 @@ class Trade {
     if (senderAddress == null && updated.senderAddress != null) {
       senderAddress = updated.senderAddress;
     }
-    if (refundAddress == null && updated.refundAddress != null) {
+    if (refundAddress == null && refundJson?.isNotEmpty != true && updated.refundAddress != null) {
       refundAddress = updated.refundAddress;
     }
     if (updated.payoutAddress != null) payoutAddress = updated.payoutAddress;
