@@ -86,6 +86,22 @@ class TradeRefund {
 
   void validate() {
     if (version != 1) throw const FormatException('unsupported refund version');
+    for (final value in [
+      configuredAddress,
+      status,
+      txHash,
+      chain,
+      amount,
+      originalAmount,
+      feeDeducted,
+      feeDescription,
+      observedAddress,
+      completedAt,
+    ]) {
+      if (value != null && value.isEmpty) {
+        throw const FormatException('refund values must not be blank');
+      }
+    }
     final evidence = [
       chain,
       amount,

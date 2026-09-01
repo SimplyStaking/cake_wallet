@@ -261,7 +261,8 @@ class SwapTransactionDetails extends StatelessWidget {
                 ),
                 Padding(
                   padding: const EdgeInsets.only(bottom: 8.0),
-                  child: exchangeViewModel.isSendFromExternal
+                  child: exchangeViewModel.isSendFromExternal &&
+                          TradeExternalFundingPolicy.canUse(exchangeTradeViewModel.trade)
                       ? NewPrimaryButton(
                           onPressed: () => _showExternalSendModal(context),
                           text: S.of(context).continue_text,

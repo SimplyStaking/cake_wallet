@@ -148,17 +148,17 @@ class PegarouteExchangeProvider extends ExchangeProvider {
     final contract = token.substring(separator + 1);
     if (symbol.isEmpty || contract.isEmpty || chain == null || chain.isEmpty) return null;
 
-    final normalizedContract = contract.toLowerCase();
     switch (chain.toUpperCase()) {
       case 'SOL':
         final tokens = TokenUtilities.loadDefaultSolTokensForSwap();
-        return _firstSolanaToken(tokens, normalizedContract) ??
-            _firstSolanaToken(await TokenUtilities.loadSolTokensForSwap(), normalizedContract);
+        return _firstSolanaToken(tokens, contract) ??
+            _firstSolanaToken(await TokenUtilities.loadSolTokensForSwap(), contract);
       case 'TRON':
         final tokens = TokenUtilities.loadDefaultTronTokensForSwap();
-        return _firstTronToken(tokens, normalizedContract) ??
-            _firstTronToken(await TokenUtilities.loadTronTokensForSwap(), normalizedContract);
+        return _firstTronToken(tokens, contract) ??
+            _firstTronToken(await TokenUtilities.loadTronTokensForSwap(), contract);
       default:
+        final normalizedContract = contract.toLowerCase();
         final tokens = TokenUtilities.loadDefaultEvmTokensForSwap();
         return _firstEvmToken(tokens, chain, normalizedContract) ??
             _firstEvmToken(await TokenUtilities.loadEvmTokensForSwap(), chain, normalizedContract);
