@@ -63,7 +63,7 @@ Future<void> _initDb({String? pathOverride}) async {
     }
   }
   await db?.close();
-  db = await openDatabase(dbFile.path, version: 10,
+  db = await openDatabase(dbFile.path, version: 11,
       onUpgrade: (Database db, int oldVersion, int newVersion) async {
     printV("migrating: $oldVersion, $newVersion");
     if (oldVersion <= 1) {
@@ -151,6 +151,11 @@ CREATE TABLE IF NOT EXISTS BalanceCardStyleSettings (
       await _createErc20TokenTable(db);
       await _createSplTokenTable(db);
       await _createTronTokenTable(db);
+    }
+    if (oldVersion <= 10) {
+      await _addColumnIfNotExists(db, table: 'Trade', column: 'senderAddress', definition: 'TEXT');
+      await _addColumnIfNotExists(db, table: 'Trade', column: 'executionJson', definition: 'TEXT');
+      await _addColumnIfNotExists(db, table: 'Trade', column: 'refundJson', definition: 'TEXT');
     }
   }, onCreate: (Database db, int version) async {
     await db.execute('''
@@ -286,6 +291,7 @@ CREATE TABLE IF NOT EXISTS Trade (
   extraId TEXT,
   outputTransaction TEXT,
   refundAddress TEXT,
+  senderAddress TEXT,
   walletId TEXT,
   payoutAddress TEXT,
   toAddressExtraId TEXT,
@@ -307,7 +313,9 @@ CREATE TABLE IF NOT EXISTS Trade (
   sourceTokenAmountRaw TEXT,
   requiresTokenApproval INTEGER DEFAULT 0,
   chainId INTEGER,
-  fee REAL
+  fee REAL,
+  executionJson TEXT,
+  refundJson TEXT
 );
 ''');
   await db.execute('''

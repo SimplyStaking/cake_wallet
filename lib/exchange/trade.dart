@@ -25,6 +25,7 @@ class Trade {
     this.extraId,
     this.outputTransaction,
     this.refundAddress,
+    this.senderAddress,
     this.walletId,
     this.payoutAddress,
     this.toAddressExtraId,
@@ -48,6 +49,8 @@ class Trade {
     this.sourceTokenAmountRaw,
     this.requiresTokenApproval,
     this.chainId,
+    this.executionJson,
+    this.refundJson,
   }) {
     if (provider != null) providerRaw = provider.raw;
     if (state != null) stateRaw = state.raw;
@@ -85,6 +88,7 @@ class Trade {
   String? extraId;
   String? outputTransaction;
   String? refundAddress;
+  String? senderAddress;
   String? walletId;
   String? payoutAddress;
 
@@ -112,6 +116,8 @@ class Trade {
 
   int? chainId;
   double? fee;
+  String? executionJson;
+  String? refundJson;
 
   String get chainName {
     if (chainId == null) return '';
@@ -189,6 +195,8 @@ class Trade {
     if (updated.providerName != null) providerName = updated.providerName;
     if (updated.memo != null) memo = updated.memo;
     if (updated.txId != null) txId = updated.txId;
+    if (updated.executionJson != null) executionJson = updated.executionJson;
+    if (updated.refundJson != null) refundJson = updated.refundJson;
   }
 
   Map<String, dynamic> toSqliteMap() {
@@ -223,6 +231,7 @@ class Trade {
       'extraId': extraId,
       'outputTransaction': outputTransaction,
       'refundAddress': refundAddress,
+      'senderAddress': senderAddress,
       'walletId': walletId,
       'payoutAddress': payoutAddress,
       'toAddressExtraId': toAddressExtraId,
@@ -245,6 +254,8 @@ class Trade {
       'requiresTokenApproval': requiresTokenApproval == true ? 1 : 0,
       'chainId': chainId,
       'fee': fee,
+      'executionJson': executionJson,
+      'refundJson': refundJson,
     };
   }
 
@@ -267,6 +278,7 @@ class Trade {
       extraId: row['extraId'] as String?,
       outputTransaction: row['outputTransaction'] as String?,
       refundAddress: row['refundAddress'] as String?,
+      senderAddress: row['senderAddress'] as String?,
       walletId: row['walletId'] as String?,
       payoutAddress: row['payoutAddress'] as String?,
       toAddressExtraId: row['toAddressExtraId'] as String?,
@@ -291,6 +303,8 @@ class Trade {
       sourceTokenAmountRaw: row['sourceTokenAmountRaw'] as String?,
       requiresTokenApproval: (row['requiresTokenApproval'] as int?) == 1,
       chainId: row['chainId'] as int?,
+      executionJson: row['executionJson'] as String?,
+      refundJson: row['refundJson'] as String?,
     );
     trade.internalId = row[selfIdColumn] as int? ?? 0;
     trade.providerRaw = row['providerRaw'] as int? ?? 0;
