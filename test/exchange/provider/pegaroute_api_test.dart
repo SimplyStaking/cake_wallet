@@ -176,6 +176,43 @@ void main() {
     expect(() => PegarouteSwapResponse.fromJson(value), throwsA(isA<PegarouteCodecException>()));
   });
 
+  test('requires calldata for contract-call execution', () {
+    final value = json.decode(_fixture('swap.json')) as Map<String, dynamic>;
+    final execution = value['execution'] as Map<String, dynamic>;
+    execution['data'] = null;
+    expect(() => PegarouteSwapResponse.fromJson(value), throwsA(isA<PegarouteCodecException>()));
+  });
+
+  test('requires exact success status for GET and preserves status polling boundaries', () async {
+    final client = PegarouteApiClient(
+      configuration: const PegarouteConfiguration(baseUrl: 'https://example.test', apiKey: 'test'),
+      get: (uri, headers) async =>
+          very_insecure_http_do_not_use.Response(_fixture('quote.json'), 201),
+    );
+    await expectLater(
+      client.quote(PegarouteQuoteRequest(
+        fromChain: 'ETH',
+        fromToken: 'ETH',
+        toChain: 'BTC',
+        toToken: 'BTC',
+        amount: '1',
+      )),
+      throwsA(isA<PegarouteCodecException>()),
+    );
+
+    final statusClient = PegarouteApiClient(
+      configuration: const PegarouteConfiguration(baseUrl: 'https://example.test', apiKey: 'test'),
+      get: (uri, headers) async =>
+          very_insecure_http_do_not_use.Response(_fixture('status_refund.json'), 200),
+    );
+    final trade = await PegarouteExchangeProvider(apiClient: statusClient).findTradeById(
+      id: 'transaction-fixture',
+    );
+    expect(trade.executionJson, isNull);
+    expect(trade.senderAddress, '0x0000000000000000000000000000000000000002');
+    expect(trade.inputAddress, isNull);
+  });
+
   test('rejects invalid refund lifecycle values', () {
     expect(
       () => PegarouteRefund.fromJson({
@@ -204,8 +241,8 @@ void main() {
     expect(provider.isAvailable, isFalse);
     expect(provider.isEnabled, isFalse);
     expect(provider.supportsMemoOrDestinationTag, isFalse);
-    expect(
-      () => provider.fetchRate(
+    await expectLater(
+      provider.fetchRate(
         from: CryptoCurrency.eth,
         to: CryptoCurrency.btc,
         amount: 1,
@@ -255,7 +292,7 @@ void main() {
     expect(error.newProvider, 'thorchain');
   });
 
-  test('rejects non-positive request amounts and empty token queries', () {
+  test('rejects non-positive request amounts and empty token queries', () async {
     expect(
       () => PegarouteQuoteRequest(
         fromChain: 'ETH',
@@ -275,6 +312,13 @@ void main() {
         amount: '1',
       ).toQuery(),
       returnsNormally,
+    );
+    await expectLater(
+      PegarouteApiClient(
+        configuration:
+            const PegarouteConfiguration(baseUrl: 'https://example.test', apiKey: 'test'),
+      ).tokens(' '),
+      throwsA(isA<PegarouteCodecException>()),
     );
   });
 }
