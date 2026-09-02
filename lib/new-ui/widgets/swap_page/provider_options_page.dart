@@ -73,7 +73,9 @@ class ProviderOptionsPage extends StatelessWidget {
                           children: [
                             GestureDetector(
                               onTap: () {
-                                for (final provider in decentralizedProviders) {
+                                for (final provider in decentralizedProviders.where(
+                                  (provider) => provider.isAvailable,
+                                )) {
                                   _switchProviderStatus(provider, true, context);
                                 }
                               },
@@ -134,7 +136,9 @@ class ProviderOptionsPage extends StatelessWidget {
                           children: [
                             GestureDetector(
                               onTap: () {
-                                for (final provider in centralizedProviders) {
+                                for (final provider in centralizedProviders.where(
+                                  (provider) => provider.isAvailable,
+                                )) {
                                   _switchProviderStatus(provider, true, context);
                                 }
                               },
@@ -216,7 +220,7 @@ class ProviderOptionsPage extends StatelessWidget {
   }
 
   void _switchProviderStatus(ExchangeProvider provider, bool status, BuildContext context) {
-    if (!provider.isAvailable) {
+    if (!provider.isAvailable && status) {
       showPopUp<void>(
           builder: (BuildContext popUpContext) => AlertWithOneAction(
               alertTitle: 'Error',

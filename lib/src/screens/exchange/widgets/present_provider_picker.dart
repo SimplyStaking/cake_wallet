@@ -79,7 +79,7 @@ class PresentProviderPicker extends StatelessWidget {
               (e) => CheckBoxItem(
                 e.title,
                 exchangeViewModel.selectedProviders.contains(e),
-                isDisabled: !exchangeViewModel.providerList.contains(e),
+                isDisabled: !e.isAvailable,
               ),
             )
             .toList(),
