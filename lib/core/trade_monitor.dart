@@ -186,7 +186,9 @@ class TradeMonitor {
     }
 
     try {
-      final updated = await provider.findTradeById(id: trade.id);
+      final updated = provider is PegarouteExchangeProvider
+          ? await provider.findTradeForContext(trade: trade)
+          : await provider.findTradeById(id: trade.id);
       trade.mergeFindTradeByIdResult(updated);
       printV('Trade ${trade.id} updated: ${trade.state}');
       await trade.save();

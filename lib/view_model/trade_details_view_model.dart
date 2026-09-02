@@ -147,7 +147,9 @@ abstract class TradeDetailsViewModelBase with Store {
   @action
   Future<void> _updateTrade() async {
     try {
-      final updatedTrade = await _provider!.findTradeById(id: trade.id);
+      final updatedTrade = _provider is PegarouteExchangeProvider
+          ? await (_provider as PegarouteExchangeProvider).findTradeForContext(trade: trade)
+          : await _provider!.findTradeById(id: trade.id);
 
       trade.mergeFindTradeByIdResult(updatedTrade);
       await trade.save();

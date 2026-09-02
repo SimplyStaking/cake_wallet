@@ -5,6 +5,7 @@ import 'package:cake_wallet/exchange/provider/pegaroute/pegaroute_api.dart';
 import 'package:cake_wallet/exchange/provider/pegaroute/pegaroute_capability_gate.dart';
 import 'package:cake_wallet/exchange/provider/pegaroute/pegaroute_configuration.dart';
 import 'package:cake_wallet/exchange/provider/pegaroute/pegaroute_currency_mapper.dart';
+import 'package:cake_wallet/exchange/provider/pegaroute/pegaroute_execution_binding.dart';
 import 'package:cake_wallet/exchange/trade.dart';
 import 'package:cake_wallet/exchange/trade_not_found_exception.dart';
 import 'package:cake_wallet/exchange/trade_refund.dart';
@@ -27,6 +28,8 @@ class PegarouteExchangeProvider extends ExchangeProvider {
   final PegarouteApiClient _apiClient;
   final PegarouteCapabilityGate _capabilityGate;
   final PegarouteCurrencyMapper _currencyMapper = const PegarouteCurrencyMapper();
+  final PegarouteExecutionBindingValidator _bindingValidator =
+      const PegarouteExecutionBindingValidator();
 
   @override
   String get title => 'Pegaroute';
@@ -84,11 +87,14 @@ class PegarouteExchangeProvider extends ExchangeProvider {
 
   @override
   Future<Trade> findTradeById({required String id}) async {
+    throw const PegarouteBindingException('Pegaroute status requires a bound trade context');
+  }
+
+  Future<Trade> findTradeForContext({required Trade trade}) async {
+    final validated = _bindingValidator.validatePersisted(trade: trade);
     try {
-      final response = await _apiClient.status(id);
-      if (response.transactionId != id.trim()) {
-        throw const PegarouteCodecException('status transactionId does not match requested id');
-      }
+      final response = await _apiClient.status(trade.id);
+      _bindingValidator.validateStatusResponse(validated: validated, response: response);
       final input = response.input;
       final output = response.output;
       final configuredRefund = input.refundAddress;
@@ -110,7 +116,7 @@ class PegarouteExchangeProvider extends ExchangeProvider {
                   terminalWithoutEvidence: response.internalStatus == 'refunded' && refund == null,
                 );
       return Trade(
-        id: id,
+        id: trade.id,
         from: await _parseCurrency(input.chain, input.token),
         to: await _parseCurrency(output.chain, output.token),
         provider: description,
@@ -126,7 +132,7 @@ class PegarouteExchangeProvider extends ExchangeProvider {
         refundJson: refundRecord?.encode(),
       );
     } on PegarouteApiError catch (error) {
-      if (error.httpStatus == 404) throw TradeNotFoundException(id, provider: description);
+      if (error.httpStatus == 404) throw TradeNotFoundException(trade.id, provider: description);
       rethrow;
     }
   }

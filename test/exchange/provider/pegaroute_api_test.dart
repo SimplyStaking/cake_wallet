@@ -4,14 +4,93 @@ import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:cake_wallet/exchange/provider/pegaroute/pegaroute_api.dart';
 import 'package:cake_wallet/exchange/provider/pegaroute/pegaroute_configuration.dart';
+import 'package:cake_wallet/exchange/provider/pegaroute/pegaroute_execution_binding.dart';
 import 'package:cake_wallet/exchange/provider/pegaroute_exchange_provider.dart';
+import 'package:cake_wallet/exchange/exchange_provider_description.dart';
+import 'package:cake_wallet/exchange/trade.dart';
 import 'package:cake_wallet/exchange/trade_execution.dart';
 import 'package:cw_core/crypto_currency.dart';
 import 'package:http/http.dart' as very_insecure_http_do_not_use;
 
 String _fixture(String name) => File('test/exchange/fixtures/pegaroute/$name').readAsStringSync();
 
+TradeExecutionBinding _binding() => TradeExecutionBinding(
+      tradeId: 'trade-fixture',
+      providerRaw: 17,
+      quoteId: 'quote-fixture',
+      quoteExpiresAt: DateTime.utc(2099),
+      routeExpiry: null,
+      sourceAmount: '1',
+      sourceAmountBaseUnits: '1',
+      sourceDecimals: 0,
+      senderAddress: 'sender',
+      refundAddress: null,
+      destinationAddress: 'destination',
+      isSendAll: false,
+      walletId: 'wallet-fixture',
+      walletChainId: null,
+      walletAddress: null,
+      providerReferenceId: null,
+    );
+
 Map<String, dynamic> _amount() => {'display': '1', 'baseUnits': '1'};
+
+Trade _boundStatusTrade() {
+  final execution = TradeExecution(
+    family: 'evm',
+    mode: 'native-transfer',
+    sourceChain: 'ETH',
+    sourceToken: 'ETH',
+    nativeToken: 'ETH',
+    destinationChain: 'BTC',
+    destinationToken: 'BTC',
+    routeProvider: 'instaswap',
+    binding: TradeExecutionBinding(
+      tradeId: 'transaction-fixture',
+      providerRaw: 17,
+      quoteId: 'quote-fixture',
+      quoteExpiresAt: DateTime.utc(2099),
+      routeExpiry: null,
+      sourceAmount: '1',
+      sourceAmountBaseUnits: '1000000000000000000',
+      sourceDecimals: 18,
+      senderAddress: '0x0000000000000000000000000000000000000002',
+      refundAddress: '0x0000000000000000000000000000000000000003',
+      destinationAddress: 'bc1qfixture',
+      isSendAll: false,
+      walletId: 'wallet-fixture',
+      walletChainId: 1,
+      walletAddress: '0x0000000000000000000000000000000000000002',
+      providerReferenceId: null,
+    ),
+    payload: {
+      'chainId': 1,
+      'to': '0x0000000000000000000000000000000000000001',
+      'data': null,
+      'value': {'display': '1', 'baseUnits': '1000000000000000000'},
+      'gasLimit': null,
+      'memo': null,
+      'approval': null,
+      'transferAmount': null,
+    },
+  );
+  return Trade(
+    id: execution.binding.tradeId,
+    amount: execution.binding.sourceAmount,
+    from: CryptoCurrency.eth,
+    to: CryptoCurrency.btc,
+    provider: ExchangeProviderDescription.pegaroute,
+    senderAddress: execution.binding.senderAddress,
+    refundAddress: execution.binding.refundAddress,
+    payoutAddress: execution.binding.destinationAddress,
+    walletId: execution.binding.walletId,
+    fromWalletAddress: execution.binding.walletAddress,
+    chainId: execution.binding.walletChainId,
+    providerName: execution.routeProvider,
+    providerId: execution.binding.providerReferenceId,
+    executionJson: execution.encode(),
+  );
+}
 
 List<Map<String, dynamic>> _executionVariants() => [
       {
@@ -162,6 +241,7 @@ void main() {
           nativeToken: 'ETH',
           destinationChain: 'BTC',
           destinationToken: 'BTC',
+          binding: _binding(),
           payload: _tradePayload(execution),
         ),
         returnsNormally,
@@ -379,13 +459,12 @@ void main() {
       get: (uri, headers) async =>
           very_insecure_http_do_not_use.Response(_fixture('status_refund.json'), 200),
     );
-    final trade = await PegarouteExchangeProvider(apiClient: statusClient).findTradeById(
-      id: 'transaction-fixture',
+    await expectLater(
+      PegarouteExchangeProvider(apiClient: statusClient).findTradeById(
+        id: 'transaction-fixture',
+      ),
+      throwsA(isA<PegarouteBindingException>()),
     );
-    expect(trade.executionJson, isNull);
-    expect(trade.senderAddress, '0x0000000000000000000000000000000000000002');
-    expect(trade.inputAddress, isNull);
-    expect(trade.providerName, 'instaswap');
   });
 
   test('rejects invalid refund lifecycle values', () {
@@ -556,7 +635,7 @@ void main() {
     );
   });
 
-  test('rejects blank and mismatched status IDs before returning trade data', () async {
+  test('rejects blank and ID-only status before transport', () async {
     final calls = <String>[];
     final client = PegarouteApiClient(
       configuration: const PegarouteConfiguration(baseUrl: 'https://example.test', apiKey: 'test'),
@@ -571,8 +650,9 @@ void main() {
     final provider = PegarouteExchangeProvider(apiClient: client);
     await expectLater(
       provider.findTradeById(id: 'different-id'),
-      throwsA(isA<PegarouteCodecException>()),
+      throwsA(isA<PegarouteBindingException>()),
     );
+    expect(calls, isEmpty);
   });
 
   test('falls back to the status input provider reference ID', () async {
@@ -582,9 +662,47 @@ void main() {
       configuration: const PegarouteConfiguration(baseUrl: 'https://example.test', apiKey: 'test'),
       get: (uri, headers) async => very_insecure_http_do_not_use.Response(json.encode(value), 200),
     );
-    final trade = await PegarouteExchangeProvider(apiClient: client).findTradeById(
-      id: 'transaction-fixture',
+    final trade = await PegarouteExchangeProvider(apiClient: client).findTradeForContext(
+      trade: _boundStatusTrade(),
     );
     expect(trade.providerId, 'input-reference');
+  });
+
+  test('preflights Pegaroute status and validates the complete response', () async {
+    var calls = 0;
+    final client = PegarouteApiClient(
+      configuration: const PegarouteConfiguration(baseUrl: 'https://example.test', apiKey: 'test'),
+      get: (uri, headers) async {
+        calls++;
+        return very_insecure_http_do_not_use.Response(_fixture('status_refund.json'), 200);
+      },
+    );
+    final provider = PegarouteExchangeProvider(apiClient: client);
+    final trade = _boundStatusTrade();
+    final result = await provider.findTradeForContext(trade: trade);
+    expect(result.id, trade.id);
+    expect(calls, 1);
+
+    final mismatch = _boundStatusTrade()..amount = '2';
+    await expectLater(
+      provider.findTradeForContext(trade: mismatch),
+      throwsA(isA<PegarouteBindingException>()),
+    );
+    expect(calls, 1);
+
+    final changedResponse = json.decode(_fixture('status_refund.json')) as Map<String, dynamic>;
+    (changedResponse['output'] as Map<String, dynamic>)['address'] = 'different-destination';
+    final responseProvider = PegarouteExchangeProvider(
+      apiClient: PegarouteApiClient(
+        configuration:
+            const PegarouteConfiguration(baseUrl: 'https://example.test', apiKey: 'test'),
+        get: (uri, headers) async =>
+            very_insecure_http_do_not_use.Response(json.encode(changedResponse), 200),
+      ),
+    );
+    await expectLater(
+      responseProvider.findTradeForContext(trade: _boundStatusTrade()),
+      throwsA(isA<PegarouteBindingException>()),
+    );
   });
 }
