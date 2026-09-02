@@ -124,7 +124,9 @@ abstract class ExchangeTradeViewModelBase with Store {
 
   bool isSwapsXYZCanSendFromExternal;
 
-  bool get isSendable => checkIfCanSend(trade, wallet) == null;
+  bool get isSendable =>
+      trade.provider != ExchangeProviderDescription.pegaroute &&
+      checkIfCanSend(trade, wallet) == null;
 
   /// Providers that should hide the "send from external" button
   static const List<Type> _providersThatHideExternalSend = [

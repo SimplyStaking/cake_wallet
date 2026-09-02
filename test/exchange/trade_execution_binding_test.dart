@@ -268,7 +268,7 @@ void main() {
     expect(validated.execution.binding.tradeId, 'trade-fixture');
   });
 
-  test('reconstructs catalog token identity after SQLite reload', () {
+  test('rejects qualified token identity after SQLite reload loses its contract', () {
     for (final solana in [false, true]) {
       final original = _qualifiedTokenTrade(solana: solana);
       expect(
@@ -278,7 +278,7 @@ void main() {
       final reloaded = Trade.fromSqliteRow(original.toSqliteMap()..['tradeId'] = 1);
       expect(
         () => const PegarouteExecutionBindingValidator().validatePersisted(trade: reloaded),
-        returnsNormally,
+        throwsA(isA<PegarouteBindingException>()),
       );
 
       final title = solana ? 'PYTH' : 'SPX';

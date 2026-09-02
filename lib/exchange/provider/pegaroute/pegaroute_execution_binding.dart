@@ -505,6 +505,9 @@ final class PegarouteExecutionBindingValidator {
       if (currency.runtimeType != CryptoCurrency) {
         throw const PegarouteBindingException('persisted typed asset identity is unavailable');
       }
+      if (expectedToken.contains('-')) {
+        throw const PegarouteBindingException('persisted qualified asset identity is unavailable');
+      }
       final symbol = expectedToken.split('-').first;
       if (currency.title.toUpperCase() != symbol.toUpperCase() ||
           expectedDecimals != null && currency.decimals != expectedDecimals ||

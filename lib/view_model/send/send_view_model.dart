@@ -1102,7 +1102,13 @@ abstract class SendViewModelBase extends WalletChangeListenerViewModel with Stor
               transaction: pendingForCommit(),
             );
           } else {
-            await _handleOcpRequest();
+            await pendingForCommit().commit();
+            commitBoundaryEstablished = true;
+            state = TransactionCommitted();
+            await _handleOcpRequest(
+              commitClient: false,
+              transaction: pendingForCommit(),
+            );
           }
         } else {
           await _handleOcpRequest();
