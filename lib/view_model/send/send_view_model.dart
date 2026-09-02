@@ -154,6 +154,18 @@ abstract class SendViewModelBase extends WalletChangeListenerViewModel with Stor
   // Store trade and provider references for post-commit updates (e.g., Jupiter trade ID update)
   Trade? _currentTrade;
   ExchangeProvider? _currentProvider;
+  bool _pegarouteCommitInFlight = false;
+
+  @visibleForTesting
+  void setPendingTransactionContextForTesting({
+    required PendingTransaction transaction,
+    Trade? trade,
+    ExchangeProvider? provider,
+  }) {
+    pendingTransaction = transaction;
+    _currentTrade = trade;
+    _currentProvider = provider;
+  }
 
   @observable
   ExecutionState state;
@@ -1034,14 +1046,17 @@ abstract class SendViewModelBase extends WalletChangeListenerViewModel with Stor
     }
   }
 
-  Future<void> _handleOcpRequest({bool commitClient = true}) async {
+  Future<void> _handleOcpRequest(
+      {bool commitClient = true, PendingTransaction? transaction}) async {
+    final transactionToCommit = transaction ?? pendingTransaction!;
+
     if (commitClient && OpenCryptoPayService.requiresClientCommit(selectedCryptoCurrency)) {
-      await pendingTransaction!.commit();
+      await transactionToCommit.commit();
     }
 
     await _ocpService.commitOpenCryptoPayRequest(
-      pendingTransaction!.hex,
-      txId: pendingTransaction!.id,
+      transactionToCommit.hex,
+      txId: transactionToCommit.id,
       request: ocpRequest!,
       asset: selectedCryptoCurrency,
     );
@@ -1061,6 +1076,15 @@ abstract class SendViewModelBase extends WalletChangeListenerViewModel with Stor
       throw Exception("Pending transaction doesn't exist. It should not be happened.");
     }
 
+    final isPegaroute = _currentTrade?.provider == ExchangeProviderDescription.pegaroute;
+    if (isPegaroute && _pegarouteCommitInFlight) return;
+
+    final capturedPendingTransaction = pendingTransaction!;
+    final pendingForCommit =
+        isPegaroute ? () => capturedPendingTransaction : () => pendingTransaction!;
+
+    if (isPegaroute) _pegarouteCommitInFlight = true;
+
     var commitBoundaryEstablished = false;
     try {
       state = wallet.isHardwareWallet && walletType == WalletType.monero
@@ -1069,34 +1093,43 @@ abstract class SendViewModelBase extends WalletChangeListenerViewModel with Stor
 
       if (ocpRequest != null) {
         if (OpenCryptoPayService.requiresClientCommit(selectedCryptoCurrency)) {
-          await pendingTransaction!.commit();
-          commitBoundaryEstablished = true;
-          state = TransactionCommitted();
-          await _handleOcpRequest(commitClient: false);
+          if (isPegaroute) {
+            await pendingForCommit().commit();
+            commitBoundaryEstablished = true;
+            state = TransactionCommitted();
+            await _handleOcpRequest(
+              commitClient: false,
+              transaction: pendingForCommit(),
+            );
+          } else {
+            await _handleOcpRequest();
+          }
         } else {
           await _handleOcpRequest();
-          commitBoundaryEstablished = true;
-          state = TransactionCommitted();
         }
-      } else if (pendingTransaction!.shouldCommitUR()) {
+      } else if (pendingForCommit().shouldCommitUR()) {
+        if (isPegaroute) {
+          throw Exception('Pegaroute UR commit is unavailable');
+        }
         await _commitUR(context);
-        commitBoundaryEstablished = true;
-        state = TransactionCommitted();
       } else {
-        await pendingTransaction!.commit();
-        commitBoundaryEstablished = true;
-        state = TransactionCommitted();
+        await pendingForCommit().commit();
+        if (isPegaroute) commitBoundaryEstablished = true;
       }
+
+      state = TransactionCommitted();
     } catch (e) {
       if (!commitBoundaryEstablished) {
         state = FailureState(translateErrorMessage(e, wallet.type, wallet.currency));
 
         final failedSignature = e is JupiterSwapFailedException ? e.signature : "";
 
-        await _updateSolanaTrade(signature: failedSignature, isSuccess: false);
+        if (!isPegaroute) {
+          await _updateSolanaTrade(signature: failedSignature, isSuccess: false);
+        }
+        if (isPegaroute) _pegarouteCommitInFlight = false;
         return;
       }
-
       _logPostCommitError(e);
     }
 
@@ -1108,19 +1141,19 @@ abstract class SendViewModelBase extends WalletChangeListenerViewModel with Stor
         }
       }
 
-      await _updateSolanaTrade(signature: pendingTransaction!.id, isSuccess: true);
+      await _updateSolanaTrade(signature: pendingForCommit().id, isSuccess: true);
 
       if (walletType == WalletType.solana) {
         Future.delayed(Duration(seconds: 1), () async {
           try {
             await solana!.pollForTransaction(
               wallet,
-              pendingTransaction!.id,
+              pendingForCommit().id,
               initialDelay: const Duration(seconds: 1),
               maxRetries: 5,
             );
           } catch (e) {
-            _logPostCommitError(e);
+            printV('Failed to poll for transaction: $e');
           }
         });
 
@@ -1136,7 +1169,7 @@ abstract class SendViewModelBase extends WalletChangeListenerViewModel with Stor
                   final fromMint = solana!.getTokenAddress(_currentTrade!.from!);
                   tokenMints.add(fromMint);
                 } catch (e) {
-                  _logPostCommitError(e);
+                  printV('Error getting from currency mint: $e');
                 }
               }
 
@@ -1146,7 +1179,7 @@ abstract class SendViewModelBase extends WalletChangeListenerViewModel with Stor
                   final toMint = solana!.getTokenAddress(_currentTrade!.to!);
                   tokenMints.add(toMint);
                 } catch (e) {
-                  _logPostCommitError(e);
+                  printV('Error getting to currency mint: $e');
                 }
               }
 
@@ -1164,12 +1197,12 @@ abstract class SendViewModelBase extends WalletChangeListenerViewModel with Stor
                       tokenMints: tokenMints,
                     );
                   } catch (e) {
-                    _logPostCommitError(e);
+                    printV('Error retrying balance update: $e');
                   }
                 });
               }
             } catch (e) {
-              _logPostCommitError(e);
+              printV('Failed to update balances after send: $e');
             } finally {
               _currentTrade = null;
               _currentProvider = null;
@@ -1189,7 +1222,7 @@ abstract class SendViewModelBase extends WalletChangeListenerViewModel with Stor
               wallet.updateBalance() as Future<void>,
             ]);
           } catch (e) {
-            _logPostCommitError(e);
+            printV('Failed to update transactions after send: $e');
           }
         });
       }
@@ -1203,10 +1236,10 @@ abstract class SendViewModelBase extends WalletChangeListenerViewModel with Stor
             );
 
         wallet.transactionHistory.addOne(evm!.getTransactionInfo(
-          id: pendingTransaction!.evmTxHashFromRawHex!,
+          id: pendingForCommit().evmTxHashFromRawHex!,
           height: 0,
           amount: outputs.first.cryptoAmountMoney,
-          fee: pendingTransaction!.fee,
+          fee: pendingForCommit().fee,
           tokenSymbol: selectedCryptoCurrency.title,
           direction: TransactionDirection.outgoing,
           isPending: true,
@@ -1219,20 +1252,20 @@ abstract class SendViewModelBase extends WalletChangeListenerViewModel with Stor
 
       if (walletType == WalletType.solana) {
         wallet.transactionHistory.addOne(solana!.getTransactionInfo(
-          id: pendingTransaction!.id,
+          id: pendingForCommit().id,
           blockTime: DateTime.now(),
           to: "",
           from: "",
           direction: TransactionDirection.outgoing,
-          amount: pendingTransaction!.amount,
+          amount: pendingForCommit().amount,
           isPending: true,
-          fee: pendingTransaction!.fee,
+          fee: pendingForCommit().fee,
         ));
       }
 
       if (walletType == WalletType.tron) {
         wallet.transactionHistory.addOne(tron!.getTransactionInfo(
-          id: pendingTransaction!.id,
+          id: pendingForCommit().id,
           blockTime: DateTime.now(),
           direction: TransactionDirection.outgoing,
           amount: outputs.first.cryptoAmountMoney,
@@ -1241,14 +1274,16 @@ abstract class SendViewModelBase extends WalletChangeListenerViewModel with Stor
         ));
       }
 
-      if (pendingTransaction!.id.isNotEmpty) {
-        await _addTransactionDescription();
+      if (pendingForCommit().id.isNotEmpty) {
+        await _addTransactionDescription(transaction: isPegaroute ? pendingForCommit() : null);
       }
       final sharedPreferences = await SharedPreferences.getInstance();
       await sharedPreferences.setString(PreferencesKey.backgroundSyncLastTrigger(wallet.name),
           DateTime.now().add(Duration(minutes: 1)).toIso8601String());
     } catch (e) {
       _logPostCommitError(e);
+    } finally {
+      if (isPegaroute) _pegarouteCommitInFlight = false;
     }
   }
 
@@ -1272,7 +1307,9 @@ abstract class SendViewModelBase extends WalletChangeListenerViewModel with Stor
   @action
   Future<void> updateWalletBalance() async => await wallet.updateBalance();
 
-  Future<void> _addTransactionDescription() async {
+  Future<void> _addTransactionDescription({PendingTransaction? transaction}) async {
+    final transactionToDescribe = transaction ?? pendingTransaction!;
+
     String address = outputs.fold('', (acc, value) {
       final canonical = value.extractedAddress.trim().isNotEmpty
           ? value.extractedAddress.trim()
@@ -1296,7 +1333,7 @@ abstract class SendViewModelBase extends WalletChangeListenerViewModel with Stor
       final txhistory = monero!.getTransactionHistory(wallet);
       tx = txhistory.transactions.values.last;
     }
-    final descriptionKey = '${pendingTransaction!.id}_${wallet.walletAddresses.primaryAddress}';
+    final descriptionKey = '${transactionToDescribe.id}_${wallet.walletAddresses.primaryAddress}';
     _settingsStore.shouldSaveRecipientAddress
         ? await transactionDescriptionBox.add(TransactionDescription(
             id: descriptionKey,

@@ -1,9 +1,13 @@
+import 'dart:async';
+
 import 'package:cake_wallet/core/amount_parsing_proxy.dart';
 import 'package:cake_wallet/core/address_resolver/address_resolver_service.dart';
 import 'package:cake_wallet/core/execution_state.dart';
 import 'package:cake_wallet/entities/bitcoin_amount_display_mode.dart';
 import 'package:cake_wallet/entities/transaction_description.dart';
 import 'package:cake_wallet/entities/fiat_currency.dart';
+import 'package:cake_wallet/exchange/exchange_provider_description.dart';
+import 'package:cake_wallet/exchange/trade.dart';
 import 'package:cake_wallet/store/app_store.dart';
 import 'package:cake_wallet/store/settings_store.dart';
 import 'package:cake_wallet/view_model/contact_list/contact_list_view_model.dart';
@@ -63,13 +67,23 @@ class _TransactionDescriptionFake extends Fake implements TransactionDescription
 class _Context extends Mock implements BuildContext {}
 
 class _PendingTransaction with PendingTransaction {
-  _PendingTransaction({this.commitError});
+  _PendingTransaction({
+    this.id = 'transaction-id',
+    this.commitError,
+    this.onCommit,
+    this.commitStarted,
+    this.releaseCommit,
+    this.commitUr = false,
+  });
 
+  final String id;
   final Object? commitError;
+  final void Function()? onCommit;
+  final Completer<void>? commitStarted;
+  final Completer<void>? releaseCommit;
+  final bool commitUr;
   int commits = 0;
-
-  @override
-  String get id => 'transaction-id';
+  int urCommits = 0;
 
   @override
   Money get amount => Money.zero(CryptoCurrency.zec);
@@ -86,11 +100,20 @@ class _PendingTransaction with PendingTransaction {
   @override
   Future<void> commit() async {
     commits++;
+    onCommit?.call();
+    commitStarted?.complete();
+    if (releaseCommit != null) await releaseCommit!.future;
     if (commitError != null) throw commitError!;
   }
 
   @override
-  Future<Map<String, String>> commitUR() async => {};
+  bool shouldCommitUR() => commitUr;
+
+  @override
+  Future<Map<String, String>> commitUR() async {
+    urCommits++;
+    return {};
+  }
 }
 
 SendViewModel _viewModel({
@@ -137,6 +160,22 @@ SendViewModel _viewModel({
   )..pendingTransaction = pending;
 }
 
+SendViewModel _pegarouteViewModel({
+  required _DescriptionBox descriptionBox,
+  required _PendingTransaction pending,
+}) {
+  final viewModel = _viewModel(descriptionBox: descriptionBox, pending: pending);
+  viewModel.setPendingTransactionContextForTesting(
+    transaction: pending,
+    trade: Trade(
+      id: 'trade-id',
+      amount: '1',
+      provider: ExchangeProviderDescription.pegaroute,
+    ),
+  );
+  return viewModel;
+}
+
 void main() {
   setUpAll(() {
     registerFallbackValue(_TransactionDescriptionFake());
@@ -144,19 +183,6 @@ void main() {
 
   setUp(() {
     SharedPreferences.setMockInitialValues({});
-  });
-
-  test('keeps committed state when post-commit description persistence fails', () async {
-    final descriptionBox = _DescriptionBox();
-    when(() => descriptionBox.add(any<TransactionDescription>()))
-        .thenThrow(StateError('sensitive failure detail'));
-    final pending = _PendingTransaction();
-    final viewModel = _viewModel(descriptionBox: descriptionBox, pending: pending);
-
-    await viewModel.commitTransaction(_Context());
-
-    expect(pending.commits, 1);
-    expect(viewModel.state, isA<TransactionCommitted>());
   });
 
   test('sets failure state when the commit itself fails', () async {
@@ -167,5 +193,96 @@ void main() {
 
     expect(pending.commits, 1);
     expect(viewModel.state, isA<FailureState>());
+  });
+
+  test('keeps the existing UR path for non-Pegaroute transactions', () async {
+    final pending = _PendingTransaction(commitUr: true);
+    final viewModel = _viewModel(descriptionBox: _DescriptionBox(), pending: pending);
+
+    await viewModel.commitTransaction(_Context());
+
+    expect(pending.commits, 0);
+    expect(pending.urCommits, 1);
+    expect(viewModel.state, isA<FailureState>());
+  });
+
+  test('Pegaroute captures the committed pending transaction and succeeds', () async {
+    final descriptionBox = _DescriptionBox();
+    final descriptions = <TransactionDescription>[];
+    when(() => descriptionBox.add(any<TransactionDescription>())).thenAnswer((invocation) async {
+      descriptions.add(invocation.positionalArguments.single as TransactionDescription);
+      return 0;
+    });
+
+    late final SendViewModel viewModel;
+    final replacement = _PendingTransaction(id: 'replacement');
+    final pending = _PendingTransaction(
+      id: 'pegaroute-transaction',
+      onCommit: () => viewModel.pendingTransaction = replacement,
+    );
+    viewModel = _pegarouteViewModel(descriptionBox: descriptionBox, pending: pending);
+
+    await viewModel.commitTransaction(_Context());
+
+    expect(pending.commits, 1);
+    expect(descriptions.single.id, 'pegaroute-transaction_primary-address');
+    expect(viewModel.state, isA<TransactionCommitted>());
+  });
+
+  test('Pegaroute preserves committed state when bookkeeping fails', () async {
+    final descriptionBox = _DescriptionBox();
+    when(() => descriptionBox.add(any<TransactionDescription>()))
+        .thenThrow(StateError('sensitive failure detail'));
+    final pending = _PendingTransaction();
+    final viewModel = _pegarouteViewModel(descriptionBox: descriptionBox, pending: pending);
+
+    await viewModel.commitTransaction(_Context());
+
+    expect(pending.commits, 1);
+    expect(viewModel.state, isA<TransactionCommitted>());
+  });
+
+  test('Pegaroute reports pre-boundary failure without failure bookkeeping', () async {
+    final pending = _PendingTransaction(commitError: StateError('commit failed'));
+    final viewModel = _pegarouteViewModel(descriptionBox: _DescriptionBox(), pending: pending);
+
+    await viewModel.commitTransaction(_Context());
+
+    expect(pending.commits, 1);
+    expect(viewModel.state, isA<FailureState>());
+  });
+
+  test('Pegaroute rejects UR and does not call commitUR', () async {
+    final pending = _PendingTransaction(commitUr: true);
+    final viewModel = _pegarouteViewModel(descriptionBox: _DescriptionBox(), pending: pending);
+
+    await viewModel.commitTransaction(_Context());
+
+    expect(pending.commits, 0);
+    expect(pending.urCommits, 0);
+    expect(viewModel.state, isA<FailureState>());
+  });
+
+  test('Pegaroute prevents concurrent commits and clears the guard', () async {
+    final commitStarted = Completer<void>();
+    final releaseCommit = Completer<void>();
+    final pending = _PendingTransaction(
+      commitStarted: commitStarted,
+      releaseCommit: releaseCommit,
+    );
+    final viewModel = _pegarouteViewModel(descriptionBox: _DescriptionBox(), pending: pending);
+
+    final firstCommit = viewModel.commitTransaction(_Context());
+    await commitStarted.future;
+    final secondCommit = viewModel.commitTransaction(_Context());
+
+    await secondCommit;
+    expect(pending.commits, 1);
+
+    releaseCommit.complete();
+    await firstCommit;
+
+    await viewModel.commitTransaction(_Context());
+    expect(pending.commits, 2);
   });
 }
