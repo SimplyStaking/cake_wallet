@@ -9,6 +9,7 @@ class TradeExecution {
     required String nativeToken,
     required String destinationChain,
     required String destinationToken,
+    required TradeExecutionBinding binding,
     required Map<String, dynamic> payload,
     String? routeProvider,
     String? subprovider,
@@ -23,6 +24,7 @@ class TradeExecution {
       nativeToken: nativeToken,
       destinationChain: destinationChain,
       destinationToken: destinationToken,
+      binding: binding,
       payload: _freezeMap(payload),
       routeProvider: routeProvider,
       subprovider: subprovider,
@@ -41,6 +43,7 @@ class TradeExecution {
     required this.nativeToken,
     required this.destinationChain,
     required this.destinationToken,
+    required this.binding,
     required this.payload,
     this.routeProvider,
     this.subprovider,
@@ -63,6 +66,7 @@ class TradeExecution {
       'nativeToken',
       'destinationChain',
       'destinationToken',
+      'binding',
       'routeProvider',
       'subprovider',
       'privateIntent',
@@ -86,6 +90,7 @@ class TradeExecution {
       nativeToken: _required(map, 'nativeToken'),
       destinationChain: _required(map, 'destinationChain'),
       destinationToken: _required(map, 'destinationToken'),
+      binding: TradeExecutionBinding.fromJson(map['binding']),
       routeProvider: _optional(map, 'routeProvider'),
       subprovider: _optional(map, 'subprovider'),
       privateIntent: map['privateIntent'],
@@ -101,6 +106,7 @@ class TradeExecution {
   final String nativeToken;
   final String destinationChain;
   final String destinationToken;
+  final TradeExecutionBinding binding;
   final String? routeProvider;
   final String? subprovider;
   final Object? privateIntent;
@@ -112,6 +118,7 @@ class TradeExecution {
     if (version != 1 || family.isEmpty || mode.isEmpty) {
       throw const FormatException('invalid execution envelope');
     }
+    binding.validate();
     if (sourceChain.isEmpty ||
         sourceToken.isEmpty ||
         nativeToken.isEmpty ||
@@ -167,10 +174,208 @@ class TradeExecution {
       'nativeToken': nativeToken,
       'destinationChain': destinationChain,
       'destinationToken': destinationToken,
+      'binding': binding.toJson(),
       if (routeProvider != null) 'routeProvider': routeProvider,
       if (subprovider != null) 'subprovider': subprovider,
       if (privateIntent != null) 'privateIntent': privateIntent,
       'payload': payload,
+    };
+  }
+}
+
+enum TradeExecutionExpiryKind { iso8601, unixSeconds }
+
+final class TradeExecutionExpiry {
+  const TradeExecutionExpiry._({required this.kind, required this.value});
+
+  factory TradeExecutionExpiry.fromProviderValue(Object? value) {
+    if (value is String) {
+      final instant = DateTime.tryParse(value);
+      if (instant == null) throw const FormatException('invalid route expiry');
+      return TradeExecutionExpiry._(
+        kind: TradeExecutionExpiryKind.iso8601,
+        value: instant.toUtc().toIso8601String(),
+      );
+    }
+    if (value is num && value.isFinite && value >= 0) {
+      return TradeExecutionExpiry._(
+        kind: TradeExecutionExpiryKind.unixSeconds,
+        value: value,
+      );
+    }
+    throw const FormatException('invalid route expiry');
+  }
+
+  factory TradeExecutionExpiry.fromJson(Object? value) {
+    if (value is! Map) throw const FormatException('route expiry must be an object');
+    final map = Map<String, dynamic>.from(value);
+    if (map.length != 2 || !map.containsKey('kind') || !map.containsKey('value')) {
+      throw const FormatException('invalid route expiry');
+    }
+    final kind = map['kind'];
+    final raw = map['value'];
+    if (kind == 'iso8601' && raw is String) {
+      return TradeExecutionExpiry.fromProviderValue(raw);
+    }
+    if (kind == 'unixSeconds' && raw is num) {
+      return TradeExecutionExpiry.fromProviderValue(raw);
+    }
+    throw const FormatException('invalid route expiry');
+  }
+
+  final TradeExecutionExpiryKind kind;
+  final Object value;
+
+  DateTime instant() {
+    switch (kind) {
+      case TradeExecutionExpiryKind.iso8601:
+        return DateTime.parse(value as String).toUtc();
+      case TradeExecutionExpiryKind.unixSeconds:
+        return DateTime.fromMillisecondsSinceEpoch(
+          ((value as num) * Duration.millisecondsPerSecond).round(),
+          isUtc: true,
+        );
+    }
+  }
+
+  Map<String, Object> toJson() => {
+        'kind': kind == TradeExecutionExpiryKind.iso8601 ? 'iso8601' : 'unixSeconds',
+        'value': value,
+      };
+}
+
+final class TradeExecutionBinding {
+  const TradeExecutionBinding({
+    required this.tradeId,
+    required this.providerRaw,
+    required this.quoteId,
+    required this.quoteExpiresAt,
+    required this.routeExpiry,
+    required this.sourceAmount,
+    required this.sourceAmountBaseUnits,
+    required this.sourceDecimals,
+    required this.senderAddress,
+    required this.refundAddress,
+    required this.destinationAddress,
+    required this.isSendAll,
+    required this.walletId,
+    required this.walletChainId,
+    required this.walletAddress,
+    this.providerReferenceId,
+  });
+
+  factory TradeExecutionBinding.fromJson(Object? value) {
+    if (value is! Map) throw const FormatException('execution binding must be an object');
+    final map = Map<String, dynamic>.from(value);
+    const keys = {
+      'tradeId',
+      'providerRaw',
+      'quoteId',
+      'quoteExpiresAt',
+      'routeExpiry',
+      'sourceAmount',
+      'sourceAmountBaseUnits',
+      'sourceDecimals',
+      'senderAddress',
+      'refundAddress',
+      'destinationAddress',
+      'isSendAll',
+      'walletId',
+      'walletChainId',
+      'walletAddress',
+      'providerReferenceId',
+    };
+    if (map.length != keys.length || map.keys.any((key) => !keys.contains(key))) {
+      throw const FormatException('invalid execution binding fields');
+    }
+    final quoteExpiresAt = _required(map, 'quoteExpiresAt');
+    final parsedQuoteExpiry = DateTime.tryParse(quoteExpiresAt);
+    if (parsedQuoteExpiry == null) throw const FormatException('invalid quote expiry');
+    final routeExpiry = map['routeExpiry'];
+    return TradeExecutionBinding(
+      tradeId: _required(map, 'tradeId'),
+      providerRaw: _requiredInt(map, 'providerRaw'),
+      quoteId: _required(map, 'quoteId'),
+      quoteExpiresAt: parsedQuoteExpiry.toUtc(),
+      routeExpiry: routeExpiry == null ? null : TradeExecutionExpiry.fromJson(routeExpiry),
+      sourceAmount: _required(map, 'sourceAmount'),
+      sourceAmountBaseUnits: _required(map, 'sourceAmountBaseUnits'),
+      sourceDecimals: _requiredInt(map, 'sourceDecimals'),
+      senderAddress: _required(map, 'senderAddress'),
+      refundAddress: _nullableString(map, 'refundAddress'),
+      destinationAddress: _required(map, 'destinationAddress'),
+      isSendAll: _requiredBool(map, 'isSendAll'),
+      walletId: _required(map, 'walletId'),
+      walletChainId: _nullableInt(map, 'walletChainId'),
+      walletAddress: _nullableString(map, 'walletAddress'),
+      providerReferenceId: _nullableString(map, 'providerReferenceId'),
+    )..validate();
+  }
+
+  final String tradeId;
+  final int providerRaw;
+  final String quoteId;
+  final DateTime quoteExpiresAt;
+  final TradeExecutionExpiry? routeExpiry;
+  final String sourceAmount;
+  final String sourceAmountBaseUnits;
+  final int sourceDecimals;
+  final String senderAddress;
+  final String? refundAddress;
+  final String destinationAddress;
+  final bool isSendAll;
+  final String walletId;
+  final int? walletChainId;
+  final String? walletAddress;
+  final String? providerReferenceId;
+
+  void validate() {
+    if (tradeId.isEmpty ||
+        quoteId.isEmpty ||
+        senderAddress.isEmpty ||
+        destinationAddress.isEmpty ||
+        walletId.isEmpty ||
+        providerRaw != 17 ||
+        sourceDecimals < 0 ||
+        isSendAll ||
+        sourceAmountBaseUnits == '0' ||
+        !RegExp(r'^[0-9]+$').hasMatch(sourceAmountBaseUnits) ||
+        !RegExp(r'^(0|[1-9][0-9]*)(\.[0-9]+)?$').hasMatch(sourceAmount)) {
+      throw const FormatException('invalid execution binding');
+    }
+    if (walletChainId != null && walletChainId! <= 0) {
+      throw const FormatException('invalid wallet chain id');
+    }
+    if (walletAddress != null && walletAddress!.isEmpty) {
+      throw const FormatException('invalid wallet address');
+    }
+    if (refundAddress != null && (refundAddress!.isEmpty || refundAddress == senderAddress)) {
+      throw const FormatException('refund address must be normalized');
+    }
+    if (providerReferenceId != null && providerReferenceId!.isEmpty) {
+      throw const FormatException('invalid provider reference');
+    }
+  }
+
+  Map<String, dynamic> toJson() {
+    validate();
+    return {
+      'tradeId': tradeId,
+      'providerRaw': providerRaw,
+      'quoteId': quoteId,
+      'quoteExpiresAt': quoteExpiresAt.toUtc().toIso8601String(),
+      'routeExpiry': routeExpiry?.toJson(),
+      'sourceAmount': sourceAmount,
+      'sourceAmountBaseUnits': sourceAmountBaseUnits,
+      'sourceDecimals': sourceDecimals,
+      'senderAddress': senderAddress,
+      'refundAddress': refundAddress,
+      'destinationAddress': destinationAddress,
+      'isSendAll': isSendAll,
+      'walletId': walletId,
+      'walletChainId': walletChainId,
+      'walletAddress': walletAddress,
+      'providerReferenceId': providerReferenceId,
     };
   }
 }
@@ -297,6 +502,30 @@ String _required(Map<String, dynamic> map, String key) {
   final value = map[key];
   if (value is! String || value.isEmpty) throw FormatException('$key is required');
   return value;
+}
+
+int _requiredInt(Map<String, dynamic> map, String key) {
+  final value = map[key];
+  if (value is! int) throw FormatException('$key is required');
+  return value;
+}
+
+bool _requiredBool(Map<String, dynamic> map, String key) {
+  final value = map[key];
+  if (value is! bool) throw FormatException('$key is required');
+  return value;
+}
+
+String? _nullableString(Map<String, dynamic> map, String key) {
+  final value = map[key];
+  if (value != null && value is! String) throw FormatException('$key must be a string or null');
+  return value as String?;
+}
+
+int? _nullableInt(Map<String, dynamic> map, String key) {
+  final value = map[key];
+  if (value != null && value is! int) throw FormatException('$key must be an integer or null');
+  return value as int?;
 }
 
 String? _optional(Map<String, dynamic> map, String key) {

@@ -3,7 +3,27 @@ import 'package:cake_wallet/exchange/exchange_provider_description.dart';
 import 'package:cake_wallet/exchange/trade.dart';
 import 'package:cake_wallet/exchange/trade_execution.dart';
 import 'package:cake_wallet/exchange/trade_refund.dart';
+import 'package:cake_wallet/exchange/provider/pegaroute/pegaroute_execution_binding.dart';
 import 'package:cw_core/crypto_currency.dart';
+
+TradeExecutionBinding _binding() => TradeExecutionBinding(
+      tradeId: 'trade-fixture',
+      providerRaw: 17,
+      quoteId: 'quote-fixture',
+      quoteExpiresAt: DateTime.utc(2099),
+      routeExpiry: null,
+      sourceAmount: '1',
+      sourceAmountBaseUnits: '1000000000000',
+      sourceDecimals: 12,
+      senderAddress: 'sender',
+      refundAddress: null,
+      destinationAddress: 'destination',
+      isSendAll: false,
+      walletId: 'wallet-fixture',
+      walletChainId: null,
+      walletAddress: null,
+      providerReferenceId: null,
+    );
 
 void main() {
   test('persists sender, execution, and refund envelopes in the trade row', () {
@@ -15,13 +35,14 @@ void main() {
       nativeToken: 'XMR',
       destinationChain: 'BTC',
       destinationToken: 'BTC',
+      binding: _binding(),
       routeProvider: 'instaswap',
       subprovider: 'fixture',
       privateIntent: false,
       payload: const {
         'chain': 'XMR',
         'to': 'destination',
-        'amount': {'display': '1', 'baseUnits': '1'},
+        'amount': {'display': '1', 'baseUnits': '1000000000000'},
         'memo': null,
       },
     );
@@ -33,6 +54,10 @@ void main() {
       to: CryptoCurrency.btc,
       provider: ExchangeProviderDescription.pegaroute,
       senderAddress: 'sender',
+      payoutAddress: 'destination',
+      walletId: 'wallet-fixture',
+      fromWalletAddress: 'sender',
+      providerName: 'instaswap',
       executionJson: execution.encode(),
       refundJson: refund.encode(),
     );
@@ -42,6 +67,10 @@ void main() {
     expect(reloaded.senderAddress, 'sender');
     expect(TradeExecution.fromJsonString(reloaded.executionJson!).family, 'other');
     expect(TradeRefund.fromJsonString(reloaded.refundJson!).configuredAddress, 'configured');
+    expect(
+      () => const PegarouteExecutionBindingValidator().validatePersisted(trade: reloaded),
+      returnsNormally,
+    );
   });
 
   test('keeps unreadable persisted envelopes as raw values', () {

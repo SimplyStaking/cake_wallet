@@ -3,6 +3,25 @@ import 'dart:convert';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:cake_wallet/exchange/trade_execution.dart';
 
+TradeExecutionBinding _binding() => TradeExecutionBinding(
+      tradeId: 'trade-fixture',
+      providerRaw: 17,
+      quoteId: 'quote-fixture',
+      quoteExpiresAt: DateTime.utc(2099),
+      routeExpiry: null,
+      sourceAmount: '1',
+      sourceAmountBaseUnits: '1',
+      sourceDecimals: 0,
+      senderAddress: 'sender',
+      refundAddress: null,
+      destinationAddress: 'destination',
+      isSendAll: false,
+      walletId: 'wallet-fixture',
+      walletChainId: 1,
+      walletAddress: 'sender',
+      providerReferenceId: null,
+    );
+
 Map<String, dynamic> _evmPayload({String mode = 'contract-call'}) => {
       'chainId': 1,
       'to': '0x0000000000000000000000000000000000000005',
@@ -24,6 +43,7 @@ TradeExecution _execution(
       nativeToken: 'ETH',
       destinationChain: 'BTC',
       destinationToken: 'BTC',
+      binding: _binding(),
       payload: payload ?? _evmPayload(mode: mode),
     );
 
@@ -154,9 +174,16 @@ void main() {
     );
   });
 
-  test('rejects unknown current-version envelope fields', () {
+  test('rejects missing and unknown binding fields', () {
+    final missing = _execution().toJson()..remove('binding');
+    expect(() => TradeExecution.fromJson(missing), throwsFormatException);
     final value = _execution().toJson()..['futureField'] = true;
     expect(() => TradeExecution.fromJson(value), throwsFormatException);
+
+    final encoded = _execution().toJson();
+    final binding = encoded['binding'] as Map<String, dynamic>;
+    binding['futureField'] = true;
+    expect(() => TradeExecution.fromJson(encoded), throwsFormatException);
   });
 
   test('keeps malformed persisted data outside the dispatch model', () {
