@@ -26,6 +26,7 @@ TradeExecutionBinding _binding() => TradeExecutionBinding(
       sourceAmount: '1',
       sourceAmountBaseUnits: '1000000000000',
       sourceDecimals: 12,
+      destinationDecimals: 8,
       senderAddress: 'sender',
       refundAddress: null,
       destinationAddress: 'destination',
@@ -97,7 +98,7 @@ class _Handler implements TradeExecutionHandler {
   Future<GuardedPendingTransaction?> prepare({
     required TradeExecutionGuard guard,
   }) async {
-    if (ignoreGuard) return _prepared() as dynamic;
+    if (ignoreGuard) return _prepared() as GuardedPendingTransaction?;
     return guard.withWalletConstruction((wallet, execution) async {
       if (prepareCompleter != null) await prepareCompleter!.future;
       constructionStarted = true;

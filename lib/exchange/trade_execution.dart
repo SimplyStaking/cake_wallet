@@ -257,6 +257,7 @@ final class TradeExecutionBinding {
     required this.sourceAmount,
     required this.sourceAmountBaseUnits,
     required this.sourceDecimals,
+    required this.destinationDecimals,
     required this.senderAddress,
     required this.refundAddress,
     required this.destinationAddress,
@@ -284,6 +285,7 @@ final class TradeExecutionBinding {
       'sourceAmount',
       'sourceAmountBaseUnits',
       'sourceDecimals',
+      'destinationDecimals',
       'senderAddress',
       'refundAddress',
       'destinationAddress',
@@ -314,6 +316,7 @@ final class TradeExecutionBinding {
       sourceAmount: _required(map, 'sourceAmount'),
       sourceAmountBaseUnits: _required(map, 'sourceAmountBaseUnits'),
       sourceDecimals: _requiredInt(map, 'sourceDecimals'),
+      destinationDecimals: _requiredInt(map, 'destinationDecimals'),
       senderAddress: _required(map, 'senderAddress'),
       refundAddress: _nullableString(map, 'refundAddress'),
       destinationAddress: _required(map, 'destinationAddress'),
@@ -338,6 +341,7 @@ final class TradeExecutionBinding {
   final String sourceAmount;
   final String sourceAmountBaseUnits;
   final int sourceDecimals;
+  final int destinationDecimals;
   final String senderAddress;
   final String? refundAddress;
   final String destinationAddress;
@@ -357,6 +361,7 @@ final class TradeExecutionBinding {
         reviewedRouteJson.isEmpty ||
         providerRaw != 17 ||
         sourceDecimals < 0 ||
+        destinationDecimals < 0 ||
         isSendAll ||
         sourceAmountBaseUnits == '0' ||
         !RegExp(r'^(0|[1-9][0-9]*)$').hasMatch(sourceAmountBaseUnits) ||
@@ -404,6 +409,7 @@ final class TradeExecutionBinding {
       'sourceAmount': sourceAmount,
       'sourceAmountBaseUnits': sourceAmountBaseUnits,
       'sourceDecimals': sourceDecimals,
+      'destinationDecimals': destinationDecimals,
       'senderAddress': senderAddress,
       'refundAddress': refundAddress,
       'destinationAddress': destinationAddress,

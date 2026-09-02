@@ -13,9 +13,52 @@ import 'package:cake_wallet/exchange/trade_request.dart';
 import 'package:cake_wallet/exchange/trade_state.dart';
 import 'package:cake_wallet/utils/token_utilities.dart';
 import 'package:cw_core/crypto_currency.dart';
+import 'package:cw_core/db/sqlite.dart';
 import 'package:cw_core/erc20_token.dart';
 import 'package:cw_core/spl_token.dart';
 import 'package:cw_core/tron_token.dart';
+
+enum _PegarouteTransition { stale, same, advance }
+
+final class _PegarouteStatusSource {
+  const _PegarouteStatusSource({
+    required this.internalId,
+    required this.id,
+    required this.providerRaw,
+    required this.rawExecutionJson,
+  });
+
+  final int internalId;
+  final String id;
+  final int providerRaw;
+  final String rawExecutionJson;
+}
+
+final class _PegarouteStatusObservation {
+  const _PegarouteStatusObservation({
+    required this.source,
+    required this.response,
+    required this.trade,
+  });
+
+  final _PegarouteStatusSource source;
+  final PegarouteStatusResponse response;
+  final Trade trade;
+}
+
+/// Read-only status data for callers that need to inspect a provider result
+/// without receiving a writable Trade that could replace the bound row.
+final class PegarouteTradeStatusSnapshot {
+  const PegarouteTradeStatusSnapshot({
+    required this.id,
+    required this.providerId,
+    required this.refundJson,
+  });
+
+  final String id;
+  final String? providerId;
+  final String? refundJson;
+}
 
 class PegarouteExchangeProvider extends ExchangeProvider {
   PegarouteExchangeProvider({
@@ -93,22 +136,125 @@ class PegarouteExchangeProvider extends ExchangeProvider {
     throw const PegarouteBindingException('Pegaroute status requires a bound trade context');
   }
 
-  Future<Trade> findTradeForContext({required Trade trade}) async {
+  Future<PegarouteTradeStatusSnapshot> findTradeForContext({required Trade trade}) async {
+    final source = _captureSource(trade);
+    final observation = await _fetchStatus(trade: trade, source: source);
+    return PegarouteTradeStatusSnapshot(
+      id: observation.trade.id,
+      providerId: observation.trade.providerId,
+      refundJson: observation.trade.refundJson,
+    );
+  }
+
+  /// Fetches and atomically persists one provider-owned Pegaroute status.
+  ///
+  /// The status response never crosses this boundary as a writable Trade
+  /// update. Its response, raw execution identity, and source row identity
+  /// stay together until the transaction has revalidated the latest row.
+  Future<Trade> refreshTradeStatus({required Trade trade}) async {
+    final source = _captureSource(trade, requirePersisted: true);
+    final observation = await _fetchStatus(trade: trade, source: source);
+    final committedSource = observation.source;
+
+    late Trade committed;
+    await db!.transaction((txn) async {
+      final rows = await txn.query(
+        Trade.tableName,
+        where: '${Trade.selfIdColumn} = ? AND id = ? AND providerRaw = ?',
+        whereArgs: [
+          committedSource.internalId,
+          committedSource.id,
+          committedSource.providerRaw,
+        ],
+        limit: 1,
+      );
+      if (rows.isEmpty) throw StateError('Pegaroute trade no longer exists');
+
+      final latest = Trade.fromSqliteRow(rows.first);
+      final validated = _bindingValidator.validatePersisted(
+        trade: latest,
+        expectedRawExecutionJson: committedSource.rawExecutionJson,
+      );
+      _bindingValidator.validateStatusResponse(
+        validated: validated,
+        response: observation.response,
+      );
+      final expected = latest.toSqliteMap()..remove(Trade.selfIdColumn);
+      _mergeStatusEvidence(latest, observation.trade);
+
+      final values = latest.toSqliteMap()..remove(Trade.selfIdColumn);
+      final predicates = <String>[
+        '${Trade.selfIdColumn} = ?',
+      ];
+      final predicateArgs = <Object?>[committedSource.internalId];
+      for (final entry in expected.entries) {
+        if (entry.value == null) {
+          predicates.add('${entry.key} IS NULL');
+        } else {
+          predicates.add('${entry.key} = ?');
+          predicateArgs.add(entry.value);
+        }
+      }
+      final changed = await txn.update(
+        Trade.tableName,
+        values,
+        where: predicates.join(' AND '),
+        whereArgs: predicateArgs,
+      );
+      if (changed != 1) throw StateError('Pegaroute trade changed during status refresh');
+      committed = latest;
+    });
+
+    trade.synchronizeFromPegarouteRefresh(committed);
+    Trade.onChanged.add(null);
+    return trade;
+  }
+
+  _PegarouteStatusSource _captureSource(Trade trade, {bool requirePersisted = false}) {
+    if (requirePersisted && trade.internalId <= 0) {
+      throw const PegarouteBindingException('Pegaroute status caller is not persisted');
+    }
     final validated = _bindingValidator.validatePersisted(trade: trade);
-    final rawExecutionJson = validated.rawExecutionJson;
+    return _PegarouteStatusSource(
+      internalId: trade.internalId,
+      id: trade.id,
+      providerRaw: trade.providerRaw,
+      rawExecutionJson: validated.rawExecutionJson,
+    );
+  }
+
+  ValidatedTradeExecution _validateCaller(
+    Trade trade,
+    _PegarouteStatusSource source,
+  ) {
+    if (trade.internalId != source.internalId ||
+        trade.id != source.id ||
+        trade.providerRaw != source.providerRaw) {
+      throw const PegarouteBindingException('Pegaroute status caller identity changed');
+    }
+    return _bindingValidator.validatePersisted(
+      trade: trade,
+      expectedRawExecutionJson: source.rawExecutionJson,
+    );
+  }
+
+  Future<_PegarouteStatusObservation> _fetchStatus({
+    required Trade trade,
+    required _PegarouteStatusSource source,
+  }) async {
+    final validated = _validateCaller(trade, source);
     try {
       final response = await _apiClient.status(
         validated.execution.binding.providerTransactionId ?? trade.id,
       );
-      final current = _bindingValidator.validatePersisted(
-        trade: trade,
-        expectedRawExecutionJson: rawExecutionJson,
-      );
+      var current = _validateCaller(trade, source);
       _bindingValidator.validateStatusResponse(validated: current, response: response);
       final input = response.input;
       final output = response.output;
       final parsedFrom = await _parseCurrency(input.chain, input.token);
       final parsedTo = await _parseCurrency(output.chain, output.token);
+      current = _validateCaller(trade, source);
+      _bindingValidator.validateStatusResponse(validated: current, response: response);
       final configuredRefund = input.refundAddress;
       final refund = response.refund;
       final refundRecord =
@@ -127,12 +273,7 @@ class PegarouteExchangeProvider extends ExchangeProvider {
                   completedAt: refund?.completedAt,
                   terminalWithoutEvidence: response.internalStatus == 'refunded' && refund == null,
                 );
-      final finalValidation = _bindingValidator.validatePersisted(
-        trade: trade,
-        expectedRawExecutionJson: rawExecutionJson,
-      );
-      _bindingValidator.validateStatusResponse(validated: finalValidation, response: response);
-      return Trade(
+      final statusTrade = Trade(
         id: trade.id,
         from: parsedFrom,
         to: parsedTo,
@@ -144,13 +285,86 @@ class PegarouteExchangeProvider extends ExchangeProvider {
         outputTransaction: output.txHash,
         receiveAmount: output.amount,
         payoutAddress: output.address,
-        providerName: finalValidation.execution.routeProvider,
-        providerId: finalValidation.execution.binding.providerReferenceId,
+        providerName: current.execution.routeProvider,
+        providerId: current.execution.binding.providerReferenceId,
         refundJson: refundRecord?.encode(),
+      );
+      return _PegarouteStatusObservation(
+        source: source,
+        response: response,
+        trade: statusTrade,
       );
     } on PegarouteApiError catch (error) {
       if (error.httpStatus == 404) throw TradeNotFoundException(trade.id, provider: description);
       rethrow;
+    }
+  }
+
+  static const _normalStateRank = {
+    'created': 0,
+    'confirming': 1,
+    'exchanging': 2,
+    'sending': 3,
+  };
+
+  static _PegarouteTransition _transition(String current, String next) {
+    if (next.isEmpty) return _PegarouteTransition.stale;
+    if (current == next) return _PegarouteTransition.same;
+    if (current.isEmpty) return _PegarouteTransition.advance;
+    if (current == 'success' || current == 'refunded') return _PegarouteTransition.stale;
+    if (next == 'refunded') return _PegarouteTransition.advance;
+    if (current == 'failed' || current == 'refund' && next != 'refunded') {
+      return _PegarouteTransition.stale;
+    }
+
+    final currentRank = _normalStateRank[current];
+    if (currentRank == null) return _PegarouteTransition.stale;
+    if (next == 'refund' || next == 'failed' || next == 'success') {
+      return _PegarouteTransition.advance;
+    }
+    final nextRank = _normalStateRank[next];
+    return nextRank != null && nextRank > currentRank
+        ? _PegarouteTransition.advance
+        : _PegarouteTransition.stale;
+  }
+
+  static void _mergeStatusEvidence(Trade current, Trade updated) {
+    final transition = _transition(current.stateRaw, updated.stateRaw);
+    if (transition == _PegarouteTransition.stale) return;
+
+    final advancing = transition == _PegarouteTransition.advance;
+    String? merge(String? existing, String? incoming) {
+      if (incoming == null || incoming.isEmpty) return existing;
+      return advancing || existing == null ? incoming : existing;
+    }
+
+    if (current.createdAt == null && updated.createdAt != null) {
+      current.createdAt = updated.createdAt;
+    }
+    current.stateRaw = updated.stateRaw;
+    if (current.isRefund != true && updated.isRefund == true) current.isRefund = true;
+    current.receiveAmount = merge(current.receiveAmount, updated.receiveAmount);
+    current.inputAddress = merge(current.inputAddress, updated.inputAddress);
+    current.extraId = merge(current.extraId, updated.extraId);
+    current.outputTransaction = merge(current.outputTransaction, updated.outputTransaction);
+    if (current.payoutAddress == null) current.payoutAddress = updated.payoutAddress;
+    if (current.providerId == null) current.providerId = updated.providerId;
+    if (current.providerName == null) current.providerName = updated.providerName;
+    if (current.memo == null) current.memo = updated.memo;
+    current.txId = merge(current.txId, updated.txId);
+    if (current.senderAddress == null && updated.senderAddress != null) {
+      current.senderAddress = updated.senderAddress;
+    }
+    if (current.refundAddress == null && updated.refundAddress != null) {
+      current.refundAddress = updated.refundAddress;
+    }
+    if (updated.refundJson != null) {
+      final currentRefundJson = current.refundJson?.isNotEmpty == true
+          ? current.refundJson
+          : current.refundAddress == null
+              ? null
+              : TradeRefund(configuredAddress: current.refundAddress).encode();
+      current.refundJson = TradeRefund.mergeJson(currentRefundJson, updated.refundJson!);
     }
   }
 

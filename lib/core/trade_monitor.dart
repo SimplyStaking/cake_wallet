@@ -186,16 +186,9 @@ class TradeMonitor {
     }
 
     try {
-      final expectedRawExecutionJson = trade.executionJson;
-      final updated = provider is PegarouteExchangeProvider
-          ? await provider.findTradeForContext(trade: trade)
-          : await provider.findTradeById(id: trade.id);
       final persisted = provider is PegarouteExchangeProvider
-          ? await trade.mergeAndSavePegaroute(
-              updated,
-              expectedRawExecutionJson: expectedRawExecutionJson!,
-            )
-          : (trade..mergeFindTradeByIdResult(updated));
+          ? await provider.refreshTradeStatus(trade: trade)
+          : (trade..mergeFindTradeByIdResult(await provider.findTradeById(id: trade.id)));
       printV('Trade ${trade.id} updated: ${persisted.state}');
       if (provider is! PegarouteExchangeProvider) await persisted.save();
 
@@ -205,7 +198,7 @@ class TradeMonitor {
       // If the updated trade is in a final state, we cancel the timer
       final isFinal = provider is PegarouteExchangeProvider
           ? _isFinalStateForTrade(persisted)
-          : _isFinalState(updated.state);
+          : _isFinalState(persisted.state);
       if (isFinal) {
         printV('Trade ${trade.id} is in final state');
         _cancelSingleTradeTimer(trade.id);

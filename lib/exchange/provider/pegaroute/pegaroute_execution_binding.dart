@@ -19,7 +19,8 @@ final class ValidatedTradeExecution {
 }
 
 final class PegarouteValidatedSwapPreflight {
-  const PegarouteValidatedSwapPreflight._({
+  PegarouteValidatedSwapPreflight._({
+    required PegarouteValidatedQuote quote,
     required this.requestJson,
     required this.routeSnapshotJson,
     required this.quoteId,
@@ -33,11 +34,13 @@ final class PegarouteValidatedSwapPreflight {
     required this.destinationToken,
     required this.sourceAmount,
     required this.sourceDecimals,
+    required this.destinationDecimals,
     required this.walletId,
     required this.walletChainId,
     required this.walletAddress,
-  });
+  }) : _quote = quote;
 
+  final PegarouteValidatedQuote _quote;
   final String requestJson;
   final String routeSnapshotJson;
   final String quoteId;
@@ -51,9 +54,28 @@ final class PegarouteValidatedSwapPreflight {
   final String destinationToken;
   final String sourceAmount;
   final int sourceDecimals;
+  final int destinationDecimals;
   final String walletId;
   final int? walletChainId;
   final String walletAddress;
+  bool _consumed = false;
+
+  bool isBoundTo(Object client) => _quote.isBoundTo(client);
+
+  void consumeFor(Object client, DateTime at) {
+    if (!isBoundTo(client)) {
+      throw const PegarouteBindingException('swap preflight belongs to another API client');
+    }
+    if (_consumed) {
+      throw const PegarouteBindingException('swap preflight has already been consumed');
+    }
+    final current = at.toUtc();
+    if (!current.isBefore(quoteExpiresAt) ||
+        (routeExpiry != null && !current.isBefore(routeExpiry!.instant()))) {
+      throw const PegarouteBindingException('swap preflight is expired');
+    }
+    _consumed = true;
+  }
 }
 
 final class PegarouteExecutionBindingValidator {
@@ -129,6 +151,7 @@ final class PegarouteExecutionBindingValidator {
     }
     _validateRequestAmount(request.amount, sourceDecimals);
     return PegarouteValidatedSwapPreflight._(
+      quote: quote,
       requestJson: requestJson,
       routeSnapshotJson: jsonEncode(_routeSnapshot(route)),
       quoteId: quoteResponse.quoteId,
@@ -143,6 +166,7 @@ final class PegarouteExecutionBindingValidator {
       destinationToken: destination.token,
       sourceAmount: request.amount,
       sourceDecimals: sourceDecimals,
+      destinationDecimals: trade.to!.decimals,
       walletId: wallet.id,
       walletChainId: wallet.chainId,
       walletAddress: walletAddress,
@@ -238,6 +262,7 @@ final class PegarouteExecutionBindingValidator {
         sourceAmount: preflight.sourceAmount,
         sourceAmountBaseUnits: sourceAmountBaseUnits,
         sourceDecimals: preflight.sourceDecimals,
+        destinationDecimals: preflight.destinationDecimals,
         senderAddress: _requiredRequestField(preflight.requestJson, 'senderAddress'),
         refundAddress: _optionalRequestField(preflight.requestJson, 'refundAddress'),
         destinationAddress: _requiredRequestField(preflight.requestJson, 'destinationAddress'),
@@ -314,6 +339,7 @@ final class PegarouteExecutionBindingValidator {
       _requiredCurrency(trade.to, 'destination currency'),
       expectedChain: execution.destinationChain,
       expectedToken: execution.destinationToken,
+      expectedDecimals: binding.destinationDecimals,
     );
     if (execution.sourceChain != source.chain ||
         execution.sourceToken != source.token ||
@@ -357,6 +383,7 @@ final class PegarouteExecutionBindingValidator {
       sourceAmount: binding.sourceAmount,
       providerDepositAddress: binding.providerDepositAddress,
       providerDepositAmountExact: binding.providerDepositAmountExact,
+      providerDepositExpiry: binding.providerDepositExpiry,
     );
     _validateExecutionSemantics(
       execution: providerExecution,
@@ -467,13 +494,17 @@ final class PegarouteExecutionBindingValidator {
       final mapped = _currencyMapper.map(currency);
       if (mapped.chain != expected.chain ||
           mapped.token != expected.token ||
-          mapped.nativeToken != expected.nativeToken) {
+          mapped.nativeToken != expected.nativeToken ||
+          expectedDecimals != null && currency.decimals != expectedDecimals) {
         throw const PegarouteBindingException('persisted asset binding changed');
       }
       return mapped;
     } on PegarouteCurrencyException {
       // SQLite restores qualified assets as generic currencies and drops the
       // contract or mint. Without that identity, accepting the row is unsafe.
+      if (currency.runtimeType != CryptoCurrency) {
+        throw const PegarouteBindingException('persisted typed asset identity is unavailable');
+      }
       final symbol = expectedToken.split('-').first;
       if (currency.title.toUpperCase() != symbol.toUpperCase() ||
           expectedDecimals != null && currency.decimals != expectedDecimals ||
@@ -620,7 +651,12 @@ final class PegarouteExecutionBindingValidator {
     required String sourceAmount,
     required String? providerDepositAddress,
     required String? providerDepositAmountExact,
+    required DateTime? providerDepositExpiry,
   }) {
+    if (providerDepositAddress == null &&
+        (providerDepositAmountExact != null || providerDepositExpiry != null)) {
+      throw const PegarouteBindingException('provider deposit details are incomplete');
+    }
     if (providerDepositAddress != null) {
       if (execution.to == null ||
           !_sameAddress(sourceChain, execution.to!, providerDepositAddress)) {
@@ -1210,7 +1246,6 @@ final class PegarouteExecutionBindingValidator {
       'AVAX',
       'ARBITRUM',
       'BASE',
-      'HYPERCORE',
     }.contains(normalizedChain)
         ? identity.toLowerCase()
         : identity;

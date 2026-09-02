@@ -12,6 +12,7 @@ TradeExecutionBinding _binding() => TradeExecutionBinding(
       sourceAmount: '1',
       sourceAmountBaseUnits: '1',
       sourceDecimals: 0,
+      destinationDecimals: 8,
       senderAddress: 'sender',
       refundAddress: null,
       destinationAddress: 'destination',

@@ -280,6 +280,9 @@ class PegarouteCurrencyMapper {
     }
     if (currency is SPLToken) return _solanaToken(currency.title, currency.mintAddress);
     if (currency is TronToken) return _tronToken(currency.title, currency.contractAddress);
+    if (currency.runtimeType != CryptoCurrency) {
+      throw PegarouteCurrencyException('${currency.title}/${currency.tag ?? ''}');
+    }
 
     final tag = currency.tag?.toUpperCase();
     final title = currency.title.toUpperCase();

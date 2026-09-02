@@ -5,6 +5,10 @@ import 'package:cw_core/erc20_token.dart';
 import 'package:cw_core/spl_token.dart';
 import 'package:cw_core/tron_token.dart';
 
+class _DerivedCurrency extends CryptoCurrency {
+  const _DerivedCurrency() : super(title: 'ETH', name: 'derived-eth', tag: 'ETH', decimals: 18);
+}
+
 void main() {
   const mapper = PegarouteCurrencyMapper();
 
@@ -173,5 +177,23 @@ void main() {
     );
     expect(() => mapper.map(CryptoCurrency.usdttrc20), throwsA(isA<PegarouteCurrencyException>()));
     expect(() => mapper.map(CryptoCurrency.usdcTrc20), throwsA(isA<PegarouteCurrencyException>()));
+  });
+
+  test('uses generic aliases only for base currencies', () {
+    expect(
+      mapper
+          .map(const CryptoCurrency(
+            title: 'ETH',
+            name: 'restored-eth',
+            tag: 'ETH',
+            decimals: 18,
+          ))
+          .token,
+      'ETH',
+    );
+    expect(
+      () => mapper.map(const _DerivedCurrency()),
+      throwsA(isA<PegarouteCurrencyException>()),
+    );
   });
 }

@@ -1112,11 +1112,30 @@ final class PegarouteQuoteResponse {
   final List<PegarouteWarning> warnings;
 }
 
+final class _PegarouteApiCapability {
+  const _PegarouteApiCapability();
+}
+
 final class PegarouteValidatedQuote {
-  const PegarouteValidatedQuote._({required this.requestJson, required this.response});
+  const PegarouteValidatedQuote._({
+    required this.requestJson,
+    required this.response,
+    required _PegarouteApiCapability capability,
+    required Uri origin,
+  })  : _capability = capability,
+        _origin = origin;
 
   final String requestJson;
   final PegarouteQuoteResponse response;
+  final _PegarouteApiCapability _capability;
+  final Uri _origin;
+
+  // The token is never exposed; this only lets the binding library verify its
+  // provenance without being able to manufacture one.
+  bool isBoundTo(Object client) =>
+      client is PegarouteApiClient &&
+      identical(_capability, client._capability) &&
+      _origin == client.configuration.origin;
 }
 
 final class PegarouteProviderInfo {
@@ -1588,6 +1607,7 @@ class PegarouteApiClient {
   final PegarouteGet _get;
   final PegaroutePost _post;
   final DateTime Function()? _clock;
+  final _PegarouteApiCapability _capability = _PegarouteApiCapability();
 
   Map<String, String> get _headers => {'X-API-Key': configuration.apiKey.trim()};
 
@@ -1600,9 +1620,15 @@ class PegarouteApiClient {
   Future<PegarouteValidatedQuote> quote(PegarouteQuoteRequest request) async {
     final query = request.toQuery();
     final requestJson = json.encode(query);
-    final response = await _get(_uri('/quote', query), _headers);
+    final origin = _origin;
+    final response = await _get(origin.replace(path: '/quote', queryParameters: query), _headers);
     final quote = _decode(response, PegarouteQuoteResponse.fromJson, expectedStatus: 200);
-    return PegarouteValidatedQuote._(requestJson: requestJson, response: quote);
+    return PegarouteValidatedQuote._(
+      requestJson: requestJson,
+      response: quote,
+      capability: _capability,
+      origin: origin,
+    );
   }
 
   Future<PegarouteCatalogResponse> chains() async {
@@ -1626,17 +1652,26 @@ class PegarouteApiClient {
 
   Future<PegarouteValidatedSwapResult> swap(PegarouteValidatedSwapPreflight preflight) async {
     final current = (_clock ?? DateTime.now)().toUtc();
-    if (!current.isBefore(preflight.quoteExpiresAt) ||
-        (preflight.routeExpiry != null && !current.isBefore(preflight.routeExpiry!.instant()))) {
-      throw const PegarouteBindingException('swap preflight is expired');
-    }
-    final response = await _post(
-      _uri('/swap'),
-      {..._headers, 'Content-Type': 'application/json'},
-      preflight.requestJson,
-    );
+    final uri = _uri('/swap');
+    final headers = {..._headers, 'Content-Type': 'application/json'};
+    // This is deliberately the last synchronous operation before the first
+    // POST. It remains consumed if the transport, provider, or response
+    // decoder fails, so an ambiguous attempt cannot be replayed.
+    preflight.consumeFor(this, current);
+    final response = await _post(uri, headers, preflight.requestJson);
     final decoded = _decode(response, PegarouteSwapResponse.fromJson, expectedStatus: 202);
-    return PegarouteValidatedSwapResult._(preflight: preflight, response: decoded);
+    return PegarouteValidatedSwapResult._(
+      preflight: preflight,
+      response: decoded,
+      capability: _capability,
+      origin: _origin,
+    );
+  }
+
+  Uri get _origin {
+    final origin = configuration.origin;
+    if (origin == null) throw const PegarouteUnavailableException();
+    return origin;
   }
 
   T _decode<T>(very_insecure_http_do_not_use.Response response, T Function(Object?) decoder,
@@ -1715,10 +1750,23 @@ class PegarouteSwapResponse {
 /// The constructor is private so callers cannot manufacture a result that did
 /// not come from the validated preflight POST boundary.
 final class PegarouteValidatedSwapResult {
-  const PegarouteValidatedSwapResult._({required this.preflight, required this.response});
+  const PegarouteValidatedSwapResult._({
+    required this.preflight,
+    required this.response,
+    required _PegarouteApiCapability capability,
+    required Uri origin,
+  })  : _capability = capability,
+        _origin = origin;
 
   final PegarouteValidatedSwapPreflight preflight;
   final PegarouteSwapResponse response;
+  final _PegarouteApiCapability _capability;
+  final Uri _origin;
+
+  bool isBoundTo(Object client) =>
+      client is PegarouteApiClient &&
+      identical(_capability, client._capability) &&
+      _origin == client.configuration.origin;
 }
 
 Map<String, String> _nonEmpty(Map<String, String?> values) => Map.fromEntries(

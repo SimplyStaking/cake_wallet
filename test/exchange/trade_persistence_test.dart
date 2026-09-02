@@ -1,13 +1,19 @@
+import 'dart:convert';
+import 'dart:io';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:cake_wallet/exchange/exchange_provider_description.dart';
+import 'package:cake_wallet/exchange/provider/pegaroute/pegaroute_api.dart';
+import 'package:cake_wallet/exchange/provider/pegaroute/pegaroute_configuration.dart';
+import 'package:cake_wallet/exchange/provider/pegaroute_exchange_provider.dart';
+import 'package:cake_wallet/exchange/provider/pegaroute/pegaroute_execution_binding.dart';
 import 'package:cake_wallet/exchange/trade.dart';
-import 'package:cake_wallet/exchange/trade_state.dart';
 import 'package:cake_wallet/exchange/trade_execution.dart';
 import 'package:cake_wallet/exchange/trade_refund.dart';
-import 'package:cake_wallet/exchange/provider/pegaroute/pegaroute_execution_binding.dart';
+import 'package:cake_wallet/exchange/trade_state.dart';
 import 'package:cw_core/crypto_currency.dart';
 import 'package:cw_core/db/sqlite.dart' as sqlite;
-import 'package:cw_core/erc20_token.dart';
+import 'package:http/http.dart' as very_insecure_http_do_not_use;
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 Future<Database> _openTradeDatabase() async {
@@ -48,101 +54,104 @@ CREATE TABLE Trade (
   return database;
 }
 
-Trade _status({
-  required String id,
-  required String state,
-  String amount = '1',
-  String? executionJson,
-  CryptoCurrency? from,
-  CryptoCurrency? to,
-  DateTime? expiredAt,
-  bool? isRefund,
-  String? inputAddress,
-  String? providerName,
-  String? memo,
-  String? receiveAmount,
-  String? outputTransaction,
-}) {
-  return Trade(
-    id: id,
-    amount: amount,
-    from: from,
-    to: to,
-    provider: ExchangeProviderDescription.pegaroute,
-    state: TradeState.deserialize(raw: state),
-    executionJson: executionJson,
-    expiredAt: expiredAt,
-    isRefund: isRefund,
-    inputAddress: inputAddress,
-    providerName: providerName,
-    memo: memo,
-    receiveAmount: receiveAmount,
-    outputTransaction: outputTransaction,
-  );
-}
-
-TradeExecutionBinding _binding() => TradeExecutionBinding(
-      tradeId: 'trade-fixture',
+Trade _boundTrade({String id = 'refresh', String state = 'created'}) {
+  final execution = TradeExecution(
+    family: 'evm',
+    mode: 'native-transfer',
+    sourceChain: 'ETH',
+    sourceToken: 'ETH',
+    nativeToken: 'ETH',
+    destinationChain: 'BTC',
+    destinationToken: 'BTC',
+    routeProvider: 'instaswap',
+    binding: TradeExecutionBinding(
+      tradeId: id,
       providerRaw: 17,
       quoteId: 'quote-fixture',
       quoteExpiresAt: DateTime.utc(2099),
       routeExpiry: null,
+      providerTransactionId: id,
       sourceAmount: '1',
-      sourceAmountBaseUnits: '1000000000000',
-      sourceDecimals: 12,
-      senderAddress: 'sender',
-      refundAddress: null,
-      destinationAddress: 'destination',
+      sourceAmountBaseUnits: '1000000000000000000',
+      sourceDecimals: 18,
+      destinationDecimals: 8,
+      senderAddress: '0x0000000000000000000000000000000000000002',
+      refundAddress: '0x0000000000000000000000000000000000000003',
+      destinationAddress: 'bc1qfixture',
       isSendAll: false,
       walletId: 'wallet-fixture',
-      walletChainId: null,
-      walletAddress: 'sender',
+      walletChainId: 1,
+      walletAddress: '0x0000000000000000000000000000000000000002',
       reviewedRouteJson:
-          '{"provider":"instaswap","providerType":"fixture","subprovider":"fixture","private":false,"expectedOutput":"0.99","fees":null,"estimatedTimeSeconds":0,"memo":null,"inboundAddress":"destination","router":null,"minAmount":null,"expiry":null,"gasRate":null,"resolvedFee":null,"openOceanRoute":null}',
+          '{"provider":"instaswap","providerType":"fixture","subprovider":null,"private":false,"expectedOutput":"0.99","fees":{"affiliate":"0","liquidity":"0.01","outbound":"0","subAffiliate":null,"total":"0.01","totalBps":null,"slippageBps":null},"estimatedTimeSeconds":120,"memo":null,"inboundAddress":"0x0000000000000000000000000000000000000001","router":null,"minAmount":null,"expiry":null,"gasRate":null,"resolvedFee":null,"openOceanRoute":null}',
       providerReferenceId: null,
-    );
+    ),
+    payload: const {
+      'chainId': 1,
+      'to': '0x0000000000000000000000000000000000000001',
+      'data': null,
+      'value': {'display': '1', 'baseUnits': '1000000000000000000'},
+      'gasLimit': null,
+      'memo': null,
+      'approval': null,
+      'transferAmount': null,
+    },
+  );
+  return Trade(
+    id: id,
+    amount: '1',
+    from: CryptoCurrency.eth,
+    to: CryptoCurrency.btc,
+    provider: ExchangeProviderDescription.pegaroute,
+    state: TradeState.deserialize(raw: state),
+    senderAddress: '0x0000000000000000000000000000000000000002',
+    refundAddress: '0x0000000000000000000000000000000000000003',
+    payoutAddress: 'bc1qfixture',
+    walletId: 'wallet-fixture',
+    fromWalletAddress: '0x0000000000000000000000000000000000000002',
+    chainId: 1,
+    providerName: 'instaswap',
+    executionJson: execution.encode(),
+  );
+}
+
+Map<String, dynamic> _statusResponse(String id, {String internalStatus = 'submitted'}) {
+  final value = json.decode(
+    File('test/exchange/fixtures/pegaroute/status_refund.json').readAsStringSync(),
+  ) as Map<String, dynamic>;
+  value['transactionId'] = id;
+  value['internalStatus'] = internalStatus;
+  value['status'] = internalStatus == 'completed'
+      ? 'success'
+      : internalStatus == 'failed' || internalStatus == 'refunded'
+          ? 'fail'
+          : 'pending';
+  return value;
+}
+
+PegarouteExchangeProvider _provider(
+  Map<String, dynamic> response, {
+  Future<void> Function()? beforeResponse,
+}) {
+  return PegarouteExchangeProvider(
+    apiClient: PegarouteApiClient(
+      configuration: const PegarouteConfiguration(baseUrl: 'https://example.test', apiKey: 'test'),
+      get: (uri, headers) async {
+        await beforeResponse?.call();
+        return very_insecure_http_do_not_use.Response(json.encode(response), 200);
+      },
+    ),
+  );
+}
 
 void main() {
-  test('persists sender, execution, and refund envelopes in the trade row', () {
-    final execution = TradeExecution(
-      family: 'other',
-      mode: 'deposit-transfer',
-      sourceChain: 'XMR',
-      sourceToken: 'XMR',
-      nativeToken: 'XMR',
-      destinationChain: 'BTC',
-      destinationToken: 'BTC',
-      binding: _binding(),
-      routeProvider: 'instaswap',
-      subprovider: 'fixture',
-      privateIntent: false,
-      payload: const {
-        'chain': 'XMR',
-        'to': 'destination',
-        'amount': {'display': '1', 'baseUnits': '1000000000000'},
-        'memo': null,
-      },
-    );
-    final refund = TradeRefund(configuredAddress: 'configured');
-    final trade = Trade(
-      id: 'trade-fixture',
-      amount: '1',
-      from: CryptoCurrency.xmr,
-      to: CryptoCurrency.btc,
-      provider: ExchangeProviderDescription.pegaroute,
-      senderAddress: 'sender',
-      payoutAddress: 'destination',
-      walletId: 'wallet-fixture',
-      fromWalletAddress: 'sender',
-      providerName: 'instaswap',
-      executionJson: execution.encode(),
-      refundJson: refund.encode(),
-    );
-
-    final reloaded = Trade.fromSqliteRow(trade.toSqliteMap()..['tradeId'] = 1);
+  test('round-trips the persisted execution and refund envelopes', () {
+    final trade = _boundTrade();
+    trade.refundJson = TradeRefund(configuredAddress: 'configured').encode();
+    final row = trade.toSqliteMap()..['tradeId'] = 1;
+    final reloaded = Trade.fromSqliteRow(row);
     expect(reloaded.provider, ExchangeProviderDescription.pegaroute);
-    expect(reloaded.senderAddress, 'sender');
-    expect(TradeExecution.fromJsonString(reloaded.executionJson!).family, 'other');
+    expect(reloaded.executionJson, trade.executionJson);
     expect(TradeRefund.fromJsonString(reloaded.refundJson!).configuredAddress, 'configured');
     expect(
       () => const PegarouteExecutionBindingValidator().validatePersisted(trade: reloaded),
@@ -150,439 +159,210 @@ void main() {
     );
   });
 
-  test('keeps unreadable persisted envelopes as raw values', () {
-    final trade = Trade.fromSqliteRow({
-      'tradeId': 1,
-      'id': 'legacy-trade',
-      'providerRaw': 17,
-      'amount': '1',
-      'stateRaw': 'created',
-      'executionJson': '{"version":99}',
-      'refundJson': '{"version":99}',
+  test('the old public Pegaroute merge boundary is unusable', () async {
+    final trade = _boundTrade();
+    await expectLater(
+      trade.mergeAndSavePegaroute(
+        Trade(id: trade.id, amount: '1', state: TradeState.confirming),
+        expectedRawExecutionJson: trade.executionJson!,
+      ),
+      throwsA(isA<StateError>()),
+    );
+    trade.mergeFindTradeByIdResult(Trade(id: trade.id, amount: '1', state: TradeState.success));
+    expect(trade.state, TradeState.created);
+  });
+
+  test('rejects an unsaved caller before transport', () async {
+    var calls = 0;
+    final provider = _provider(
+      _statusResponse('refresh'),
+      beforeResponse: () async {
+        calls++;
+      },
+    );
+    final unsaved = _boundTrade();
+    await expectLater(
+      provider.refreshTradeStatus(trade: unsaved),
+      throwsA(isA<PegarouteBindingException>()),
+    );
+    expect(calls, 0);
+  });
+
+  test('commits a valid forward status and syncs only after commit', () async {
+    final database = await _openTradeDatabase();
+    addTearDown(() async {
+      await database.close();
+      sqlite.db = null;
     });
-    expect(trade.provider, ExchangeProviderDescription.pegaroute);
-    expect(trade.executionJson, '{"version":99}');
-    expect(trade.refundJson, '{"version":99}');
-    expect(trade.toSqliteMap()['executionJson'], '{"version":99}');
+    final trade = _boundTrade();
+    await trade.save();
+
+    final result = await _provider(_statusResponse(trade.id)).refreshTradeStatus(trade: trade);
+    expect(identical(result, trade), isTrue);
+    expect(trade.state, TradeState.confirming);
+    expect(trade.receiveAmount, '0.01');
+    expect(trade.outputTransaction, 'output-hash-fixture');
+    expect((await Trade.getByTradeId(trade.id))!.state, TradeState.confirming);
   });
 
-  test('does not replace a persisted execution payload during status merge', () {
-    final trade = Trade(id: 'trade', amount: '1', executionJson: 'original');
-    trade.mergeFindTradeByIdResult(Trade(id: 'trade', amount: '1', executionJson: 'replacement'));
-    expect(trade.executionJson, 'original');
+  test('rejects every latest-row binding scalar mutation', () async {
+    final mutations = <String, dynamic>{
+      'amount': '2',
+      'walletId': 'other-wallet',
+      'providerName': 'other-provider',
+      'providerId': 'other-reference',
+      'senderAddress': '0x0000000000000000000000000000000000000004',
+      'fromWalletAddress': '0x0000000000000000000000000000000000000004',
+      'payoutAddress': 'different-destination',
+      'chainId': 56,
+      'executionJson': '{"changed":true}',
+    };
+    for (final entry in mutations.entries) {
+      final database = await _openTradeDatabase();
+      final trade = _boundTrade(id: 'mutation-${entry.key}');
+      await trade.save();
+      await database.update(
+        Trade.tableName,
+        {entry.key: entry.value},
+        where: 'id = ?',
+        whereArgs: [trade.id],
+      );
+      await expectLater(
+        _provider(_statusResponse(trade.id)).refreshTradeStatus(trade: trade),
+        throwsA(isA<PegarouteBindingException>()),
+      );
+      final latest = await Trade.getByTradeId(trade.id);
+      expect(latest!.state, TradeState.created, reason: entry.key);
+      await database.close();
+      sqlite.db = null;
+    }
   });
 
-  test('does not regress terminal Pegaroute status during status merge', () {
-    final trade = Trade(
-      id: 'trade',
-      amount: '1',
-      provider: ExchangeProviderDescription.pegaroute,
-      state: TradeState.success,
+  test('rejects a deleted and recreated row with the same public id', () async {
+    final database = await _openTradeDatabase();
+    addTearDown(() async {
+      await database.close();
+      sqlite.db = null;
+    });
+    final trade = _boundTrade(id: 'aba');
+    await trade.save();
+    final originalInternalId = trade.internalId;
+    final provider = _provider(
+      _statusResponse(trade.id),
+      beforeResponse: () async {
+        await Trade.deleteTrade(trade);
+        await _boundTrade(id: trade.id).save();
+      },
     );
-    trade.mergeFindTradeByIdResult(
-      Trade(
-        id: 'trade',
-        amount: '1',
-        state: TradeState.created,
+
+    await expectLater(
+      provider.refreshTradeStatus(trade: trade),
+      throwsA(isA<StateError>()),
+    );
+    final replacement = await Trade.getByTradeId(trade.id);
+    expect(replacement!.internalId, isNot(originalInternalId));
+    expect(replacement.state, TradeState.created);
+  });
+
+  test('serializes concurrent refreshes against the latest row', () async {
+    final database = await _openTradeDatabase();
+    addTearDown(() async {
+      await database.close();
+      sqlite.db = null;
+    });
+    final original = _boundTrade(id: 'race');
+    await original.save();
+    final first = await Trade.getByTradeId(original.id);
+    final second = await Trade.getByTradeId(original.id);
+    var call = 0;
+    final provider = PegarouteExchangeProvider(
+      apiClient: PegarouteApiClient(
+        configuration:
+            const PegarouteConfiguration(baseUrl: 'https://example.test', apiKey: 'test'),
+        get: (uri, headers) async {
+          final status = call++ == 0 ? 'submitted' : 'executing';
+          return very_insecure_http_do_not_use.Response(
+            json.encode(_statusResponse(original.id, internalStatus: status)),
+            200,
+          );
+        },
       ),
     );
+    await Future.wait([
+      provider.refreshTradeStatus(trade: first!),
+      provider.refreshTradeStatus(trade: second!),
+    ]);
+    final persisted = await Trade.getByTradeId(original.id);
+    expect(persisted!.state, TradeState.exchanging);
+  });
+
+  test('applies the forward graph and ignores a stale scalar response', () async {
+    final database = await _openTradeDatabase();
+    addTearDown(() async {
+      await database.close();
+      sqlite.db = null;
+    });
+    final trade = _boundTrade(id: 'graph');
+    await trade.save();
+    for (final status in ['submitted', 'executing', 'confirming', 'completed']) {
+      await _provider(_statusResponse(trade.id, internalStatus: status))
+          .refreshTradeStatus(trade: trade);
+    }
     expect(trade.state, TradeState.success);
+    trade.receiveAmount = 'local';
+    await trade.save();
+    await _provider(_statusResponse(trade.id, internalStatus: 'submitted'))
+        .refreshTradeStatus(trade: trade);
+    expect(trade.state, TradeState.success);
+    expect(trade.receiveAmount, 'local');
   });
 
-  test('does not populate a missing creation execution during status merge', () {
-    final trade = Trade(id: 'trade', amount: '1');
-    trade.mergeFindTradeByIdResult(Trade(id: 'trade', amount: '1', executionJson: 'observed'));
-    expect(trade.executionJson, isNull);
-  });
-
-  test('fills a missing sender once but never replaces persisted sender intent', () {
-    final missing = Trade(id: 'missing', amount: '1');
-    missing.mergeFindTradeByIdResult(Trade(id: 'missing', amount: '1', senderAddress: 'observed'));
-    expect(missing.senderAddress, 'observed');
-
-    final persisted = Trade(id: 'persisted', amount: '1', senderAddress: 'configured');
-    persisted.mergeFindTradeByIdResult(
-      Trade(id: 'persisted', amount: '1', senderAddress: 'different'),
-    );
-    expect(persisted.senderAddress, 'configured');
-  });
-
-  test('preserves configured refund intent across status merges', () {
-    final trade = Trade(
-      id: 'persisted',
-      amount: '1',
-      refundAddress: 'configured',
-      refundJson: TradeRefund(configuredAddress: 'configured').encode(),
-    );
-    trade.mergeFindTradeByIdResult(
-      Trade(
-        id: 'persisted',
-        amount: '1',
-        refundAddress: 'different',
-        refundJson: TradeRefund(configuredAddress: 'different').encode(),
-      ),
-    );
-    expect(trade.refundAddress, 'configured');
-    expect(TradeRefund.fromJsonString(trade.refundJson!).configuredAddress, 'configured');
-  });
-
-  test('seeds missing refund envelope from persisted configured intent', () {
-    final trade = Trade(
-      id: 'persisted',
-      amount: '1',
-      refundAddress: 'configured',
-    );
-    trade.mergeFindTradeByIdResult(
-      Trade(
-        id: 'persisted',
-        amount: '1',
-        refundAddress: 'different',
-        refundJson: TradeRefund(configuredAddress: 'different').encode(),
-      ),
-    );
-    expect(trade.refundAddress, 'configured');
-    expect(TradeRefund.fromJsonString(trade.refundJson!).configuredAddress, 'configured');
-  });
-
-  test('preserves unknown current-version envelopes during status merge', () {
-    const unknownExecution = '{"version":1,"future":true}';
-    const unknownRefund = '{"version":1,"future":true}';
-    final trade =
-        Trade(id: 'trade', amount: '1', executionJson: unknownExecution, refundJson: unknownRefund);
-    trade.mergeFindTradeByIdResult(
-      Trade(
-        id: 'trade',
-        amount: '1',
-        executionJson: '{"version":1,"future":false}',
-        refundJson: '{"version":1,"future":false}',
-      ),
-    );
-    expect(trade.executionJson, unknownExecution);
-    expect(trade.refundJson, unknownRefund);
-  });
-
-  test('does not regress completed refund evidence', () {
-    final completed = TradeRefund(
+  test('does not let generic merge alter Pegaroute refund evidence', () {
+    final refund = TradeRefund(
       status: 'completed',
       chain: 'ETH',
       amount: '1',
-      originalAmount: '1.1',
-      feeDeducted: '0.1',
-      feeDescription: 'network fee',
-      observedAddress: 'observed',
+      originalAmount: '1',
+      feeDeducted: '0',
+      feeDescription: 'none',
+      observedAddress: 'refund-address',
     );
-    final trade = Trade(id: 'trade', amount: '1', refundJson: completed.encode());
+    final trade = Trade(
+      id: 'refund',
+      amount: '1',
+      provider: ExchangeProviderDescription.pegaroute,
+      refundJson: refund.encode(),
+    );
     trade.mergeFindTradeByIdResult(
       Trade(
-        id: 'trade',
+        id: trade.id,
         amount: '1',
         refundJson: TradeRefund(
           status: 'pending',
           chain: 'ETH',
           amount: '1',
-          originalAmount: '1.1',
-          feeDeducted: '0.1',
-          feeDescription: 'network fee',
-          observedAddress: 'observed',
+          originalAmount: '1',
+          feeDeducted: '0',
+          feeDescription: 'none',
+          observedAddress: 'refund-address',
         ).encode(),
       ),
     );
     expect(TradeRefund.fromJsonString(trade.refundJson!).status, 'completed');
   });
 
-  test('atomically rejects a status validated against a different execution', () async {
+  test('advances a refunding trade to the terminal refunded state', () async {
     final database = await _openTradeDatabase();
     addTearDown(() async {
       await database.close();
       sqlite.db = null;
     });
-
-    final trade = _status(id: 'atomic', state: 'created', executionJson: 'execution-a');
-    await trade.save();
-    final update = _status(id: 'atomic', state: 'confirming', receiveAmount: '2');
-
-    await expectLater(
-      trade.mergeAndSavePegaroute(update, expectedRawExecutionJson: 'execution-b'),
-      throwsA(isA<StateError>()),
-    );
-    final persisted = await Trade.getByTradeId('atomic');
-    expect(persisted!.state, TradeState.created);
-    expect(persisted.receiveAmount, isNull);
-  });
-
-  test('requires the caller and latest row to have the exact execution context', () async {
-    final database = await _openTradeDatabase();
-    addTearDown(() async {
-      await database.close();
-      sqlite.db = null;
-    });
-
-    final trade = _status(id: 'caller-context', state: 'created', executionJson: 'execution-a');
-    await trade.save();
-    await database.update(
-      Trade.tableName,
-      {'executionJson': 'execution-b'},
-      where: 'id = ?',
-      whereArgs: ['caller-context'],
-    );
-
-    await expectLater(
-      trade.mergeAndSavePegaroute(
-        _status(id: 'caller-context', state: 'confirming'),
-        expectedRawExecutionJson: 'execution-b',
-      ),
-      throwsA(isA<StateError>()),
-    );
-    expect((await Trade.getByTradeId('caller-context'))!.state, TradeState.created);
-  });
-
-  test('applies Pegaroute stale, same-state, and forward evidence rules', () async {
-    final database = await _openTradeDatabase();
-    addTearDown(() async {
-      await database.close();
-      sqlite.db = null;
-    });
-
-    final localFrom = Erc20Token(
-      name: 'SPX6900',
-      symbol: 'SPX',
-      contractAddress: '0x50da645f148798f68ef2d7db7c1cb22a6819bb2c',
-      decimal: 18,
-      tag: 'BASE',
-    );
-    final trade = _status(
-      id: 'evidence',
-      state: 'exchanging',
-      executionJson: 'execution',
-      from: localFrom,
-      to: CryptoCurrency.btc,
-      amount: 'local-amount',
-      receiveAmount: '1',
-      outputTransaction: 'old-tx',
-      expiredAt: DateTime.utc(2026, 1),
-      inputAddress: 'old-input',
-      providerName: 'old-provider',
-    );
-    trade.payoutAddress = 'local-payout';
-    trade.memo = 'local-memo';
+    final trade = _boundTrade(id: 'refund-transition', state: 'refund');
     await trade.save();
 
-    await trade.mergeAndSavePegaroute(
-      _status(
-        id: 'evidence',
-        state: 'confirming',
-        receiveAmount: 'stale',
-        outputTransaction: 'stale-tx',
-        expiredAt: DateTime.utc(2027, 1),
-        inputAddress: 'stale-input',
-        providerName: 'stale-provider',
-        isRefund: true,
-      ),
-      expectedRawExecutionJson: 'execution',
-    );
-    expect(trade.state, TradeState.exchanging);
-    expect(trade.receiveAmount, '1');
-    expect(trade.outputTransaction, 'old-tx');
-    expect(trade.expiredAt!.millisecondsSinceEpoch, DateTime.utc(2026, 1).millisecondsSinceEpoch);
-    expect(trade.inputAddress, 'old-input');
-    expect(trade.providerName, 'old-provider');
-    expect(trade.isRefund, isFalse);
+    await _provider(_statusResponse(trade.id, internalStatus: 'refunded'))
+        .refreshTradeStatus(trade: trade);
 
-    await trade.mergeAndSavePegaroute(
-      _status(id: 'evidence', state: 'exchanging', receiveAmount: 'conflict'),
-      expectedRawExecutionJson: 'execution',
-    );
-    expect(trade.receiveAmount, '1');
-
-    await trade.mergeAndSavePegaroute(
-      _status(id: 'evidence', state: 'exchanging', outputTransaction: 'filled-tx'),
-      expectedRawExecutionJson: 'execution',
-    );
-    expect(trade.outputTransaction, 'old-tx');
-
-    final missing = _status(id: 'missing', state: 'created', executionJson: 'execution');
-    await missing.save();
-    await missing.mergeAndSavePegaroute(
-      _status(id: 'missing', state: 'created', receiveAmount: 'filled'),
-      expectedRawExecutionJson: 'execution',
-    );
-    expect(missing.receiveAmount, 'filled');
-
-    await trade.mergeAndSavePegaroute(
-      _status(
-        id: 'evidence',
-        state: 'sending',
-        amount: 'remote-amount',
-        from: CryptoCurrency.btc,
-        to: CryptoCurrency.eth,
-        receiveAmount: '2',
-        outputTransaction: 'new-tx',
-        inputAddress: 'new-input',
-        providerName: 'new-provider',
-        memo: 'remote-memo',
-      ),
-      expectedRawExecutionJson: 'execution',
-    );
-    expect(trade.state, TradeState.sending);
-    expect(trade.receiveAmount, '2');
-    expect(trade.outputTransaction, 'new-tx');
-    expect(trade.inputAddress, 'new-input');
-    expect(trade.amount, 'local-amount');
-    expect(identical(trade.from, localFrom), isTrue);
-    expect(trade.to, CryptoCurrency.btc);
-    expect(trade.payoutAddress, 'local-payout');
-    expect(trade.providerName, 'old-provider');
-    expect(trade.memo, 'local-memo');
-
-    await trade.mergeAndSavePegaroute(
-      _status(id: 'evidence', state: 'success', outputTransaction: ''),
-      expectedRawExecutionJson: 'execution',
-    );
-    expect(trade.outputTransaction, 'new-tx');
-  });
-
-  test('applies the complete Pegaroute state graph in order', () async {
-    final database = await _openTradeDatabase();
-    addTearDown(() async {
-      await database.close();
-      sqlite.db = null;
-    });
-
-    final trade = _status(id: 'graph', state: 'created', executionJson: 'execution');
-    await trade.save();
-
-    Future<void> update(String state) async {
-      await trade.mergeAndSavePegaroute(
-        _status(id: 'graph', state: state),
-        expectedRawExecutionJson: 'execution',
-      );
-    }
-
-    await update('sending'); // Normal states may be skipped.
-    await update('success');
-    await update('created'); // Success is terminal.
-    expect(trade.state, TradeState.success);
-
-    final refund = _status(id: 'refund-graph', state: 'created', executionJson: 'execution');
-    await refund.save();
-    await refund.mergeAndSavePegaroute(
-      _status(id: 'refund-graph', state: 'refund'),
-      expectedRawExecutionJson: 'execution',
-    );
-    await refund.mergeAndSavePegaroute(
-      _status(id: 'refund-graph', state: 'refunded'),
-      expectedRawExecutionJson: 'execution',
-    );
-    expect(refund.state, TradeState.refunded);
-
-    final invalidRefund =
-        _status(id: 'invalid-refund', state: 'refund', executionJson: 'execution');
-    await invalidRefund.save();
-    await invalidRefund.mergeAndSavePegaroute(
-      _status(id: 'invalid-refund', state: 'failed'),
-      expectedRawExecutionJson: 'execution',
-    );
-    expect(invalidRefund.state, TradeState.refund);
-
-    final invalidFailed =
-        _status(id: 'invalid-failed', state: 'failed', executionJson: 'execution');
-    await invalidFailed.save();
-    await invalidFailed.mergeAndSavePegaroute(
-      _status(id: 'invalid-failed', state: 'success'),
-      expectedRawExecutionJson: 'execution',
-    );
-    expect(invalidFailed.state, TradeState.failed);
-  });
-
-  test('enforces Pegaroute refund, failed, and terminal transitions', () async {
-    final database = await _openTradeDatabase();
-    addTearDown(() async {
-      await database.close();
-      sqlite.db = null;
-    });
-
-    Future<Trade> create(String id, String state) async {
-      final trade = _status(id: id, state: state, executionJson: 'execution');
-      await trade.save();
-      return trade;
-    }
-
-    final refund = await create('refund', 'refund');
-    await refund.mergeAndSavePegaroute(
-      _status(id: 'refund', state: 'confirming', receiveAmount: 'stale'),
-      expectedRawExecutionJson: 'execution',
-    );
-    expect(refund.state, TradeState.refund);
-    expect(refund.receiveAmount, isNull);
-    await refund.mergeAndSavePegaroute(
-      _status(id: 'refund', state: 'refunded'),
-      expectedRawExecutionJson: 'execution',
-    );
-    expect(refund.state, TradeState.refunded);
-
-    final failed = await create('failed', 'failed');
-    await failed.mergeAndSavePegaroute(
-      _status(id: 'failed', state: 'created', receiveAmount: 'stale'),
-      expectedRawExecutionJson: 'execution',
-    );
-    expect(failed.state, TradeState.failed);
-    expect(failed.receiveAmount, isNull);
-    await failed.mergeAndSavePegaroute(
-      _status(id: 'failed', state: 'refunded'),
-      expectedRawExecutionJson: 'execution',
-    );
-    expect(failed.state, TradeState.refunded);
-
-    final success = await create('success', 'success');
-    await success.mergeAndSavePegaroute(
-      _status(id: 'success', state: 'created', receiveAmount: 'stale'),
-      expectedRawExecutionJson: 'execution',
-    );
-    expect(success.state, TradeState.success);
-    expect(success.receiveAmount, isNull);
-    await success.mergeAndSavePegaroute(
-      _status(id: 'success', state: 'refunded'),
-      expectedRawExecutionJson: 'execution',
-    );
-    expect(success.state, TradeState.success);
-  });
-
-  test('serializes status merges from separate Trade instances', () async {
-    final database = await _openTradeDatabase();
-    addTearDown(() async {
-      await database.close();
-      sqlite.db = null;
-    });
-
-    final original = _status(id: 'concurrent', state: 'created', executionJson: 'execution');
-    await original.save();
-    final first = await Trade.getByTradeId('concurrent');
-    final second = await Trade.getByTradeId('concurrent');
-    await Future.wait([
-      first!.mergeAndSavePegaroute(
-        _status(
-          id: 'concurrent',
-          state: 'confirming',
-          receiveAmount: 'lower',
-          outputTransaction: 'lower-tx',
-        ),
-        expectedRawExecutionJson: 'execution',
-      ),
-      second!.mergeAndSavePegaroute(
-        _status(
-          id: 'concurrent',
-          state: 'exchanging',
-          receiveAmount: 'higher',
-          outputTransaction: 'higher-tx',
-        ),
-        expectedRawExecutionJson: 'execution',
-      ),
-    ]);
-
-    final persisted = await Trade.getByTradeId('concurrent');
-    expect(persisted!.state, TradeState.exchanging);
-    expect(persisted.receiveAmount, 'higher');
-    expect(persisted.outputTransaction, 'higher-tx');
-    expect(first.state == TradeState.exchanging || second.state == TradeState.exchanging, isTrue);
+    expect(trade.state, TradeState.refunded);
   });
 }
