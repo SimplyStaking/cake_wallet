@@ -190,10 +190,9 @@ final class PegarouteExecutionBindingValidator {
     }
   }
 
-  TradeExecution bindSwapResponse({
-    required PegarouteValidatedSwapPreflight preflight,
-    required PegarouteSwapResponse response,
-  }) {
+  TradeExecution bindSwapResponse({required PegarouteValidatedSwapResult result}) {
+    final preflight = result.preflight;
+    final response = result.response;
     final reviewedRoute = _reviewedRoute(preflight.routeSnapshotJson);
     if (response.transactionId.trim().isEmpty ||
         response.provider.name != reviewedRoute['provider'] ||
@@ -412,7 +411,11 @@ final class PegarouteExecutionBindingValidator {
       throw const PegarouteBindingException('status context does not match execution binding');
     }
     _validateStatusLifecycle(response);
-    _validateStatusProviderDetails(binding: binding, response: response);
+    _validateStatusProviderDetails(
+      binding: binding,
+      response: response,
+      sourceChain: execution.sourceChain,
+    );
     if (response.provider?.name != null && response.provider!.name != execution.routeProvider) {
       throw const PegarouteBindingException('status provider does not match execution binding');
     }
@@ -454,15 +457,23 @@ final class PegarouteExecutionBindingValidator {
     String? expectedNativeToken,
     int? expectedDecimals,
   }) {
+    final expected = _currencyMapper.validateCanonicalTuple(
+      chain: expectedChain,
+      token: expectedToken,
+      nativeToken:
+          expectedNativeToken ?? PegarouteCurrencyMapper.nativeTokenForChain(expectedChain),
+    );
     try {
       final mapped = _currencyMapper.map(currency);
-      if (mapped.chain != expectedChain ||
-          mapped.token != expectedToken ||
-          expectedNativeToken != null && mapped.nativeToken != expectedNativeToken) {
+      if (mapped.chain != expected.chain ||
+          mapped.token != expected.token ||
+          mapped.nativeToken != expected.nativeToken) {
         throw const PegarouteBindingException('persisted asset binding changed');
       }
       return mapped;
     } on PegarouteCurrencyException {
+      // SQLite restores qualified assets as generic currencies and drops the
+      // contract or mint. Without that identity, accepting the row is unsafe.
       final symbol = expectedToken.split('-').first;
       if (currency.title.toUpperCase() != symbol.toUpperCase() ||
           expectedDecimals != null && currency.decimals != expectedDecimals ||
@@ -471,12 +482,7 @@ final class PegarouteExecutionBindingValidator {
               PegarouteCurrencyMapper.nativeTokenForChain(expectedChain) != expectedNativeToken) {
         throw const PegarouteBindingException('persisted asset metadata changed');
       }
-      return PegarouteAssetId(
-        chain: expectedChain,
-        token: expectedToken,
-        nativeToken:
-            expectedNativeToken ?? PegarouteCurrencyMapper.nativeTokenForChain(expectedChain),
-      );
+      return expected;
     }
   }
 
@@ -575,6 +581,9 @@ final class PegarouteExecutionBindingValidator {
           !_sameAddress(sourceChain, execution.to!, details.depositAddress)) {
         throw const PegarouteBindingException('provider deposit target changed');
       }
+      if (details.presentFields.contains('expiresAt')) {
+        _parseOptionalDateTime(details.expiresAt, 'provider deposit expiry');
+      }
       final inbound = route['inboundAddress'];
       if (inbound is String &&
           inbound.isNotEmpty &&
@@ -612,6 +621,18 @@ final class PegarouteExecutionBindingValidator {
     required String? providerDepositAddress,
     required String? providerDepositAmountExact,
   }) {
+    if (providerDepositAddress != null) {
+      if (execution.to == null ||
+          !_sameAddress(sourceChain, execution.to!, providerDepositAddress)) {
+        throw const PegarouteBindingException('persisted provider deposit target changed');
+      }
+      final inbound = route['inboundAddress'];
+      if (inbound is String &&
+          inbound.isNotEmpty &&
+          !_sameAddress(sourceChain, providerDepositAddress, inbound)) {
+        throw const PegarouteBindingException('persisted provider deposit address changed');
+      }
+    }
     final expectedTarget = _expectedTarget(
       route,
       execution,
@@ -848,8 +869,6 @@ final class PegarouteExecutionBindingValidator {
       'AVAX',
       'ARBITRUM',
       'BASE',
-      'SUI',
-      'HYPERCORE',
     };
     return folded.contains(chain.toUpperCase()) ? a.toLowerCase() == b.toLowerCase() : a == b;
   }
@@ -934,7 +953,7 @@ final class PegarouteExecutionBindingValidator {
         map['providerType'] is! String ||
         (map['providerType'] as String).isEmpty ||
         (map['subprovider'] != null && map['subprovider'] is! String) ||
-        map['private'] is! bool ||
+        !_validSnapshotPrivate(map['private']) ||
         map['expectedOutput'] is! String ||
         (map['memo'] != null && map['memo'] is! String) ||
         (map['inboundAddress'] != null && map['inboundAddress'] is! String) ||
@@ -962,6 +981,16 @@ final class PegarouteExecutionBindingValidator {
 
   static bool _validSnapshotEstimatedTime(Object? value) =>
       value is num && value.isFinite && value >= 0;
+
+  static bool _validSnapshotPrivate(Object? value) {
+    if (value == null) return false;
+    try {
+      PegaroutePrivateValue(value);
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
 
   static bool _validSnapshotFees(Object? value) {
     if (value == null) return true;
@@ -1081,24 +1110,51 @@ final class PegarouteExecutionBindingValidator {
   static void _validateStatusProviderDetails({
     required TradeExecutionBinding binding,
     required PegarouteStatusResponse response,
+    required String sourceChain,
   }) {
-    final details = response.input.instaswapSwapLite;
-    if (details == null) return;
-    if (binding.providerReferenceId == null ||
-        binding.providerDepositAddress == null ||
-        details.txid != binding.providerReferenceId) {
-      throw const PegarouteBindingException('status provider details are not bound');
+    final locations = [
+      response.input.instaswapSwapLite,
+      response.provider?.instaswapSwapLite,
+    ].whereType<PegarouteInstaswapSnapshot>().toList(growable: false);
+    if (locations.length == 2 && !_sameProviderDetails(sourceChain, locations[0], locations[1])) {
+      throw const PegarouteBindingException('status provider details conflict');
     }
-    if (details.depositAddress != binding.providerDepositAddress ||
-        details.presentFields.contains('depositAmountExact') &&
-            (binding.providerDepositAmountExact == null ||
-                details.depositAmountExact != binding.providerDepositAmountExact) ||
-        details.presentFields.contains('expiresAt') &&
-            (binding.providerDepositExpiry == null ||
-                _parseOptionalDateTime(details.expiresAt, 'provider deposit expiry') !=
-                    binding.providerDepositExpiry)) {
-      throw const PegarouteBindingException('status provider details changed');
+    for (final details in locations) {
+      if (binding.providerReferenceId == null ||
+          binding.providerDepositAddress == null ||
+          details.txid != binding.providerReferenceId ||
+          !_sameAddress(sourceChain, details.depositAddress, binding.providerDepositAddress!)) {
+        throw const PegarouteBindingException('status provider details are not bound');
+      }
+      if (details.presentFields.contains('depositAmountExact') &&
+          (binding.providerDepositAmountExact == null ||
+              details.depositAmountExact != binding.providerDepositAmountExact)) {
+        throw const PegarouteBindingException('status provider details changed');
+      }
+      if (details.presentFields.contains('expiresAt') &&
+          (binding.providerDepositExpiry == null ||
+              _parseOptionalDateTime(details.expiresAt, 'provider deposit expiry') !=
+                  binding.providerDepositExpiry)) {
+        throw const PegarouteBindingException('status provider details changed');
+      }
     }
+  }
+
+  static bool _sameProviderDetails(
+    String sourceChain,
+    PegarouteInstaswapSnapshot first,
+    PegarouteInstaswapSnapshot second,
+  ) {
+    if (first.txid != second.txid ||
+        !_sameAddress(sourceChain, first.depositAddress, second.depositAddress)) return false;
+    if (first.presentFields.contains('depositAmountExact') &&
+        second.presentFields.contains('depositAmountExact') &&
+        first.depositAmountExact != second.depositAmountExact) return false;
+    if (first.presentFields.contains('expiresAt') && second.presentFields.contains('expiresAt')) {
+      if (_parseOptionalDateTime(first.expiresAt, 'provider deposit expiry') !=
+          _parseOptionalDateTime(second.expiresAt, 'provider deposit expiry')) return false;
+    }
+    return true;
   }
 
   static Map<String, dynamic> _routeSnapshot(PegarouteRoute route, {String? providerType}) => {

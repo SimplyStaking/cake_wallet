@@ -10,5 +10,7 @@ class PegarouteCapabilityGate {
 
   bool supportsRoute(PegarouteRoute route) => false;
 
-  bool get hasExecutionHandlers => supportedExecutionKeys.isNotEmpty;
+  // Phase 1 has no registered handlers, regardless of declarative capability
+  // metadata supplied by a future integration.
+  bool get hasExecutionHandlers => false;
 }

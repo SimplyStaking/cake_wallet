@@ -137,6 +137,7 @@ final class PegarouteQuoteRequest {
         destinationAddress = _optionalRequestId(destinationAddress, 'destinationAddress'),
         senderAddress = _normalizeRequestSender(senderAddress),
         refundAddress = _normalizeRequestRefund(
+          fromChain,
           _normalizeRequestSender(senderAddress),
           refundAddress,
         ),
@@ -264,6 +265,7 @@ final class PegarouteSwapRequest {
         destinationAddress = _optionalRequestId(destinationAddress, 'destinationAddress'),
         senderAddress = _normalizeRequestSender(senderAddress),
         refundAddress = _normalizeRequestRefund(
+          fromChain,
           _normalizeRequestSender(senderAddress),
           refundAddress,
         ),
@@ -1622,7 +1624,7 @@ class PegarouteApiClient {
     return _decode(response, PegarouteStatusResponse.fromJson, expectedStatus: 200);
   }
 
-  Future<PegarouteSwapResponse> swap(PegarouteValidatedSwapPreflight preflight) async {
+  Future<PegarouteValidatedSwapResult> swap(PegarouteValidatedSwapPreflight preflight) async {
     final current = (_clock ?? DateTime.now)().toUtc();
     if (!current.isBefore(preflight.quoteExpiresAt) ||
         (preflight.routeExpiry != null && !current.isBefore(preflight.routeExpiry!.instant()))) {
@@ -1633,7 +1635,8 @@ class PegarouteApiClient {
       {..._headers, 'Content-Type': 'application/json'},
       preflight.requestJson,
     );
-    return _decode(response, PegarouteSwapResponse.fromJson, expectedStatus: 202);
+    final decoded = _decode(response, PegarouteSwapResponse.fromJson, expectedStatus: 202);
+    return PegarouteValidatedSwapResult._(preflight: preflight, response: decoded);
   }
 
   T _decode<T>(very_insecure_http_do_not_use.Response response, T Function(Object?) decoder,
@@ -1707,6 +1710,15 @@ class PegarouteSwapResponse {
   final PegarouteRoute route;
   final PegarouteExecution execution;
   final PegarouteProviderInfo provider;
+}
+
+/// The constructor is private so callers cannot manufacture a result that did
+/// not come from the validated preflight POST boundary.
+final class PegarouteValidatedSwapResult {
+  const PegarouteValidatedSwapResult._({required this.preflight, required this.response});
+
+  final PegarouteValidatedSwapPreflight preflight;
+  final PegarouteSwapResponse response;
 }
 
 Map<String, String> _nonEmpty(Map<String, String?> values) => Map.fromEntries(
@@ -1809,10 +1821,27 @@ String? _optionalRequestId(String? value, String key) {
 
 String? _normalizeRequestSender(String? sender) => _optionalRequestId(sender, 'senderAddress');
 
-String? _normalizeRequestRefund(String? sender, String? refund) {
+String? _normalizeRequestRefund(String chain, String? sender, String? refund) {
   final normalized = _optionalRequestId(refund, 'refundAddress');
-  if (normalized == null || normalized == sender) return null;
+  if (normalized == null || sender != null && _sameRequestAddress(chain, normalized, sender)) {
+    return null;
+  }
   return normalized;
+}
+
+bool _sameRequestAddress(String chain, String first, String second) {
+  final normalizedChain = chain.trim().toUpperCase();
+  const caseInsensitive = {
+    'ETH',
+    'BSC',
+    'POLYGON',
+    'AVAX',
+    'ARBITRUM',
+    'BASE',
+  };
+  return caseInsensitive.contains(normalizedChain)
+      ? first.toLowerCase() == second.toLowerCase()
+      : first == second;
 }
 
 String _positiveAmount(String value) {

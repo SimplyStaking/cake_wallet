@@ -242,6 +242,19 @@ void main() {
     expect(swap.provider.instaswapSwapLite!.txid, 'provider-reference-fixture');
   });
 
+  test('preserves string private routes and treats an omitted value as false', () {
+    final value = json.decode(_fixture('quote.json')) as Map<String, dynamic>;
+    final route = (value['routes'] as List).single as Map<String, dynamic>;
+    route['private'] = 'private-fixture';
+    expect(
+      PegarouteQuoteResponse.fromJson(value).routes.single.privateValue!.value,
+      'private-fixture',
+    );
+
+    route.remove('private');
+    expect(PegarouteQuoteResponse.fromJson(value).routes.single.privateValue, isNull);
+  });
+
   test('freezes quote route maps, lists, and provider detail maps', () {
     final quoteValue = json.decode(_fixture('quote.json')) as Map<String, dynamic>;
     final quote = PegarouteQuoteResponse.fromJson(quoteValue);
@@ -388,6 +401,30 @@ void main() {
     expect(quote.refundAddress, isNull);
     expect(swap.senderAddress, 'sender');
     expect(swap.refundAddress, isNull);
+
+    final evm = PegarouteSwapRequest(
+      fromChain: 'ETH',
+      fromToken: 'ETH',
+      toChain: 'BTC',
+      toToken: 'BTC',
+      amount: '1',
+      destinationAddress: 'destination',
+      senderAddress: '0xABCDEF0000000000000000000000000000000001',
+      refundAddress: '0xabcdef0000000000000000000000000000000001',
+    );
+    expect(evm.refundAddress, isNull);
+
+    final nonEvm = PegarouteSwapRequest(
+      fromChain: 'SOL',
+      fromToken: 'SOL',
+      toChain: 'BTC',
+      toToken: 'BTC',
+      amount: '1',
+      destinationAddress: 'destination',
+      senderAddress: 'SolAddress',
+      refundAddress: 'soladdress',
+    );
+    expect(nonEvm.refundAddress, 'soladdress');
   });
 
   test('injects transport and never exposes credentials in response parsing', () async {
@@ -741,6 +778,62 @@ void main() {
       ),
     );
     expect(trade.providerId, 'bound-reference');
+  });
+
+  test('accepts matching provider details in both status locations', () async {
+    final value = json.decode(_fixture('status_refund.json')) as Map<String, dynamic>;
+    final details = {
+      'txid': 'bound-reference',
+      'depositAddress': '0x0000000000000000000000000000000000000001',
+      'depositAmountExact': '1',
+      'expiresAt': '2099-01-01T00:00:00.000Z',
+    };
+    (value['input'] as Map<String, dynamic>)['providerReferenceId'] = 'bound-reference';
+    (value['input'] as Map<String, dynamic>)['instaswapSwapLite'] = details;
+    value['provider'] = {
+      'name': 'instaswap',
+      'referenceId': 'bound-reference',
+      'details': {'instaswapSwapLite': details},
+    };
+    final result = await PegarouteExchangeProvider(
+      apiClient: PegarouteApiClient(
+        configuration:
+            const PegarouteConfiguration(baseUrl: 'https://example.test', apiKey: 'test'),
+        get: (uri, headers) async =>
+            very_insecure_http_do_not_use.Response(json.encode(value), 200),
+      ),
+    ).findTradeForContext(
+      trade: _boundStatusTrade(
+        providerReferenceId: 'bound-reference',
+        providerDepositAddress: '0x0000000000000000000000000000000000000001',
+        providerDepositAmountExact: '1',
+        providerDepositExpiry: DateTime.utc(2099),
+      ),
+    );
+    expect(result.providerId, 'bound-reference');
+
+    final conflict = json.decode(json.encode(value)) as Map<String, dynamic>;
+    ((conflict['provider'] as Map<String, dynamic>)['details']
+            as Map<String, dynamic>)['instaswapSwapLite']['depositAddress'] =
+        '0x0000000000000000000000000000000000000004';
+    await expectLater(
+      PegarouteExchangeProvider(
+        apiClient: PegarouteApiClient(
+          configuration:
+              const PegarouteConfiguration(baseUrl: 'https://example.test', apiKey: 'test'),
+          get: (uri, headers) async =>
+              very_insecure_http_do_not_use.Response(json.encode(conflict), 200),
+        ),
+      ).findTradeForContext(
+        trade: _boundStatusTrade(
+          providerReferenceId: 'bound-reference',
+          providerDepositAddress: '0x0000000000000000000000000000000000000001',
+          providerDepositAmountExact: '1',
+          providerDepositExpiry: DateTime.utc(2099),
+        ),
+      ),
+      throwsA(isA<PegarouteBindingException>()),
+    );
   });
 
   test('rejects every supplied provider detail that differs from binding', () async {

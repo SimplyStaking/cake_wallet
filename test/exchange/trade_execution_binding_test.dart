@@ -256,9 +256,13 @@ void main() {
     expect(validated.execution.binding.tradeId, 'trade-fixture');
   });
 
-  test('revalidates catalog token identity from retained restart metadata', () {
+  test('reconstructs catalog token identity after SQLite reload', () {
     for (final solana in [false, true]) {
       final original = _qualifiedTokenTrade(solana: solana);
+      expect(
+        () => const PegarouteExecutionBindingValidator().validatePersisted(trade: original),
+        returnsNormally,
+      );
       final reloaded = Trade.fromSqliteRow(original.toSqliteMap()..['tradeId'] = 1);
       expect(
         () => const PegarouteExecutionBindingValidator().validatePersisted(trade: reloaded),
@@ -281,6 +285,20 @@ void main() {
           throwsA(isA<PegarouteBindingException>()),
         );
       }
+
+      final missingIdentity = Trade.fromSqliteRow(original.toSqliteMap()..['tradeId'] = 1);
+      missingIdentity.from = CryptoCurrency(
+        title: title,
+        name: 'reloaded-token',
+        tag: null,
+        decimals: decimals,
+      );
+      expect(
+        () => const PegarouteExecutionBindingValidator().validatePersisted(
+          trade: missingIdentity,
+        ),
+        throwsA(isA<PegarouteBindingException>()),
+      );
     }
   });
 
@@ -435,6 +453,45 @@ void main() {
     }
   });
 
+  test('matches string private route identities exactly', () {
+    final raw = json.decode(_execution().encode()) as Map<String, dynamic>;
+    final binding = raw['binding'] as Map<String, dynamic>;
+    final route = json.decode(binding['reviewedRouteJson'] as String) as Map<String, dynamic>;
+    route['private'] = 'private-fixture';
+    binding['reviewedRouteJson'] = json.encode(route);
+    raw['privateIntent'] = 'private-fixture';
+    final valid = TradeExecution.fromJson(raw);
+    expect(
+      () => const PegarouteExecutionBindingValidator().validatePersisted(trade: _trade(valid)),
+      returnsNormally,
+    );
+
+    raw['privateIntent'] = 'different-private-fixture';
+    final changed = TradeExecution.fromJson(raw);
+    expect(
+      () => const PegarouteExecutionBindingValidator().validatePersisted(trade: _trade(changed)),
+      throwsA(isA<PegarouteBindingException>()),
+    );
+  });
+
+  test('binds persisted provider deposits to execution and reviewed inbound', () {
+    final raw = json.decode(_execution().encode()) as Map<String, dynamic>;
+    final binding = raw['binding'] as Map<String, dynamic>;
+    binding['providerDepositAddress'] = '0x0000000000000000000000000000000000000001';
+    final valid = TradeExecution.fromJson(raw);
+    expect(
+      () => const PegarouteExecutionBindingValidator().validatePersisted(trade: _trade(valid)),
+      returnsNormally,
+    );
+
+    binding['providerDepositAddress'] = '0x0000000000000000000000000000000000000004';
+    final changed = TradeExecution.fromJson(raw);
+    expect(
+      () => const PegarouteExecutionBindingValidator().validatePersisted(trade: _trade(changed)),
+      throwsA(isA<PegarouteBindingException>()),
+    );
+  });
+
   test('rejects a changed exact raw execution snapshot', () {
     final execution = _execution();
     final trade = _trade(execution);
@@ -532,31 +589,45 @@ void main() {
         as Map<String, dynamic>;
     ((value['execution'] as Map<String, dynamic>)['value'] as Map<String, dynamic>)['baseUnits'] =
         '1000000000000000000';
-    final response = PegarouteSwapResponse.fromJson(value);
+    Future<PegarouteValidatedSwapResult> postResult(Map<String, dynamic> response) =>
+        PegarouteApiClient(
+          configuration:
+              const PegarouteConfiguration(baseUrl: 'https://example.test', apiKey: 'test'),
+          post: (uri, headers, body) async =>
+              very_insecure_http_do_not_use.Response(json.encode(response), 202),
+          clock: () => DateTime.utc(2026, 8, 31),
+        ).swap(preflight);
+
+    final result = await postResult(value);
+    expect(result.preflight.requestJson, preflight.requestJson);
+    expect(result.response.transactionId, 'transaction-fixture');
     final execution = const PegarouteExecutionBindingValidator().bindSwapResponse(
-      preflight: preflight,
-      response: response,
+      result: result,
     );
     expect(execution.binding.quoteId, 'quote-fixture');
     expect(execution.binding.reviewedRouteJson, isNotEmpty);
 
+    final mixedCapabilities = json.decode(json.encode(value)) as Map<String, dynamic>;
+    (mixedCapabilities['route'] as Map<String, dynamic>)['private'] = 'post-only-private';
+    await expectLater(
+      postResult(mixedCapabilities).then(
+          (result) => const PegarouteExecutionBindingValidator().bindSwapResponse(result: result)),
+      throwsA(isA<PegarouteBindingException>()),
+    );
+
     final routeChanged = json.decode(json.encode(value)) as Map<String, dynamic>;
     (routeChanged['route'] as Map<String, dynamic>)['expectedOutput'] = '0.50';
-    expect(
-      () => const PegarouteExecutionBindingValidator().bindSwapResponse(
-        preflight: preflight,
-        response: PegarouteSwapResponse.fromJson(routeChanged),
-      ),
+    await expectLater(
+      postResult(routeChanged).then(
+          (result) => const PegarouteExecutionBindingValidator().bindSwapResponse(result: result)),
       throwsA(isA<PegarouteBindingException>()),
     );
 
     final omittedRouteIdentity = json.decode(json.encode(value)) as Map<String, dynamic>;
     (omittedRouteIdentity['route'] as Map<String, dynamic>).remove('subprovider');
-    expect(
-      () => const PegarouteExecutionBindingValidator().bindSwapResponse(
-        preflight: preflight,
-        response: PegarouteSwapResponse.fromJson(omittedRouteIdentity),
-      ),
+    await expectLater(
+      postResult(omittedRouteIdentity).then(
+          (result) => const PegarouteExecutionBindingValidator().bindSwapResponse(result: result)),
       throwsA(isA<PegarouteBindingException>()),
     );
 
@@ -567,11 +638,9 @@ void main() {
       'serializedTransaction': '3MN',
       'minOut': null,
     };
-    expect(
-      () => const PegarouteExecutionBindingValidator().bindSwapResponse(
-        preflight: preflight,
-        response: PegarouteSwapResponse.fromJson(opaqueResponse),
-      ),
+    await expectLater(
+      postResult(opaqueResponse).then(
+          (result) => const PegarouteExecutionBindingValidator().bindSwapResponse(result: result)),
       throwsA(isA<PegarouteBindingException>()),
     );
 

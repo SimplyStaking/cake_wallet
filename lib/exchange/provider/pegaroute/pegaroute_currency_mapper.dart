@@ -284,12 +284,40 @@ class PegarouteCurrencyMapper {
     final tag = currency.tag?.toUpperCase();
     final title = currency.title.toUpperCase();
     final native = _native(tag, title);
-    if (native != null) return native;
+    if (native != null) return _catalogAsset(native);
 
     final alias = _genericAliases[currency.name];
     if (alias != null) return _catalogAsset(alias);
 
     throw PegarouteCurrencyException('${currency.title}/${currency.tag ?? ''}');
+  }
+
+  bool matchesCanonicalTuple(CryptoCurrency currency, PegarouteAssetId expected) {
+    validateCanonicalTuple(
+      chain: expected.chain,
+      token: expected.token,
+      nativeToken: expected.nativeToken,
+    );
+    try {
+      final actual = map(currency);
+      return actual.chain == expected.chain &&
+          actual.token == expected.token &&
+          actual.nativeToken == expected.nativeToken;
+    } on PegarouteCurrencyException {
+      return false;
+    }
+  }
+
+  PegarouteAssetId validateCanonicalTuple({
+    required String chain,
+    required String token,
+    required String nativeToken,
+  }) {
+    return _catalogAsset(PegarouteAssetId(
+      chain: chain.trim().toUpperCase(),
+      token: token,
+      nativeToken: nativeToken,
+    ));
   }
 
   PegarouteAssetId? _native(String? tag, String title) {
@@ -386,11 +414,27 @@ class PegarouteCurrencyMapper {
   }
 
   PegarouteAssetId _catalogAsset(PegarouteAssetId asset) {
+    _validateCanonicalTuple(asset);
     if (!_catalogAssets.contains('${asset.chain}/${asset.token}')) {
       throw PegarouteCurrencyException(
           '${asset.chain}/${asset.token} is not in the Pegasus catalog');
     }
     return asset;
+  }
+
+  void _validateCanonicalTuple(PegarouteAssetId asset) {
+    if (nativeTokenByChain[asset.chain] != asset.nativeToken || asset.token.isEmpty) {
+      throw const PegarouteCurrencyException('invalid canonical asset tuple');
+    }
+    final separator = asset.token.indexOf('-');
+    if (separator == 0 || separator == asset.token.length - 1) {
+      throw const PegarouteCurrencyException('invalid qualified token');
+    }
+    if (separator >= 0 &&
+        const {'ETH', 'BSC', 'POLYGON', 'AVAX', 'ARBITRUM', 'BASE'}.contains(asset.chain) &&
+        !RegExp(r'^0x[0-9a-f]{40}$').hasMatch(asset.token.substring(separator + 1))) {
+      throw const PegarouteCurrencyException('invalid qualified EVM token');
+    }
   }
 
   String _nativeForChain(String chain) {
