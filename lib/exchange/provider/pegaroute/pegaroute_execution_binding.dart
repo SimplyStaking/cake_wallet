@@ -484,6 +484,9 @@ final class PegarouteExecutionBindingValidator {
     String? expectedNativeToken,
     int? expectedDecimals,
   }) {
+    if (expectedToken.contains('-') && currency.runtimeType == CryptoCurrency) {
+      throw const PegarouteBindingException('persisted qualified asset identity is unavailable');
+    }
     final expected = _currencyMapper.validateCanonicalTuple(
       chain: expectedChain,
       token: expectedToken,
@@ -504,9 +507,6 @@ final class PegarouteExecutionBindingValidator {
       // contract or mint. Without that identity, accepting the row is unsafe.
       if (currency.runtimeType != CryptoCurrency) {
         throw const PegarouteBindingException('persisted typed asset identity is unavailable');
-      }
-      if (expectedToken.contains('-')) {
-        throw const PegarouteBindingException('persisted qualified asset identity is unavailable');
       }
       final symbol = expectedToken.split('-').first;
       if (currency.title.toUpperCase() != symbol.toUpperCase() ||
