@@ -141,7 +141,7 @@ class TradeMonitor {
       return true;
     }
 
-    if (_isFinalState(trade.state)) {
+    if (_isFinalStateForTrade(trade)) {
       return true;
     }
 
@@ -186,18 +186,27 @@ class TradeMonitor {
     }
 
     try {
+      final expectedRawExecutionJson = trade.executionJson;
       final updated = provider is PegarouteExchangeProvider
           ? await provider.findTradeForContext(trade: trade)
           : await provider.findTradeById(id: trade.id);
-      trade.mergeFindTradeByIdResult(updated);
-      printV('Trade ${trade.id} updated: ${trade.state}');
-      await trade.save();
+      final persisted = provider is PegarouteExchangeProvider
+          ? await trade.mergeAndSavePegaroute(
+              updated,
+              expectedRawExecutionJson: expectedRawExecutionJson!,
+            )
+          : (trade..mergeFindTradeByIdResult(updated));
+      printV('Trade ${trade.id} updated: ${persisted.state}');
+      if (provider is! PegarouteExchangeProvider) await persisted.save();
 
       await preferences.setString('trade_${trade.id}_updated_at', DateTime.now().toIso8601String());
       printV('Trade ${trade.id} updated at: ${DateTime.now().toIso8601String()}');
 
       // If the updated trade is in a final state, we cancel the timer
-      if (_isFinalState(updated.state)) {
+      final isFinal = provider is PegarouteExchangeProvider
+          ? _isFinalStateForTrade(persisted)
+          : _isFinalState(updated.state);
+      if (isFinal) {
         printV('Trade ${trade.id} is in final state');
         _cancelSingleTradeTimer(trade.id);
       }
@@ -218,6 +227,13 @@ class TradeMonitor {
       TradeState.refunded.raw,
       TradeState.notFound.raw,
     }.contains(state.raw);
+  }
+
+  bool _isFinalStateForTrade(Trade trade) {
+    if (trade.provider == ExchangeProviderDescription.pegaroute) {
+      return trade.state == TradeState.success || trade.state == TradeState.refunded;
+    }
+    return _isFinalState(trade.state);
   }
 
   void _cancelSingleTradeTimer(String tradeId) {

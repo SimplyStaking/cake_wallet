@@ -147,12 +147,20 @@ abstract class TradeDetailsViewModelBase with Store {
   @action
   Future<void> _updateTrade() async {
     try {
+      final expectedRawExecutionJson = trade.executionJson;
       final updatedTrade = _provider is PegarouteExchangeProvider
           ? await (_provider as PegarouteExchangeProvider).findTradeForContext(trade: trade)
           : await _provider!.findTradeById(id: trade.id);
 
-      trade.mergeFindTradeByIdResult(updatedTrade);
-      await trade.save();
+      if (_provider is PegarouteExchangeProvider) {
+        await trade.mergeAndSavePegaroute(
+          updatedTrade,
+          expectedRawExecutionJson: expectedRawExecutionJson!,
+        );
+      } else {
+        trade.mergeFindTradeByIdResult(updatedTrade);
+        await trade.save();
+      }
 
       _updateItems();
     } catch (e) {
