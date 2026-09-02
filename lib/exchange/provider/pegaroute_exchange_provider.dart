@@ -162,7 +162,7 @@ class PegarouteExchangeProvider extends ExchangeProvider {
   }
 
   Future<CryptoCurrency?> _parseCurrency(String? chain, String? token) async {
-    if (_currencyLookup != null) return _currencyLookup!(chain, token);
+    if (_currencyLookup != null) return _currencyLookup(chain, token);
     if (token == null || token.isEmpty) return null;
     final separator = token.indexOf('-');
     if (separator < 0) {
