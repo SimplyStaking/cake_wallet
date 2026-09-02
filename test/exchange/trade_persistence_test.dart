@@ -21,7 +21,9 @@ TradeExecutionBinding _binding() => TradeExecutionBinding(
       isSendAll: false,
       walletId: 'wallet-fixture',
       walletChainId: null,
-      walletAddress: null,
+      walletAddress: 'sender',
+      reviewedRouteJson:
+          '{"provider":"instaswap","providerType":"fixture","subprovider":"fixture","private":false,"expectedOutput":"0.99","fees":null,"estimatedTimeSeconds":0,"memo":null,"inboundAddress":null,"router":null,"minAmount":null,"expiry":null,"gasRate":null,"resolvedFee":null,"openOceanRoute":null}',
       providerReferenceId: null,
     );
 

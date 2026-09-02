@@ -215,6 +215,7 @@ class TradeMonitor {
       TradeState.finished.raw,
       TradeState.expired.raw,
       TradeState.failed.raw,
+      TradeState.refunded.raw,
       TradeState.notFound.raw,
     }.contains(state.raw);
   }

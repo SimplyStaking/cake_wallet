@@ -11,7 +11,7 @@ class TradeExecution {
     required String destinationToken,
     required TradeExecutionBinding binding,
     required Map<String, dynamic> payload,
-    String? routeProvider,
+    required String routeProvider,
     String? subprovider,
     Object? privateIntent,
     int version = 1,
@@ -45,7 +45,7 @@ class TradeExecution {
     required this.destinationToken,
     required this.binding,
     required this.payload,
-    this.routeProvider,
+    required this.routeProvider,
     this.subprovider,
     this.privateIntent,
     this.version = 1,
@@ -91,7 +91,7 @@ class TradeExecution {
       destinationChain: _required(map, 'destinationChain'),
       destinationToken: _required(map, 'destinationToken'),
       binding: TradeExecutionBinding.fromJson(map['binding']),
-      routeProvider: _optional(map, 'routeProvider'),
+      routeProvider: _required(map, 'routeProvider'),
       subprovider: _optional(map, 'subprovider'),
       privateIntent: map['privateIntent'],
       payload: Map<String, dynamic>.from(payload),
@@ -107,7 +107,7 @@ class TradeExecution {
   final String destinationChain;
   final String destinationToken;
   final TradeExecutionBinding binding;
-  final String? routeProvider;
+  final String routeProvider;
   final String? subprovider;
   final Object? privateIntent;
   final Map<String, dynamic> payload;
@@ -126,8 +126,7 @@ class TradeExecution {
         destinationToken.isEmpty) {
       throw const FormatException('execution asset metadata is required');
     }
-    if (routeProvider != null && routeProvider!.isEmpty ||
-        subprovider != null && subprovider!.isEmpty) {
+    if (routeProvider.isEmpty || subprovider != null && subprovider!.isEmpty) {
       throw const FormatException('execution route metadata must not be blank');
     }
     if (privateIntent != null && privateIntent is! bool && privateIntent is! String) {
@@ -175,7 +174,7 @@ class TradeExecution {
       'destinationChain': destinationChain,
       'destinationToken': destinationToken,
       'binding': binding.toJson(),
-      if (routeProvider != null) 'routeProvider': routeProvider,
+      'routeProvider': routeProvider,
       if (subprovider != null) 'subprovider': subprovider,
       if (privateIntent != null) 'privateIntent': privateIntent,
       'payload': payload,
@@ -261,6 +260,7 @@ final class TradeExecutionBinding {
     required this.walletId,
     required this.walletChainId,
     required this.walletAddress,
+    required this.reviewedRouteJson,
     this.providerReferenceId,
   });
 
@@ -283,6 +283,7 @@ final class TradeExecutionBinding {
       'walletId',
       'walletChainId',
       'walletAddress',
+      'reviewedRouteJson',
       'providerReferenceId',
     };
     if (map.length != keys.length || map.keys.any((key) => !keys.contains(key))) {
@@ -307,7 +308,8 @@ final class TradeExecutionBinding {
       isSendAll: _requiredBool(map, 'isSendAll'),
       walletId: _required(map, 'walletId'),
       walletChainId: _nullableInt(map, 'walletChainId'),
-      walletAddress: _nullableString(map, 'walletAddress'),
+      walletAddress: _required(map, 'walletAddress'),
+      reviewedRouteJson: _required(map, 'reviewedRouteJson'),
       providerReferenceId: _nullableString(map, 'providerReferenceId'),
     )..validate();
   }
@@ -326,7 +328,8 @@ final class TradeExecutionBinding {
   final bool isSendAll;
   final String walletId;
   final int? walletChainId;
-  final String? walletAddress;
+  final String walletAddress;
+  final String reviewedRouteJson;
   final String? providerReferenceId;
 
   void validate() {
@@ -335,18 +338,22 @@ final class TradeExecutionBinding {
         senderAddress.isEmpty ||
         destinationAddress.isEmpty ||
         walletId.isEmpty ||
+        reviewedRouteJson.isEmpty ||
         providerRaw != 17 ||
         sourceDecimals < 0 ||
         isSendAll ||
         sourceAmountBaseUnits == '0' ||
-        !RegExp(r'^[0-9]+$').hasMatch(sourceAmountBaseUnits) ||
+        !RegExp(r'^(0|[1-9][0-9]*)$').hasMatch(sourceAmountBaseUnits) ||
         !RegExp(r'^(0|[1-9][0-9]*)(\.[0-9]+)?$').hasMatch(sourceAmount)) {
       throw const FormatException('invalid execution binding');
+    }
+    if (_fixedPointBaseUnits(sourceAmount, sourceDecimals) != sourceAmountBaseUnits) {
+      throw const FormatException('execution amount relation is invalid');
     }
     if (walletChainId != null && walletChainId! <= 0) {
       throw const FormatException('invalid wallet chain id');
     }
-    if (walletAddress != null && walletAddress!.isEmpty) {
+    if (walletAddress.isEmpty) {
       throw const FormatException('invalid wallet address');
     }
     if (refundAddress != null && (refundAddress!.isEmpty || refundAddress == senderAddress)) {
@@ -375,9 +382,21 @@ final class TradeExecutionBinding {
       'walletId': walletId,
       'walletChainId': walletChainId,
       'walletAddress': walletAddress,
+      'reviewedRouteJson': reviewedRouteJson,
       'providerReferenceId': providerReferenceId,
     };
   }
+}
+
+String _fixedPointBaseUnits(String amount, int decimals) {
+  final match = RegExp(r'^(0|[1-9][0-9]*)(\.[0-9]+)?$').firstMatch(amount);
+  if (match == null) return '';
+  final fraction = match.group(2)?.substring(1) ?? '';
+  if (fraction.length > decimals) return '';
+  final padded = fraction.padRight(decimals, '0');
+  return (BigInt.parse(match.group(1)!) * BigInt.from(10).pow(decimals) +
+          BigInt.parse(padded.isEmpty ? '0' : padded))
+      .toString();
 }
 
 bool _validateEvmContractCall(Map<String, dynamic> payload) {

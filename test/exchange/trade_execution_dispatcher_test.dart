@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:cake_wallet/exchange/provider/pegaroute/pegaroute_execution_binding.dart';
 import 'package:cake_wallet/exchange/trade_execution_dispatcher.dart';
 import 'package:cake_wallet/exchange/trade.dart';
@@ -30,7 +32,9 @@ TradeExecutionBinding _binding() => TradeExecutionBinding(
       isSendAll: false,
       walletId: 'wallet',
       walletChainId: null,
-      walletAddress: null,
+      walletAddress: 'sender',
+      reviewedRouteJson:
+          '{"provider":"instaswap","providerType":"fixture","subprovider":null,"private":false,"expectedOutput":"0.99","fees":null,"estimatedTimeSeconds":0,"memo":null,"inboundAddress":null,"router":null,"minAmount":null,"expiry":null,"gasRate":null,"resolvedFee":null,"openOceanRoute":null}',
       providerReferenceId: null,
     );
 
@@ -43,6 +47,7 @@ TradeExecution _execution() => TradeExecution(
       destinationChain: 'BTC',
       destinationToken: 'BTC',
       binding: _binding(),
+      routeProvider: 'instaswap',
       payload: const {
         'chain': 'XMR',
         'to': 'destination',
@@ -52,10 +57,17 @@ TradeExecution _execution() => TradeExecution(
     );
 
 class _Handler implements TradeExecutionHandler {
-  _Handler(this.external, {this.mutateDuringCommit = false});
+  _Handler(
+    this.external, {
+    this.mutateDuringCommit = false,
+    this.prepareCompleter,
+    this.throwOnCommitted = false,
+  });
 
   final bool external;
   final bool mutateDuringCommit;
+  final Completer<void>? prepareCompleter;
+  final bool throwOnCommitted;
   int prepareCalls = 0;
   int commitHookCalls = 0;
   late Trade trade;
@@ -69,8 +81,6 @@ class _Handler implements TradeExecutionHandler {
 
   @override
   void validateForExecution({
-    required WalletBase wallet,
-    required Trade trade,
     required ValidatedTradeExecution execution,
     required DateTime now,
   }) {}
@@ -78,19 +88,19 @@ class _Handler implements TradeExecutionHandler {
   @override
   Future<PendingTransaction?> prepare({
     required WalletBase wallet,
-    required Trade trade,
     required ValidatedTradeExecution execution,
-  }) async =>
-      _prepared();
+  }) async {
+    if (prepareCompleter != null) await prepareCompleter!.future;
+    return _prepared();
+  }
 
   @override
   Future<void> onCommitted({
-    required WalletBase wallet,
-    required Trade trade,
     required ValidatedTradeExecution execution,
-    required PendingTransaction transaction,
+    required CommittedTradeExecution receipt,
   }) async {
     commitHookCalls++;
+    if (throwOnCommitted) throw StateError('callback failed');
   }
 
   PendingTransaction _prepared() {
@@ -214,6 +224,8 @@ void main() {
       senderAddress: 'sender',
       payoutAddress: 'destination',
       walletId: 'wallet',
+      fromWalletAddress: 'sender',
+      providerName: 'instaswap',
       executionJson: execution.encode(),
     );
     final handler = _Handler(false);
@@ -240,7 +252,12 @@ void main() {
     expect(handler.commitHookCalls, 1);
 
     final urPending = await dispatcher.prepare(wallet: wallet, trade: trade);
-    await urPending!.commitUR();
+    trade.amount = '2';
+    await expectLater(urPending!.commitUR(), throwsA(isA<PegarouteBindingException>()));
+    expect(handler.pending.urCommits, 0);
+    trade.amount = '1';
+    final validUrPending = await dispatcher.prepare(wallet: wallet, trade: trade);
+    await validUrPending!.commitUR();
     expect(handler.pending.urCommits, 1);
     expect(handler.commitHookCalls, 1);
   });
@@ -256,6 +273,8 @@ void main() {
       senderAddress: 'sender',
       payoutAddress: 'destination',
       walletId: 'wallet',
+      fromWalletAddress: 'sender',
+      providerName: 'instaswap',
       executionJson: execution.encode(),
     );
     final handler = _Handler(false, mutateDuringCommit: true)..trade = trade;
@@ -266,5 +285,60 @@ void main() {
     );
     await pending!.commit();
     expect(handler.commitHookCalls, 0);
+  });
+
+  test('rejects stale context after delayed prepare without returning a wrapper', () async {
+    final execution = _execution();
+    final trade = Trade(
+      id: 'trade',
+      amount: '1',
+      from: CryptoCurrency.xmr,
+      to: CryptoCurrency.btc,
+      provider: ExchangeProviderDescription.pegaroute,
+      senderAddress: 'sender',
+      payoutAddress: 'destination',
+      walletId: 'wallet',
+      fromWalletAddress: 'sender',
+      providerName: 'instaswap',
+      executionJson: execution.encode(),
+    );
+    final completer = Completer<void>();
+    final handler = _Handler(false, prepareCompleter: completer)..trade = trade;
+    final wallet = _Wallet();
+    final pendingFuture = RegistryTradeExecutionDispatcher([handler]).prepare(
+      wallet: wallet,
+      trade: trade,
+    );
+    trade.amount = '2';
+    completer.complete();
+    final pending = await pendingFuture;
+    expect(pending, isNull);
+    expect(handler.prepareCalls, 1);
+    expect(handler.pending.commits, 0);
+  });
+
+  test('returns successful commit when post-commit callback fails', () async {
+    final execution = _execution();
+    final trade = Trade(
+      id: 'trade',
+      amount: '1',
+      from: CryptoCurrency.xmr,
+      to: CryptoCurrency.btc,
+      provider: ExchangeProviderDescription.pegaroute,
+      senderAddress: 'sender',
+      payoutAddress: 'destination',
+      walletId: 'wallet',
+      fromWalletAddress: 'sender',
+      providerName: 'instaswap',
+      executionJson: execution.encode(),
+    );
+    final handler = _Handler(false, throwOnCommitted: true)..trade = trade;
+    final pending = await RegistryTradeExecutionDispatcher([handler]).prepare(
+      wallet: _Wallet(),
+      trade: trade,
+    );
+    await pending!.commit();
+    expect(handler.pending.commits, 1);
+    expect(handler.commitHookCalls, 1);
   });
 }

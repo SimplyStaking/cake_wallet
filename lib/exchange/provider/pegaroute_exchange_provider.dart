@@ -92,9 +92,14 @@ class PegarouteExchangeProvider extends ExchangeProvider {
 
   Future<Trade> findTradeForContext({required Trade trade}) async {
     final validated = _bindingValidator.validatePersisted(trade: trade);
+    final rawExecutionJson = validated.rawExecutionJson;
     try {
       final response = await _apiClient.status(trade.id);
-      _bindingValidator.validateStatusResponse(validated: validated, response: response);
+      final current = _bindingValidator.validatePersisted(
+        trade: trade,
+        expectedRawExecutionJson: rawExecutionJson,
+      );
+      _bindingValidator.validateStatusResponse(validated: current, response: response);
       final input = response.input;
       final output = response.output;
       final configuredRefund = input.refundAddress;
@@ -115,6 +120,11 @@ class PegarouteExchangeProvider extends ExchangeProvider {
                   completedAt: refund?.completedAt,
                   terminalWithoutEvidence: response.internalStatus == 'refunded' && refund == null,
                 );
+      final finalValidation = _bindingValidator.validatePersisted(
+        trade: trade,
+        expectedRawExecutionJson: rawExecutionJson,
+      );
+      _bindingValidator.validateStatusResponse(validated: finalValidation, response: response);
       return Trade(
         id: trade.id,
         from: await _parseCurrency(input.chain, input.token),
@@ -127,8 +137,8 @@ class PegarouteExchangeProvider extends ExchangeProvider {
         outputTransaction: output.txHash,
         receiveAmount: output.amount,
         payoutAddress: output.address,
-        providerName: response.provider?.name ?? response.route.provider,
-        providerId: response.provider?.referenceId ?? input.providerReferenceId,
+        providerName: finalValidation.execution.routeProvider,
+        providerId: finalValidation.execution.binding.providerReferenceId,
         refundJson: refundRecord?.encode(),
       );
     } on PegarouteApiError catch (error) {

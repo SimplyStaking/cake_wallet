@@ -5,6 +5,7 @@ import 'package:http/http.dart' as very_insecure_http_do_not_use;
 import 'package:cw_core/utils/proxy_wrapper.dart';
 
 import 'pegaroute_configuration.dart';
+import 'pegaroute_execution_binding.dart';
 
 typedef PegarouteGet = Future<very_insecure_http_do_not_use.Response> Function(
     Uri uri, Map<String, String> headers);
@@ -1504,11 +1505,11 @@ class PegarouteApiClient {
     return _decode(response, PegarouteStatusResponse.fromJson, expectedStatus: 200);
   }
 
-  Future<PegarouteSwapResponse> swap(PegarouteSwapRequest request) async {
+  Future<PegarouteSwapResponse> swap(PegarouteValidatedSwapPreflight preflight) async {
     final response = await _post(
       _uri('/swap'),
       {..._headers, 'Content-Type': 'application/json'},
-      json.encode(request.toJson()),
+      json.encode(preflight.request.toJson()),
     );
     return _decode(response, PegarouteSwapResponse.fromJson, expectedStatus: 202);
   }

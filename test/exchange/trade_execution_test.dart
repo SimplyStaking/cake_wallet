@@ -19,6 +19,8 @@ TradeExecutionBinding _binding() => TradeExecutionBinding(
       walletId: 'wallet-fixture',
       walletChainId: 1,
       walletAddress: 'sender',
+      reviewedRouteJson:
+          '{"provider":"instaswap","providerType":"fixture","subprovider":null,"private":false,"expectedOutput":"0.99","fees":null,"estimatedTimeSeconds":0,"memo":null,"inboundAddress":null,"router":null,"minAmount":null,"expiry":null,"gasRate":null,"resolvedFee":null,"openOceanRoute":null}',
       providerReferenceId: null,
     );
 
@@ -44,6 +46,7 @@ TradeExecution _execution(
       destinationChain: 'BTC',
       destinationToken: 'BTC',
       binding: _binding(),
+      routeProvider: 'instaswap',
       payload: payload ?? _evmPayload(mode: mode),
     );
 
@@ -177,6 +180,11 @@ void main() {
   test('rejects missing and unknown binding fields', () {
     final missing = _execution().toJson()..remove('binding');
     expect(() => TradeExecution.fromJson(missing), throwsFormatException);
+    final providerMissing = _execution().toJson()..remove('routeProvider');
+    expect(() => TradeExecution.fromJson(providerMissing), throwsFormatException);
+    final routeMissing = _execution().toJson();
+    (routeMissing['binding'] as Map<String, dynamic>).remove('reviewedRouteJson');
+    expect(() => TradeExecution.fromJson(routeMissing), throwsFormatException);
     final value = _execution().toJson()..['futureField'] = true;
     expect(() => TradeExecution.fromJson(value), throwsFormatException);
 

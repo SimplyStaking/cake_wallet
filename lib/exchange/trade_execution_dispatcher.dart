@@ -10,22 +10,29 @@ abstract interface class TradeExecutionHandler {
   bool supports(TradeExecution execution);
   bool supportsExternalSend(TradeExecution execution);
   void validateForExecution({
-    required WalletBase wallet,
-    required Trade trade,
     required ValidatedTradeExecution execution,
     required DateTime now,
   });
   Future<PendingTransaction?> prepare({
     required WalletBase wallet,
-    required Trade trade,
     required ValidatedTradeExecution execution,
   });
   Future<void> onCommitted({
-    required WalletBase wallet,
-    required Trade trade,
     required ValidatedTradeExecution execution,
-    required PendingTransaction transaction,
+    required CommittedTradeExecution receipt,
   });
+}
+
+final class CommittedTradeExecution {
+  const CommittedTradeExecution({
+    required this.transactionId,
+    required this.rawTransaction,
+    required this.evmTxHash,
+  });
+
+  final String transactionId;
+  final String rawTransaction;
+  final String? evmTxHash;
 }
 
 abstract interface class TradeExecutionDispatcher {
@@ -95,27 +102,45 @@ class RegistryTradeExecutionDispatcher implements TradeExecutionDispatcher {
         trade: trade,
         wallet: wallet,
       );
-      handler.validateForExecution(
-        wallet: wallet,
-        trade: trade,
-        execution: validated,
-        now: DateTime.now().toUtc(),
-      );
+      handler.validateForExecution(execution: validated, now: DateTime.now().toUtc());
     } catch (_) {
       return Future.value(null);
     }
-    final prepared = handler.prepare(wallet: wallet, trade: trade, execution: validated);
-    return prepared.then((transaction) {
-      if (transaction == null) return null;
-      return _BoundPendingTransaction(
-        inner: transaction,
-        wallet: wallet,
+    return _finishPrepare(
+      handler: handler,
+      wallet: wallet,
+      trade: trade,
+      validated: validated,
+    );
+  }
+
+  Future<PendingTransaction?> _finishPrepare({
+    required TradeExecutionHandler handler,
+    required WalletBase wallet,
+    required Trade trade,
+    required ValidatedTradeExecution validated,
+  }) async {
+    final transaction = await handler.prepare(wallet: wallet, execution: validated);
+    if (transaction == null) return null;
+    late final ValidatedTradeExecution current;
+    try {
+      current = const PegarouteExecutionBindingValidator().validatePersisted(
         trade: trade,
-        handler: handler,
-        validator: const PegarouteExecutionBindingValidator(),
-        execution: validated,
+        wallet: wallet,
+        expectedRawExecutionJson: validated.rawExecutionJson,
       );
-    });
+      handler.validateForExecution(execution: current, now: DateTime.now().toUtc());
+    } catch (_) {
+      return null;
+    }
+    return _BoundPendingTransaction(
+      inner: transaction,
+      wallet: wallet,
+      trade: trade,
+      handler: handler,
+      validator: const PegarouteExecutionBindingValidator(),
+      execution: current,
+    );
   }
 }
 
@@ -142,12 +167,7 @@ class _BoundPendingTransaction with PendingTransaction {
       wallet: wallet,
       expectedRawExecutionJson: execution.rawExecutionJson,
     );
-    handler.validateForExecution(
-      wallet: wallet,
-      trade: trade,
-      execution: current,
-      now: validator.now,
-    );
+    handler.validateForExecution(execution: current, now: validator.now);
     return current;
   }
 
@@ -207,12 +227,18 @@ class _BoundPendingTransaction with PendingTransaction {
       // The broadcast succeeded, but a changed context must suppress follow-up I/O.
       return;
     }
-    await handler.onCommitted(
-      wallet: wallet,
-      trade: trade,
-      execution: current,
-      transaction: inner,
-    );
+    try {
+      await handler.onCommitted(
+        execution: current,
+        receipt: CommittedTradeExecution(
+          transactionId: inner.id,
+          rawTransaction: inner.hex,
+          evmTxHash: inner.evmTxHashFromRawHex,
+        ),
+      );
+    } on Object {
+      // Broadcast success must not become a user-visible send failure.
+    }
   }
 
   @override
