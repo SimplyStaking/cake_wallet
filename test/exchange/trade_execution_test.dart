@@ -88,7 +88,7 @@ void main() {
       () => _execution(
         family: 'solana',
         mode: 'serialized-tx',
-        payload: {'serializedTransaction': 'base58-tx', 'minOut': null},
+        payload: {'serializedTransaction': '3MN', 'minOut': null},
       ),
       returnsNormally,
     );
@@ -131,7 +131,7 @@ void main() {
       () => _execution(
         family: 'sui',
         mode: 'serialized-tx',
-        payload: {'serializedTransaction': 'base64-tx', 'minOut': null},
+        payload: {'serializedTransaction': 'dHh4', 'minOut': null},
       ),
       returnsNormally,
     );

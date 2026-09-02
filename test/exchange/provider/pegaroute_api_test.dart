@@ -9,6 +9,7 @@ import 'package:cake_wallet/exchange/provider/pegaroute_exchange_provider.dart';
 import 'package:cake_wallet/exchange/exchange_provider_description.dart';
 import 'package:cake_wallet/exchange/trade.dart';
 import 'package:cake_wallet/exchange/trade_execution.dart';
+import 'package:cake_wallet/exchange/trade_refund.dart';
 import 'package:cw_core/crypto_currency.dart';
 import 'package:http/http.dart' as very_insecure_http_do_not_use;
 
@@ -31,13 +32,18 @@ TradeExecutionBinding _binding() => TradeExecutionBinding(
       walletChainId: null,
       walletAddress: 'sender',
       reviewedRouteJson:
-          '{"provider":"instaswap","providerType":"fixture","subprovider":null,"private":false,"expectedOutput":"0.99","fees":{"affiliate":"0","liquidity":"0.01","outbound":"0","subAffiliate":null,"total":"0.01","totalBps":null,"slippageBps":null},"estimatedTimeSeconds":120,"memo":null,"inboundAddress":null,"router":null,"minAmount":null,"expiry":null,"gasRate":null,"resolvedFee":null,"openOceanRoute":null}',
+          '{"provider":"instaswap","providerType":"fixture","subprovider":null,"private":false,"expectedOutput":"0.99","fees":{"affiliate":"0","liquidity":"0.01","outbound":"0","subAffiliate":null,"total":"0.01","totalBps":null,"slippageBps":null},"estimatedTimeSeconds":120,"memo":null,"inboundAddress":"0x0000000000000000000000000000000000000001","router":null,"minAmount":null,"expiry":null,"gasRate":null,"resolvedFee":null,"openOceanRoute":null}',
       providerReferenceId: null,
     );
 
 Map<String, dynamic> _amount() => {'display': '1', 'baseUnits': '1'};
 
-Trade _boundStatusTrade({String? providerReferenceId}) {
+Trade _boundStatusTrade({
+  String? providerReferenceId,
+  String? providerDepositAddress,
+  String? providerDepositAmountExact,
+  DateTime? providerDepositExpiry,
+}) {
   final execution = TradeExecution(
     family: 'evm',
     mode: 'native-transfer',
@@ -64,8 +70,11 @@ Trade _boundStatusTrade({String? providerReferenceId}) {
       walletChainId: 1,
       walletAddress: '0x0000000000000000000000000000000000000002',
       reviewedRouteJson:
-          '{"provider":"instaswap","providerType":"fixture","subprovider":null,"private":false,"expectedOutput":"0.99","fees":{"affiliate":"0","liquidity":"0.01","outbound":"0","subAffiliate":null,"total":"0.01","totalBps":null,"slippageBps":null},"estimatedTimeSeconds":120,"memo":null,"inboundAddress":null,"router":null,"minAmount":null,"expiry":null,"gasRate":null,"resolvedFee":null,"openOceanRoute":null}',
+          '{"provider":"instaswap","providerType":"fixture","subprovider":null,"private":false,"expectedOutput":"0.99","fees":{"affiliate":"0","liquidity":"0.01","outbound":"0","subAffiliate":null,"total":"0.01","totalBps":null,"slippageBps":null},"estimatedTimeSeconds":120,"memo":null,"inboundAddress":"0x0000000000000000000000000000000000000001","router":null,"minAmount":null,"expiry":null,"gasRate":null,"resolvedFee":null,"openOceanRoute":null}',
       providerReferenceId: providerReferenceId,
+      providerDepositAddress: providerDepositAddress,
+      providerDepositAmountExact: providerDepositAmountExact,
+      providerDepositExpiry: providerDepositExpiry,
     ),
     payload: {
       'chainId': 1,
@@ -160,13 +169,13 @@ List<Map<String, dynamic>> _executionVariants() => [
       {
         'family': 'solana',
         'mode': 'serialized-tx',
-        'serializedTransaction': 'base58-transaction',
+        'serializedTransaction': '3MN',
         'minOut': null,
       },
       {
         'family': 'sui',
         'mode': 'serialized-tx',
-        'serializedTransaction': 'base64-transaction',
+        'serializedTransaction': 'dHh4',
         'minOut': null,
       },
       ...[
@@ -231,6 +240,33 @@ void main() {
     expect(swap.execution.mode, 'native-transfer');
     expect(swap.execution.value!.baseUnits, '1');
     expect(swap.provider.instaswapSwapLite!.txid, 'provider-reference-fixture');
+  });
+
+  test('freezes quote route maps, lists, and provider detail maps', () {
+    final quoteValue = json.decode(_fixture('quote.json')) as Map<String, dynamic>;
+    final quote = PegarouteQuoteResponse.fromJson(quoteValue);
+    (quoteValue['routes'] as List).single['expectedOutput'] = '0.01';
+    expect(quote.routes.single.expectedOutput, '0.99');
+    expect(
+      () => quote.routes.add(quote.routes.single),
+      throwsA(isA<UnsupportedError>()),
+    );
+
+    final feeValue = json.decode(_fixture('quote.json')) as Map<String, dynamic>;
+    (feeValue['routes'] as List).single['resolvedFee'] = {'feeBps': 1};
+    final feeQuote = PegarouteQuoteResponse.fromJson(feeValue);
+    expect(
+      () => feeQuote.routes.single.resolvedFee!['feeBps'] = 2,
+      throwsA(isA<UnsupportedError>()),
+    );
+
+    final provider = PegarouteProviderInfo.fromJson(
+      json.decode(_fixture('swap.json'))['provider'],
+    );
+    expect(
+      () => (provider.details as Map<String, dynamic>)['instaswapSwapLite'] = <String, dynamic>{},
+      throwsA(isA<UnsupportedError>()),
+    );
   });
 
   test('decodes every Pegasus execution variant into a valid trade payload', () {
@@ -373,7 +409,7 @@ void main() {
       toToken: 'BTC',
       amount: '1',
     ));
-    expect(result.quoteId, 'quote-fixture');
+    expect(result.response.quoteId, 'quote-fixture');
     expect(calls, ['/quote?fromChain=ETH&fromToken=ETH&toChain=BTC&toToken=BTC&amount=1']);
   });
 
@@ -688,6 +724,68 @@ void main() {
     expect(trade.providerId, 'input-reference');
   });
 
+  test('preserves bound provider details when compact status omits them', () async {
+    final trade = await PegarouteExchangeProvider(
+      apiClient: PegarouteApiClient(
+        configuration:
+            const PegarouteConfiguration(baseUrl: 'https://example.test', apiKey: 'test'),
+        get: (uri, headers) async =>
+            very_insecure_http_do_not_use.Response(_fixture('status_refund.json'), 200),
+      ),
+    ).findTradeForContext(
+      trade: _boundStatusTrade(
+        providerReferenceId: 'bound-reference',
+        providerDepositAddress: '0x0000000000000000000000000000000000000001',
+        providerDepositAmountExact: '1',
+        providerDepositExpiry: DateTime.utc(2099),
+      ),
+    );
+    expect(trade.providerId, 'bound-reference');
+  });
+
+  test('rejects every supplied provider detail that differs from binding', () async {
+    final mutations = <void Function(Map<String, dynamic>)>[
+      (value) => (value['input'] as Map<String, dynamic>)['instaswapSwapLite']['txid'] = 'other',
+      (value) => (value['input'] as Map<String, dynamic>)['instaswapSwapLite']['depositAddress'] =
+          '0x0000000000000000000000000000000000000004',
+      (value) =>
+          (value['input'] as Map<String, dynamic>)['instaswapSwapLite']['depositAmountExact'] = '2',
+      (value) => (value['input'] as Map<String, dynamic>)['instaswapSwapLite']['expiresAt'] =
+          '2098-01-01T00:00:00.000Z',
+    ];
+    for (final mutate in mutations) {
+      final value = json.decode(_fixture('status_refund.json')) as Map<String, dynamic>;
+      final input = value['input'] as Map<String, dynamic>;
+      input['providerReferenceId'] = 'bound-reference';
+      input['instaswapSwapLite'] = {
+        'txid': 'bound-reference',
+        'depositAddress': '0x0000000000000000000000000000000000000001',
+        'depositAmountExact': '1',
+        'expiresAt': '2099-01-01T00:00:00.000Z',
+      };
+      mutate(value);
+      final provider = PegarouteExchangeProvider(
+        apiClient: PegarouteApiClient(
+          configuration:
+              const PegarouteConfiguration(baseUrl: 'https://example.test', apiKey: 'test'),
+          get: (uri, headers) async =>
+              very_insecure_http_do_not_use.Response(json.encode(value), 200),
+        ),
+      );
+      await expectLater(
+        provider.findTradeForContext(
+          trade: _boundStatusTrade(
+            providerReferenceId: 'bound-reference',
+            providerDepositAddress: '0x0000000000000000000000000000000000000001',
+            providerDepositAmountExact: '1',
+            providerDepositExpiry: DateTime.utc(2099),
+          ),
+        ),
+        throwsA(isA<PegarouteBindingException>()),
+      );
+    }
+  });
+
   test('preflights Pegaroute status and validates the complete response', () async {
     var calls = 0;
     final client = PegarouteApiClient(
@@ -764,6 +862,30 @@ void main() {
     );
   });
 
+  test('accepts and preserves a differing observed VIN0 refund address', () async {
+    final value = json.decode(_fixture('status_refund.json')) as Map<String, dynamic>;
+    value['refund'] = {
+      'status': 'completed',
+      'chain': 'ETH',
+      'amount': '1',
+      'originalAmount': '1',
+      'feeDeducted': '0',
+      'feeDescription': 'fixture',
+      'refundAddress': '0x0000000000000000000000000000000000000004',
+    };
+    final result = await PegarouteExchangeProvider(
+      apiClient: PegarouteApiClient(
+        configuration:
+            const PegarouteConfiguration(baseUrl: 'https://example.test', apiKey: 'test'),
+        get: (uri, headers) async =>
+            very_insecure_http_do_not_use.Response(json.encode(value), 200),
+      ),
+    ).findTradeForContext(trade: _boundStatusTrade());
+    final refund = TradeRefund.fromJsonString(result.refundJson!);
+    expect(refund.configuredAddress, '0x0000000000000000000000000000000000000003');
+    expect(refund.observedAddress, '0x0000000000000000000000000000000000000004');
+  });
+
   test('rejects a local context mutation while status HTTP is awaited', () async {
     late Trade trade;
     var calls = 0;
@@ -781,5 +903,26 @@ void main() {
       throwsA(isA<PegarouteBindingException>()),
     );
     expect(calls, 1);
+  });
+
+  test('rejects a local context mutation while currency lookup is awaited', () async {
+    late Trade trade;
+    final provider = PegarouteExchangeProvider(
+      apiClient: PegarouteApiClient(
+        configuration:
+            const PegarouteConfiguration(baseUrl: 'https://example.test', apiKey: 'test'),
+        get: (uri, headers) async =>
+            very_insecure_http_do_not_use.Response(_fixture('status_refund.json'), 200),
+      ),
+      currencyLookup: (chain, token) async {
+        trade.amount = '2';
+        return token == 'ETH' ? CryptoCurrency.eth : CryptoCurrency.btc;
+      },
+    );
+    trade = _boundStatusTrade();
+    await expectLater(
+      provider.findTradeForContext(trade: trade),
+      throwsA(isA<PegarouteBindingException>()),
+    );
   });
 }

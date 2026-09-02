@@ -144,7 +144,7 @@ class TradeExecution {
         _validatePayment(payload, const {'to', 'amount', 'memo', 'gasRate'}),
       'cosmos/bank-send' => _validatePayment(payload, const {'to', 'amount', 'memo'}),
       'cosmos/msg-deposit' => _validateCosmosDeposit(payload),
-      'solana/serialized-tx' || 'sui/serialized-tx' => _validateSerialized(payload),
+      'solana/serialized-tx' || 'sui/serialized-tx' => _validateSerialized(family, payload),
       'solana/deposit-transfer' ||
       'sui/deposit-transfer' ||
       'xrp/deposit-transfer' ||
@@ -250,6 +250,10 @@ final class TradeExecutionBinding {
     required this.quoteId,
     required this.quoteExpiresAt,
     required this.routeExpiry,
+    this.providerTransactionId,
+    this.providerDepositAddress,
+    this.providerDepositAmountExact,
+    this.providerDepositExpiry,
     required this.sourceAmount,
     required this.sourceAmountBaseUnits,
     required this.sourceDecimals,
@@ -273,6 +277,10 @@ final class TradeExecutionBinding {
       'quoteId',
       'quoteExpiresAt',
       'routeExpiry',
+      'providerTransactionId',
+      'providerDepositAddress',
+      'providerDepositAmountExact',
+      'providerDepositExpiry',
       'sourceAmount',
       'sourceAmountBaseUnits',
       'sourceDecimals',
@@ -299,6 +307,10 @@ final class TradeExecutionBinding {
       quoteId: _required(map, 'quoteId'),
       quoteExpiresAt: parsedQuoteExpiry.toUtc(),
       routeExpiry: routeExpiry == null ? null : TradeExecutionExpiry.fromJson(routeExpiry),
+      providerTransactionId: _nullableString(map, 'providerTransactionId'),
+      providerDepositAddress: _nullableString(map, 'providerDepositAddress'),
+      providerDepositAmountExact: _nullableString(map, 'providerDepositAmountExact'),
+      providerDepositExpiry: _nullableDateTime(map, 'providerDepositExpiry'),
       sourceAmount: _required(map, 'sourceAmount'),
       sourceAmountBaseUnits: _required(map, 'sourceAmountBaseUnits'),
       sourceDecimals: _requiredInt(map, 'sourceDecimals'),
@@ -319,6 +331,10 @@ final class TradeExecutionBinding {
   final String quoteId;
   final DateTime quoteExpiresAt;
   final TradeExecutionExpiry? routeExpiry;
+  final String? providerTransactionId;
+  final String? providerDepositAddress;
+  final String? providerDepositAmountExact;
+  final DateTime? providerDepositExpiry;
   final String sourceAmount;
   final String sourceAmountBaseUnits;
   final int sourceDecimals;
@@ -362,6 +378,15 @@ final class TradeExecutionBinding {
     if (providerReferenceId != null && providerReferenceId!.isEmpty) {
       throw const FormatException('invalid provider reference');
     }
+    if (providerTransactionId != null && providerTransactionId!.isEmpty) {
+      throw const FormatException('invalid provider transaction');
+    }
+    if (providerDepositAddress != null && providerDepositAddress!.isEmpty) {
+      throw const FormatException('invalid provider deposit address');
+    }
+    if (providerDepositAmountExact != null && providerDepositAmountExact!.isEmpty) {
+      throw const FormatException('invalid provider deposit amount');
+    }
   }
 
   Map<String, dynamic> toJson() {
@@ -372,6 +397,10 @@ final class TradeExecutionBinding {
       'quoteId': quoteId,
       'quoteExpiresAt': quoteExpiresAt.toUtc().toIso8601String(),
       'routeExpiry': routeExpiry?.toJson(),
+      'providerTransactionId': providerTransactionId,
+      'providerDepositAddress': providerDepositAddress,
+      'providerDepositAmountExact': providerDepositAmountExact,
+      'providerDepositExpiry': providerDepositExpiry?.toUtc().toIso8601String(),
       'sourceAmount': sourceAmount,
       'sourceAmountBaseUnits': sourceAmountBaseUnits,
       'sourceDecimals': sourceDecimals,
@@ -476,10 +505,19 @@ bool _validateCosmosDeposit(Map<String, dynamic> payload) =>
     payload['assetDecimals'] is int &&
     (payload['assetDecimals'] as int) >= 0;
 
-bool _validateSerialized(Map<String, dynamic> payload) =>
+bool _validateSerialized(String family, Map<String, dynamic> payload) =>
     _hasExactKeys(payload, const {'serializedTransaction', 'minOut'}) &&
     _nonEmpty(payload['serializedTransaction']) &&
+    _validSerializedTransaction(family, payload['serializedTransaction'] as String) &&
     _validTokenAmountOrNull(payload['minOut']);
+
+bool _validSerializedTransaction(String family, String value) {
+  if (value.trim() != value || value.isEmpty) return false;
+  if (family == 'solana') {
+    return RegExp(r'^[1-9A-HJ-NP-Za-km-z]+$').hasMatch(value);
+  }
+  return RegExp(r'^[A-Za-z0-9+/]+={0,2}$').hasMatch(value) && value.length % 4 == 0;
+}
 
 bool _hasExactKeys(Map<String, dynamic> map, Set<String> keys) =>
     map.length == keys.length && map.keys.toSet().containsAll(keys);
@@ -539,6 +577,15 @@ String? _nullableString(Map<String, dynamic> map, String key) {
   final value = map[key];
   if (value != null && value is! String) throw FormatException('$key must be a string or null');
   return value as String?;
+}
+
+DateTime? _nullableDateTime(Map<String, dynamic> map, String key) {
+  final value = map[key];
+  if (value == null) return null;
+  if (value is! String) throw FormatException('$key must be a string or null');
+  final parsed = DateTime.tryParse(value);
+  if (parsed == null) throw FormatException('$key must be an ISO-8601 timestamp');
+  return parsed.toUtc();
 }
 
 int? _nullableInt(Map<String, dynamic> map, String key) {

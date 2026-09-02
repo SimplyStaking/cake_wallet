@@ -176,7 +176,10 @@ class Trade {
 
   // ── SQLite serialization ─────────────────────────────
   void mergeFindTradeByIdResult(Trade updated) {
-    if (updated.stateRaw.isNotEmpty) stateRaw = updated.stateRaw;
+    if (updated.stateRaw.isNotEmpty &&
+        (providerRaw != 17 || _canAdvancePegarouteState(stateRaw, updated.stateRaw))) {
+      stateRaw = updated.stateRaw;
+    }
     if (createdAt == null && updated.createdAt != null) {
       createdAt = updated.createdAt;
     }
@@ -209,6 +212,25 @@ class Trade {
               : TradeRefund(configuredAddress: refundAddress).encode();
       refundJson = TradeRefund.mergeJson(currentRefundJson, updated.refundJson!);
     }
+  }
+
+  static bool _canAdvancePegarouteState(String current, String next) {
+    if (current == next || current.isEmpty) return true;
+    if (current == 'success' || current == 'refunded') return false;
+    if (current == 'failed') return next == 'refunded';
+    const rank = {
+      'created': 0,
+      'confirming': 1,
+      'exchanging': 2,
+      'sending': 3,
+      'refund': 3,
+      'success': 4,
+      'failed': 4,
+      'refunded': 5,
+    };
+    final currentRank = rank[current];
+    final nextRank = rank[next];
+    return currentRank == null || nextRank == null || nextRank >= currentRank;
   }
 
   Map<String, dynamic> toSqliteMap() {

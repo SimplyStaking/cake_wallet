@@ -1,4 +1,6 @@
 import 'package:cw_core/pending_transaction.dart';
+import 'dart:async';
+
 import 'package:cw_core/wallet_base.dart';
 import 'package:cw_core/amount/money.dart';
 
@@ -13,14 +15,54 @@ abstract interface class TradeExecutionHandler {
     required ValidatedTradeExecution execution,
     required DateTime now,
   });
-  Future<PendingTransaction?> prepare({
-    required WalletBase wallet,
-    required ValidatedTradeExecution execution,
+  Future<GuardedPendingTransaction?> prepare({
+    required TradeExecutionGuard guard,
   });
   Future<void> onCommitted({
     required ValidatedTradeExecution execution,
     required CommittedTradeExecution receipt,
   });
+}
+
+final class TradeExecutionGuard {
+  const TradeExecutionGuard._(this._validate, this._wallet);
+
+  final ValidatedTradeExecution Function() _validate;
+
+  ValidatedTradeExecution validate() => _validate();
+
+  Future<T> withProviderIo<T>(
+      FutureOr<T> Function(ValidatedTradeExecution execution) operation) async {
+    final execution = _validate();
+    try {
+      return await operation(execution);
+    } finally {
+      _validate();
+    }
+  }
+
+  Future<GuardedPendingTransaction?> withWalletConstruction(
+    FutureOr<PendingTransaction?> Function(WalletBase wallet, ValidatedTradeExecution execution)
+        operation,
+  ) async {
+    // Concrete handler activation must document wallet-internal async/ABA guarantees.
+    final execution = _validate();
+    late final PendingTransaction? pending;
+    try {
+      pending = await operation(_wallet, execution);
+    } finally {
+      _validate();
+    }
+    return pending == null ? null : GuardedPendingTransaction._(pending);
+  }
+
+  final WalletBase _wallet;
+}
+
+final class GuardedPendingTransaction {
+  const GuardedPendingTransaction._(this._inner);
+
+  final PendingTransaction _inner;
 }
 
 final class CommittedTradeExecution {
@@ -106,39 +148,46 @@ class RegistryTradeExecutionDispatcher implements TradeExecutionDispatcher {
     } catch (_) {
       return Future.value(null);
     }
+    final validator = const PegarouteExecutionBindingValidator();
+    final guard = TradeExecutionGuard._(
+      () {
+        final current = validator.validatePersisted(
+          trade: trade,
+          wallet: wallet,
+          expectedRawExecutionJson: validated.rawExecutionJson,
+        );
+        handler.validateForExecution(execution: current, now: validator.now);
+        return current;
+      },
+      wallet,
+    );
     return _finishPrepare(
       handler: handler,
-      wallet: wallet,
-      trade: trade,
-      validated: validated,
+      guard: guard,
     );
   }
 
   Future<PendingTransaction?> _finishPrepare({
     required TradeExecutionHandler handler,
-    required WalletBase wallet,
-    required Trade trade,
-    required ValidatedTradeExecution validated,
+    required TradeExecutionGuard guard,
   }) async {
-    final transaction = await handler.prepare(wallet: wallet, execution: validated);
-    if (transaction == null) return null;
+    late final GuardedPendingTransaction? guarded;
+    try {
+      guarded = await handler.prepare(guard: guard);
+    } catch (_) {
+      return null;
+    }
+    if (guarded == null) return null;
     late final ValidatedTradeExecution current;
     try {
-      current = const PegarouteExecutionBindingValidator().validatePersisted(
-        trade: trade,
-        wallet: wallet,
-        expectedRawExecutionJson: validated.rawExecutionJson,
-      );
-      handler.validateForExecution(execution: current, now: DateTime.now().toUtc());
+      current = guard.validate();
     } catch (_) {
       return null;
     }
     return _BoundPendingTransaction(
-      inner: transaction,
-      wallet: wallet,
-      trade: trade,
+      inner: guarded._inner,
       handler: handler,
-      validator: const PegarouteExecutionBindingValidator(),
+      guard: guard,
       execution: current,
     );
   }
@@ -147,29 +196,17 @@ class RegistryTradeExecutionDispatcher implements TradeExecutionDispatcher {
 class _BoundPendingTransaction with PendingTransaction {
   _BoundPendingTransaction({
     required this.inner,
-    required this.wallet,
-    required this.trade,
     required this.handler,
-    required this.validator,
+    required this.guard,
     required this.execution,
   });
 
   final PendingTransaction inner;
-  final WalletBase wallet;
-  final Trade trade;
   final TradeExecutionHandler handler;
-  final PegarouteExecutionBindingValidator validator;
+  final TradeExecutionGuard guard;
   final ValidatedTradeExecution execution;
 
-  ValidatedTradeExecution _validate() {
-    final current = validator.validatePersisted(
-      trade: trade,
-      wallet: wallet,
-      expectedRawExecutionJson: execution.rawExecutionJson,
-    );
-    handler.validateForExecution(execution: current, now: validator.now);
-    return current;
-  }
+  ValidatedTradeExecution _validate() => guard.validate();
 
   @override
   String get id => inner.id;
@@ -214,12 +251,21 @@ class _BoundPendingTransaction with PendingTransaction {
   set change(PendingChange? value) => inner.change = value;
 
   @override
-  bool shouldCommitUR() => inner.shouldCommitUR();
+  bool shouldCommitUR() => false;
 
   @override
   Future<void> commit() async {
     _validate();
-    await inner.commit();
+    try {
+      await inner.commit();
+    } catch (_) {
+      try {
+        _validate();
+      } catch (_) {
+        // A changed context must not trigger follow-up I/O after a failed send.
+      }
+      rethrow;
+    }
     late final ValidatedTradeExecution current;
     try {
       current = _validate();
@@ -243,7 +289,6 @@ class _BoundPendingTransaction with PendingTransaction {
 
   @override
   Future<Map<String, String>> commitUR() async {
-    _validate();
-    return inner.commitUR();
+    throw const PegarouteBindingException('Pegaroute UR commit is unavailable');
   }
 }

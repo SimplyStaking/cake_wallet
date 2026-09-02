@@ -34,7 +34,7 @@ TradeExecutionBinding _binding() => TradeExecutionBinding(
       walletChainId: null,
       walletAddress: 'sender',
       reviewedRouteJson:
-          '{"provider":"instaswap","providerType":"fixture","subprovider":null,"private":false,"expectedOutput":"0.99","fees":null,"estimatedTimeSeconds":0,"memo":null,"inboundAddress":null,"router":null,"minAmount":null,"expiry":null,"gasRate":null,"resolvedFee":null,"openOceanRoute":null}',
+          '{"provider":"instaswap","providerType":"fixture","subprovider":null,"private":false,"expectedOutput":"0.99","fees":null,"estimatedTimeSeconds":0,"memo":null,"inboundAddress":"destination","router":null,"minAmount":null,"expiry":null,"gasRate":null,"resolvedFee":null,"openOceanRoute":null}',
       providerReferenceId: null,
     );
 
@@ -62,14 +62,19 @@ class _Handler implements TradeExecutionHandler {
     this.mutateDuringCommit = false,
     this.prepareCompleter,
     this.throwOnCommitted = false,
+    this.ignoreGuard = false,
   });
 
   final bool external;
   final bool mutateDuringCommit;
   final Completer<void>? prepareCompleter;
   final bool throwOnCommitted;
+  final bool ignoreGuard;
   int prepareCalls = 0;
+  int validationCalls = 0;
+  int validationsAfterConstruction = 0;
   int commitHookCalls = 0;
+  bool constructionStarted = false;
   late Trade trade;
   late _Pending pending;
 
@@ -83,15 +88,21 @@ class _Handler implements TradeExecutionHandler {
   void validateForExecution({
     required ValidatedTradeExecution execution,
     required DateTime now,
-  }) {}
+  }) {
+    validationCalls++;
+    if (constructionStarted) validationsAfterConstruction++;
+  }
 
   @override
-  Future<PendingTransaction?> prepare({
-    required WalletBase wallet,
-    required ValidatedTradeExecution execution,
+  Future<GuardedPendingTransaction?> prepare({
+    required TradeExecutionGuard guard,
   }) async {
-    if (prepareCompleter != null) await prepareCompleter!.future;
-    return _prepared();
+    if (ignoreGuard) return _prepared() as dynamic;
+    return guard.withWalletConstruction((wallet, execution) async {
+      if (prepareCompleter != null) await prepareCompleter!.future;
+      constructionStarted = true;
+      return _prepared();
+    });
   }
 
   @override
@@ -213,7 +224,7 @@ void main() {
     );
   });
 
-  test('validates before prepare and guards commit and commitUR', () async {
+  test('validates before prepare and guards commit while disabling commitUR', () async {
     final execution = _execution();
     final trade = Trade(
       id: 'trade',
@@ -241,6 +252,8 @@ void main() {
     final pending = await dispatcher.prepare(wallet: wallet, trade: trade);
     expect(pending, isNotNull);
     expect(handler.prepareCalls, 1);
+    expect(handler.validationCalls, greaterThanOrEqualTo(3));
+    expect(handler.validationsAfterConstruction, greaterThanOrEqualTo(1));
 
     trade.amount = '2';
     await expectLater(pending!.commit(), throwsA(isA<PegarouteBindingException>()));
@@ -257,9 +270,35 @@ void main() {
     expect(handler.pending.urCommits, 0);
     trade.amount = '1';
     final validUrPending = await dispatcher.prepare(wallet: wallet, trade: trade);
-    await validUrPending!.commitUR();
-    expect(handler.pending.urCommits, 1);
+    expect(validUrPending!.shouldCommitUR(), isFalse);
+    await expectLater(validUrPending.commitUR(), throwsA(isA<PegarouteBindingException>()));
+    expect(handler.pending.urCommits, 0);
     expect(handler.commitHookCalls, 1);
+  });
+
+  test('raw pending transactions cannot satisfy guarded preparation', () async {
+    final execution = _execution();
+    final trade = Trade(
+      id: 'trade',
+      amount: '1',
+      from: CryptoCurrency.xmr,
+      to: CryptoCurrency.btc,
+      provider: ExchangeProviderDescription.pegaroute,
+      senderAddress: 'sender',
+      payoutAddress: 'destination',
+      walletId: 'wallet',
+      fromWalletAddress: 'sender',
+      providerName: 'instaswap',
+      executionJson: execution.encode(),
+    );
+    final handler = _Handler(false, ignoreGuard: true);
+    final pending = await RegistryTradeExecutionDispatcher([handler]).prepare(
+      wallet: _Wallet(),
+      trade: trade,
+    );
+    expect(pending, isNull);
+    expect(handler.pending.commits, 0);
+    expect(handler.pending.urCommits, 0);
   });
 
   test('suppresses post-broadcast hook when context changes during commit', () async {

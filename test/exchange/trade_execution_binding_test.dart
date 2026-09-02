@@ -8,6 +8,8 @@ import 'package:cake_wallet/exchange/provider/pegaroute/pegaroute_execution_bind
 import 'package:cake_wallet/exchange/trade.dart';
 import 'package:cake_wallet/exchange/trade_execution.dart';
 import 'package:cw_core/crypto_currency.dart';
+import 'package:cw_core/erc20_token.dart';
+import 'package:cw_core/spl_token.dart';
 import 'package:cw_core/balance.dart';
 import 'package:cw_core/transaction_history.dart';
 import 'package:cw_core/transaction_info.dart';
@@ -53,7 +55,7 @@ TradeExecution _execution({
         walletChainId: 1,
         walletAddress: '0x0000000000000000000000000000000000000002',
         reviewedRouteJson:
-            '{"provider":"instaswap","providerType":"fixture","subprovider":null,"private":false,"expectedOutput":"0.99","fees":null,"estimatedTimeSeconds":0,"memo":null,"inboundAddress":null,"router":null,"minAmount":null,"expiry":null,"gasRate":null,"resolvedFee":null,"openOceanRoute":null}',
+            '{"provider":"instaswap","providerType":"fixture","subprovider":null,"private":false,"expectedOutput":"0.99","fees":null,"estimatedTimeSeconds":0,"memo":null,"inboundAddress":"0x0000000000000000000000000000000000000001","router":null,"minAmount":null,"expiry":null,"gasRate":null,"resolvedFee":null,"openOceanRoute":null}',
         providerReferenceId: null,
       ),
       payload: payload ??
@@ -86,6 +88,91 @@ Trade _trade(TradeExecution execution) => Trade(
       isSendAll: false,
       executionJson: execution.encode(),
     );
+
+Trade _qualifiedTokenTrade({required bool solana}) {
+  final source = solana
+      ? SPLToken(
+          name: 'Pyth Network',
+          symbol: 'PYTH',
+          mintAddress: 'HZ1JovNiVvGrGNiiYvEozEVgZ58xaU3RKwX8eACQBCt3',
+          decimal: 8,
+          mint: 'pyth',
+        )
+      : Erc20Token(
+          name: 'SPX6900',
+          symbol: 'SPX',
+          contractAddress: '0x50da645f148798f68ef2d7db7c1cb22a6819bb2c',
+          decimal: 18,
+          tag: 'BASE',
+        );
+  final sourceChain = solana ? 'SOL' : 'BASE';
+  final sourceToken = solana
+      ? 'PYTH-HZ1JovNiVvGrGNiiYvEozEVgZ58xaU3RKwX8eACQBCt3'
+      : 'SPX-0x50da645f148798f68ef2d7db7c1cb22a6819bb2c';
+  final sourceDecimals = solana ? 8 : 18;
+  final baseUnits = solana ? '100000000' : '1000000000000000000';
+  final destination = solana ? 'sol-deposit' : '0x0000000000000000000000000000000000000001';
+  final execution = TradeExecution(
+    family: solana ? 'solana' : 'evm',
+    mode: solana ? 'deposit-transfer' : 'erc20-transfer',
+    sourceChain: sourceChain,
+    sourceToken: sourceToken,
+    nativeToken: solana ? 'SOL' : 'ETH',
+    destinationChain: 'BTC',
+    destinationToken: 'BTC',
+    routeProvider: 'instaswap',
+    binding: TradeExecutionBinding(
+      tradeId: 'qualified-token-trade',
+      providerRaw: 17,
+      quoteId: 'quote-fixture',
+      quoteExpiresAt: DateTime.utc(2099),
+      routeExpiry: null,
+      sourceAmount: '1',
+      sourceAmountBaseUnits: baseUnits,
+      sourceDecimals: sourceDecimals,
+      senderAddress: solana ? 'sol-sender' : '0x0000000000000000000000000000000000000002',
+      refundAddress: null,
+      destinationAddress: 'bc1qfixture',
+      isSendAll: false,
+      walletId: 'wallet-fixture',
+      walletChainId: solana ? null : 8453,
+      walletAddress: solana ? 'sol-sender' : '0x0000000000000000000000000000000000000002',
+      reviewedRouteJson:
+          '{"provider":"instaswap","providerType":"fixture","subprovider":null,"private":false,"expectedOutput":"0.99","fees":null,"estimatedTimeSeconds":0,"memo":null,"inboundAddress":"$destination","router":null,"minAmount":null,"expiry":null,"gasRate":null,"resolvedFee":null,"openOceanRoute":null}',
+      providerReferenceId: null,
+    ),
+    payload: solana
+        ? {
+            'to': destination,
+            'amount': {'display': '1', 'baseUnits': baseUnits},
+            'memo': null,
+          }
+        : {
+            'chainId': 8453,
+            'to': destination,
+            'data': null,
+            'value': null,
+            'gasLimit': null,
+            'memo': null,
+            'approval': null,
+            'transferAmount': {'display': '1', 'baseUnits': baseUnits},
+          },
+  );
+  return Trade(
+    id: execution.binding.tradeId,
+    amount: '1',
+    from: source,
+    to: CryptoCurrency.btc,
+    provider: ExchangeProviderDescription.pegaroute,
+    senderAddress: execution.binding.senderAddress,
+    payoutAddress: execution.binding.destinationAddress,
+    walletId: execution.binding.walletId,
+    fromWalletAddress: execution.binding.walletAddress,
+    chainId: execution.binding.walletChainId,
+    providerName: 'instaswap',
+    executionJson: execution.encode(),
+  );
+}
 
 class _Addresses implements WalletAddresses {
   @override
@@ -127,8 +214,23 @@ class _Wallet
   dynamic noSuchMethod(Invocation invocation) => throw UnimplementedError();
 }
 
-PegarouteQuoteResponse _quote() => PegarouteQuoteResponse.fromJson(
-      json.decode(File('test/exchange/fixtures/pegaroute/quote.json').readAsStringSync()),
+Future<PegarouteValidatedQuote> _quote() => PegarouteApiClient(
+      configuration: const PegarouteConfiguration(baseUrl: 'https://example.test', apiKey: 'test'),
+      get: (uri, headers) async => very_insecure_http_do_not_use.Response(
+        File('test/exchange/fixtures/pegaroute/quote.json').readAsStringSync(),
+        200,
+      ),
+    ).quote(
+      PegarouteQuoteRequest(
+        fromChain: 'ETH',
+        fromToken: 'ETH',
+        toChain: 'BTC',
+        toToken: 'BTC',
+        amount: '1',
+        destinationAddress: 'bc1qfixture',
+        senderAddress: '0x0000000000000000000000000000000000000002',
+        refundAddress: '0x0000000000000000000000000000000000000003',
+      ),
     );
 
 PegarouteSwapRequest _request() => PegarouteSwapRequest(
@@ -152,6 +254,34 @@ void main() {
     );
     expect(validated.rawExecutionJson, execution.encode());
     expect(validated.execution.binding.tradeId, 'trade-fixture');
+  });
+
+  test('revalidates catalog token identity from retained restart metadata', () {
+    for (final solana in [false, true]) {
+      final original = _qualifiedTokenTrade(solana: solana);
+      final reloaded = Trade.fromSqliteRow(original.toSqliteMap()..['tradeId'] = 1);
+      expect(
+        () => const PegarouteExecutionBindingValidator().validatePersisted(trade: reloaded),
+        returnsNormally,
+      );
+
+      final title = solana ? 'PYTH' : 'SPX';
+      final tag = solana ? 'SOL' : 'BASE';
+      final decimals = solana ? 8 : 18;
+      final changedCurrencies = [
+        CryptoCurrency(title: 'OTHER', name: 'reloaded-token', tag: tag, decimals: decimals),
+        CryptoCurrency(title: title, name: 'reloaded-token', tag: 'WRONG', decimals: decimals),
+        CryptoCurrency(title: title, name: 'reloaded-token', tag: tag, decimals: decimals - 1),
+      ];
+      for (final changedCurrency in changedCurrencies) {
+        final changed = Trade.fromSqliteRow(original.toSqliteMap()..['tradeId'] = 1);
+        changed.from = changedCurrency;
+        expect(
+          () => const PegarouteExecutionBindingValidator().validatePersisted(trade: changed),
+          throwsA(isA<PegarouteBindingException>()),
+        );
+      }
+    }
   });
 
   test('rejects each changed persisted identity and amount', () {
@@ -253,6 +383,58 @@ void main() {
     }
   });
 
+  test('rejects token contract calls without a decoded debit proof', () {
+    final trade = _qualifiedTokenTrade(solana: false);
+    final raw = json.decode(trade.executionJson!) as Map<String, dynamic>;
+    raw['mode'] = 'contract-call';
+    raw['payload'] = {
+      'chainId': 8453,
+      'to': '0x0000000000000000000000000000000000000001',
+      'data': '0xdeadbeef',
+      'value': {'display': '0', 'baseUnits': '0'},
+      'gasLimit': null,
+      'memo': null,
+      'approval': {
+        'spender': '0x0000000000000000000000000000000000000001',
+        'tokenAddress': '0x50da645f148798f68ef2d7db7c1cb22a6819bb2c',
+        'amount': {'display': '1', 'baseUnits': '1000000000000000000'},
+      },
+      'transferAmount': null,
+    };
+    final tampered = TradeExecution.fromJson(raw);
+    trade.executionJson = tampered.encode();
+    expect(
+      () => const PegarouteExecutionBindingValidator().validatePersisted(trade: trade),
+      throwsA(isA<PegarouteBindingException>()),
+    );
+  });
+
+  test('rejects persisted target and memo changes against the reviewed route', () {
+    for (final change in [
+      (Map<String, dynamic> route, Map<String, dynamic> payload) {
+        payload['to'] = '0x0000000000000000000000000000000000000004';
+      },
+      (Map<String, dynamic> route, Map<String, dynamic> payload) {
+        route['memo'] = 'unexpected-memo';
+      },
+    ]) {
+      final execution = _execution();
+      final raw = json.decode(execution.encode()) as Map<String, dynamic>;
+      final binding = raw['binding'] as Map<String, dynamic>;
+      final route = json.decode(binding['reviewedRouteJson'] as String) as Map<String, dynamic>;
+      final payload = raw['payload'] as Map<String, dynamic>;
+      change(route, payload);
+      binding['reviewedRouteJson'] = json.encode(route);
+      final tampered = TradeExecution.fromJson(raw);
+      expect(
+        () => const PegarouteExecutionBindingValidator().validatePersisted(
+          trade: _trade(tampered),
+        ),
+        throwsA(isA<PegarouteBindingException>()),
+      );
+    }
+  });
+
   test('rejects a changed exact raw execution snapshot', () {
     final execution = _execution();
     final trade = _trade(execution);
@@ -265,13 +447,24 @@ void main() {
     );
   });
 
-  test('requires quote expiry before future swap creation', () {
+  test('requires quote expiry before future swap creation', () async {
     final value = json.decode(
       File('test/exchange/fixtures/pegaroute/quote.json').readAsStringSync(),
     ) as Map<String, dynamic>;
     value['expiresAt'] = '2099-01-01T00:00:00.000Z';
-    final quote = PegarouteQuoteResponse.fromJson(value);
-    final route = quote.routes.single;
+    final quote = await PegarouteApiClient(
+      configuration: const PegarouteConfiguration(baseUrl: 'https://example.test', apiKey: 'test'),
+      get: (uri, headers) async => very_insecure_http_do_not_use.Response(json.encode(value), 200),
+    ).quote(PegarouteQuoteRequest(
+      fromChain: 'ETH',
+      fromToken: 'ETH',
+      toChain: 'BTC',
+      toToken: 'BTC',
+      amount: '1',
+      destinationAddress: 'bc1qfixture',
+      senderAddress: '0x0000000000000000000000000000000000000002',
+    ));
+    final route = quote.response.routes.single;
     final request = PegarouteSwapRequest(
       fromChain: 'ETH',
       fromToken: 'ETH',
@@ -311,8 +504,8 @@ void main() {
   });
 
   test('preflights complete swap context before API I/O and binds after quote expiry', () async {
-    final quote = _quote();
-    final route = quote.routes.single;
+    final quote = await _quote();
+    final route = quote.response.routes.single;
     final trade = Trade(
       id: 'transaction-fixture',
       amount: '1',
@@ -357,16 +550,89 @@ void main() {
       throwsA(isA<PegarouteBindingException>()),
     );
 
+    final omittedRouteIdentity = json.decode(json.encode(value)) as Map<String, dynamic>;
+    (omittedRouteIdentity['route'] as Map<String, dynamic>).remove('subprovider');
+    expect(
+      () => const PegarouteExecutionBindingValidator().bindSwapResponse(
+        preflight: preflight,
+        response: PegarouteSwapResponse.fromJson(omittedRouteIdentity),
+      ),
+      throwsA(isA<PegarouteBindingException>()),
+    );
+
+    final opaqueResponse = json.decode(json.encode(value)) as Map<String, dynamic>;
+    opaqueResponse['execution'] = {
+      'family': 'solana',
+      'mode': 'serialized-tx',
+      'serializedTransaction': '3MN',
+      'minOut': null,
+    };
+    expect(
+      () => const PegarouteExecutionBindingValidator().bindSwapResponse(
+        preflight: preflight,
+        response: PegarouteSwapResponse.fromJson(opaqueResponse),
+      ),
+      throwsA(isA<PegarouteBindingException>()),
+    );
+
     var calls = 0;
+    String? sentBody;
+    (value['route'] as Map<String, dynamic>)['expectedOutput'] = '0.01';
+    final requestCopy = json.decode(preflight.requestJson) as Map<String, dynamic>;
+    requestCopy['amount'] = '9';
     final client = PegarouteApiClient(
       configuration: const PegarouteConfiguration(baseUrl: 'https://example.test', apiKey: 'test'),
       post: (uri, headers, body) async {
         calls++;
+        sentBody = body;
         return very_insecure_http_do_not_use.Response(json.encode(value), 202);
       },
+      clock: () => DateTime.utc(2026, 8, 31),
     );
     await client.swap(preflight);
     expect(calls, 1);
+    expect(sentBody, preflight.requestJson);
+
+    var staleCalls = 0;
+    final staleClient = PegarouteApiClient(
+      configuration: const PegarouteConfiguration(baseUrl: 'https://example.test', apiKey: 'test'),
+      post: (uri, headers, body) async {
+        staleCalls++;
+        fail('expired preflight must not perform POST');
+      },
+      clock: () => DateTime.utc(2026, 9, 2),
+    );
+    await expectLater(staleClient.swap(preflight), throwsA(isA<PegarouteBindingException>()));
+    expect(staleCalls, 0);
+  });
+
+  test('rejects malformed reviewed route fields and one-copy expiry tampering', () {
+    final execution = _execution();
+    final raw = json.decode(execution.encode()) as Map<String, dynamic>;
+    final binding = raw['binding'] as Map<String, dynamic>;
+    final route = json.decode(binding['reviewedRouteJson'] as String) as Map<String, dynamic>;
+    route['estimatedTimeSeconds'] = 'not-a-number';
+    binding['reviewedRouteJson'] = json.encode(route);
+    final malformed = TradeExecution.fromJson(raw);
+    expect(
+      () => const PegarouteExecutionBindingValidator().validatePersisted(
+        trade: _trade(malformed),
+      ),
+      throwsA(isA<PegarouteBindingException>()),
+    );
+
+    final expiryRaw = json.decode(execution.encode()) as Map<String, dynamic>;
+    (expiryRaw['binding'] as Map<String, dynamic>)['routeExpiry'] = {
+      'kind': 'unixSeconds',
+      'value': 4102444800,
+    };
+    final expiryTampered = TradeExecution.fromJson(expiryRaw);
+    expect(
+      () => const PegarouteExecutionBindingValidator().validatePersisted(
+        trade: _trade(expiryTampered),
+      ),
+      throwsA(isA<PegarouteBindingException>()),
+    );
   });
 
   test('raw requests cannot cross the swap API boundary', () {
@@ -376,9 +642,9 @@ void main() {
     expect(() => client.swap(_request()), throwsA(isA<TypeError>()));
   });
 
-  test('rejects expired or mismatched swap preflight without API I/O', () {
-    final quote = _quote();
-    final route = quote.routes.single;
+  test('rejects expired or mismatched swap preflight without API I/O', () async {
+    final quote = await _quote();
+    final route = quote.response.routes.single;
     final trade = Trade(
       id: 'transaction-fixture',
       amount: '1',

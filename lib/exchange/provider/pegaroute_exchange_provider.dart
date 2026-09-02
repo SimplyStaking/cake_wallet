@@ -22,11 +22,14 @@ class PegarouteExchangeProvider extends ExchangeProvider {
     PegarouteApiClient? apiClient,
     PegarouteConfiguration? configuration,
     PegarouteCapabilityGate? capabilityGate,
+    Future<CryptoCurrency?> Function(String? chain, String? token)? currencyLookup,
   })  : _apiClient = apiClient ?? PegarouteApiClient(configuration: configuration),
-        _capabilityGate = capabilityGate ?? const PegarouteCapabilityGate();
+        _capabilityGate = capabilityGate ?? const PegarouteCapabilityGate(),
+        _currencyLookup = currencyLookup;
 
   final PegarouteApiClient _apiClient;
   final PegarouteCapabilityGate _capabilityGate;
+  final Future<CryptoCurrency?> Function(String? chain, String? token)? _currencyLookup;
   final PegarouteCurrencyMapper _currencyMapper = const PegarouteCurrencyMapper();
   final PegarouteExecutionBindingValidator _bindingValidator =
       const PegarouteExecutionBindingValidator();
@@ -94,7 +97,9 @@ class PegarouteExchangeProvider extends ExchangeProvider {
     final validated = _bindingValidator.validatePersisted(trade: trade);
     final rawExecutionJson = validated.rawExecutionJson;
     try {
-      final response = await _apiClient.status(trade.id);
+      final response = await _apiClient.status(
+        validated.execution.binding.providerTransactionId ?? trade.id,
+      );
       final current = _bindingValidator.validatePersisted(
         trade: trade,
         expectedRawExecutionJson: rawExecutionJson,
@@ -102,6 +107,8 @@ class PegarouteExchangeProvider extends ExchangeProvider {
       _bindingValidator.validateStatusResponse(validated: current, response: response);
       final input = response.input;
       final output = response.output;
+      final parsedFrom = await _parseCurrency(input.chain, input.token);
+      final parsedTo = await _parseCurrency(output.chain, output.token);
       final configuredRefund = input.refundAddress;
       final refund = response.refund;
       final refundRecord =
@@ -127,8 +134,8 @@ class PegarouteExchangeProvider extends ExchangeProvider {
       _bindingValidator.validateStatusResponse(validated: finalValidation, response: response);
       return Trade(
         id: trade.id,
-        from: await _parseCurrency(input.chain, input.token),
-        to: await _parseCurrency(output.chain, output.token),
+        from: parsedFrom,
+        to: parsedTo,
         provider: description,
         senderAddress: input.address,
         refundAddress: configuredRefund,
@@ -155,6 +162,7 @@ class PegarouteExchangeProvider extends ExchangeProvider {
   }
 
   Future<CryptoCurrency?> _parseCurrency(String? chain, String? token) async {
+    if (_currencyLookup != null) return _currencyLookup!(chain, token);
     if (token == null || token.isEmpty) return null;
     final separator = token.indexOf('-');
     if (separator < 0) {

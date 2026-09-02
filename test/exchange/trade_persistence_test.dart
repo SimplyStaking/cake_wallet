@@ -1,6 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:cake_wallet/exchange/exchange_provider_description.dart';
 import 'package:cake_wallet/exchange/trade.dart';
+import 'package:cake_wallet/exchange/trade_state.dart';
 import 'package:cake_wallet/exchange/trade_execution.dart';
 import 'package:cake_wallet/exchange/trade_refund.dart';
 import 'package:cake_wallet/exchange/provider/pegaroute/pegaroute_execution_binding.dart';
@@ -23,7 +24,7 @@ TradeExecutionBinding _binding() => TradeExecutionBinding(
       walletChainId: null,
       walletAddress: 'sender',
       reviewedRouteJson:
-          '{"provider":"instaswap","providerType":"fixture","subprovider":"fixture","private":false,"expectedOutput":"0.99","fees":null,"estimatedTimeSeconds":0,"memo":null,"inboundAddress":null,"router":null,"minAmount":null,"expiry":null,"gasRate":null,"resolvedFee":null,"openOceanRoute":null}',
+          '{"provider":"instaswap","providerType":"fixture","subprovider":"fixture","private":false,"expectedOutput":"0.99","fees":null,"estimatedTimeSeconds":0,"memo":null,"inboundAddress":"destination","router":null,"minAmount":null,"expiry":null,"gasRate":null,"resolvedFee":null,"openOceanRoute":null}',
       providerReferenceId: null,
     );
 
@@ -95,6 +96,23 @@ void main() {
     final trade = Trade(id: 'trade', amount: '1', executionJson: 'original');
     trade.mergeFindTradeByIdResult(Trade(id: 'trade', amount: '1', executionJson: 'replacement'));
     expect(trade.executionJson, 'original');
+  });
+
+  test('does not regress terminal Pegaroute status during status merge', () {
+    final trade = Trade(
+      id: 'trade',
+      amount: '1',
+      provider: ExchangeProviderDescription.pegaroute,
+      state: TradeState.success,
+    );
+    trade.mergeFindTradeByIdResult(
+      Trade(
+        id: 'trade',
+        amount: '1',
+        state: TradeState.created,
+      ),
+    );
+    expect(trade.state, TradeState.success);
   });
 
   test('does not populate a missing creation execution during status merge', () {
