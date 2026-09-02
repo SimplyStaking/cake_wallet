@@ -221,7 +221,7 @@ final class PegarouteExecutionBindingValidator {
     if (response.transactionId.trim().isEmpty ||
         response.provider.name != reviewedRoute['provider'] ||
         response.providerType != reviewedRoute['providerType'] ||
-        !_sameRouteEchoFromSnapshot(reviewedRoute, response.route, response.providerType, true)) {
+        !_sameRouteEchoFromSnapshot(reviewedRoute, response.route, null, true)) {
       throw const PegarouteBindingException('swap response route changed');
     }
     _validateProviderDetails(
