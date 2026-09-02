@@ -1034,8 +1034,8 @@ abstract class SendViewModelBase extends WalletChangeListenerViewModel with Stor
     }
   }
 
-  Future<void> _handleOcpRequest() async {
-    if (OpenCryptoPayService.requiresClientCommit(selectedCryptoCurrency)) {
+  Future<void> _handleOcpRequest({bool commitClient = true}) async {
+    if (commitClient && OpenCryptoPayService.requiresClientCommit(selectedCryptoCurrency)) {
       await pendingTransaction!.commit();
     }
 
@@ -1061,25 +1061,50 @@ abstract class SendViewModelBase extends WalletChangeListenerViewModel with Stor
       throw Exception("Pending transaction doesn't exist. It should not be happened.");
     }
 
+    var commitBoundaryEstablished = false;
     try {
       state = wallet.isHardwareWallet && walletType == WalletType.monero
           ? IsAwaitingDeviceResponseState()
           : TransactionCommitting();
 
       if (ocpRequest != null) {
-        await _handleOcpRequest();
+        if (OpenCryptoPayService.requiresClientCommit(selectedCryptoCurrency)) {
+          await pendingTransaction!.commit();
+          commitBoundaryEstablished = true;
+          state = TransactionCommitted();
+          await _handleOcpRequest(commitClient: false);
+        } else {
+          await _handleOcpRequest();
+          commitBoundaryEstablished = true;
+          state = TransactionCommitted();
+        }
       } else if (pendingTransaction!.shouldCommitUR()) {
         await _commitUR(context);
+        commitBoundaryEstablished = true;
+        state = TransactionCommitted();
       } else {
         await pendingTransaction!.commit();
+        commitBoundaryEstablished = true;
+        state = TransactionCommitted();
+      }
+    } catch (e) {
+      if (!commitBoundaryEstablished) {
+        state = FailureState(translateErrorMessage(e, wallet.type, wallet.currency));
+
+        final failedSignature = e is JupiterSwapFailedException ? e.signature : "";
+
+        await _updateSolanaTrade(signature: failedSignature, isSuccess: false);
+        return;
       }
 
-      state = TransactionCommitted();
+      _logPostCommitError(e);
+    }
 
+    try {
       if (_currentTrade != null) {
         final provider = _currentTrade!.provider;
         if (provider == ExchangeProviderDescription.swapsXyz) {
-          registerSwapsXyzTransaction(_currentTrade!);
+          await registerSwapsXyzTransaction(_currentTrade!);
         }
       }
 
@@ -1095,7 +1120,7 @@ abstract class SendViewModelBase extends WalletChangeListenerViewModel with Stor
               maxRetries: 5,
             );
           } catch (e) {
-            printV('Failed to poll for transaction: $e');
+            _logPostCommitError(e);
           }
         });
 
@@ -1111,7 +1136,7 @@ abstract class SendViewModelBase extends WalletChangeListenerViewModel with Stor
                   final fromMint = solana!.getTokenAddress(_currentTrade!.from!);
                   tokenMints.add(fromMint);
                 } catch (e) {
-                  printV('Error getting from currency mint: $e');
+                  _logPostCommitError(e);
                 }
               }
 
@@ -1121,7 +1146,7 @@ abstract class SendViewModelBase extends WalletChangeListenerViewModel with Stor
                   final toMint = solana!.getTokenAddress(_currentTrade!.to!);
                   tokenMints.add(toMint);
                 } catch (e) {
-                  printV('Error getting to currency mint: $e');
+                  _logPostCommitError(e);
                 }
               }
 
@@ -1139,12 +1164,12 @@ abstract class SendViewModelBase extends WalletChangeListenerViewModel with Stor
                       tokenMints: tokenMints,
                     );
                   } catch (e) {
-                    printV('Error retrying balance update: $e');
+                    _logPostCommitError(e);
                   }
                 });
               }
             } catch (e) {
-              printV('Failed to update balances after send: $e');
+              _logPostCommitError(e);
             } finally {
               _currentTrade = null;
               _currentProvider = null;
@@ -1164,7 +1189,7 @@ abstract class SendViewModelBase extends WalletChangeListenerViewModel with Stor
               wallet.updateBalance() as Future<void>,
             ]);
           } catch (e) {
-            printV('Failed to update transactions after send: $e');
+            _logPostCommitError(e);
           }
         });
       }
@@ -1217,18 +1242,18 @@ abstract class SendViewModelBase extends WalletChangeListenerViewModel with Stor
       }
 
       if (pendingTransaction!.id.isNotEmpty) {
-        _addTransactionDescription();
+        await _addTransactionDescription();
       }
       final sharedPreferences = await SharedPreferences.getInstance();
       await sharedPreferences.setString(PreferencesKey.backgroundSyncLastTrigger(wallet.name),
           DateTime.now().add(Duration(minutes: 1)).toIso8601String());
     } catch (e) {
-      state = FailureState(translateErrorMessage(e, wallet.type, wallet.currency));
-
-      final failedSignature = e is JupiterSwapFailedException ? e.signature : "";
-
-      await _updateSolanaTrade(signature: failedSignature, isSuccess: false);
+      _logPostCommitError(e);
     }
+  }
+
+  void _logPostCommitError(Object error) {
+    printV('Post-commit bookkeeping failed (${error.runtimeType})');
   }
 
   /// Update Jupiter trade with relevant details after transaction is committed
@@ -1756,7 +1781,7 @@ abstract class SendViewModelBase extends WalletChangeListenerViewModel with Stor
         printV('SwapsXyz: transaction register: success');
       }
     } catch (e) {
-      printV('registerSwapsXyzTransaction error: $e');
+      _logPostCommitError(e);
     }
   }
 
