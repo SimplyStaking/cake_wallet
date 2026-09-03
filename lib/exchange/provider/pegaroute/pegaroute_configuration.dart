@@ -1,10 +1,7 @@
 import 'dart:io';
 
 class PegarouteConfiguration {
-  const PegarouteConfiguration({
-    required this.baseUrl,
-    @Deprecated('Proxy authentication is server-side') String? apiKey,
-  });
+  const PegarouteConfiguration({required this.baseUrl});
 
   // The Cake-operated proxy supplies authentication server-side.
   factory PegarouteConfiguration.generated() => const PegarouteConfiguration(baseUrl: '');

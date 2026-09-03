@@ -7,27 +7,30 @@ import 'package:cake_wallet/exchange/provider/pegaroute_exchange_provider.dart';
 void main() {
   test('Phase 1 has no execution capability', () {
     const gate = PegarouteCapabilityGate();
-    final route =
-        PegarouteRoute(provider: 'instaswap', expectedOutput: '1', providerType: 'aggregator');
+    final route = PegarouteRoute(
+      provider: 'instaswap',
+      expectedOutput: '1',
+      providerType: 'aggregator',
+    );
     expect(gate.hasExecutionHandlers, isFalse);
     expect(gate.supportsRoute(route), isFalse);
     expect(
-        gate.supportsExecution(PegarouteExecution(
+      gate.supportsExecution(
+        PegarouteExecution(
           family: 'other',
           mode: 'deposit-transfer',
           chain: 'XMR',
           to: 'destination',
           amount: PegarouteTokenAmount(display: '1', baseUnits: '1'),
-        )),
-        isFalse);
+        ),
+      ),
+      isFalse,
+    );
   });
 
   test('never reports availability without registered handlers', () {
     final provider = PegarouteExchangeProvider(
-      configuration: const PegarouteConfiguration(
-        baseUrl: 'https://example.test',
-        apiKey: 'test',
-      ),
+      configuration: const PegarouteConfiguration(baseUrl: 'https://example.test'),
       capabilityGate: const PegarouteCapabilityGate(
         supportedExecutionKeys: {'evm/native-transfer'},
       ),

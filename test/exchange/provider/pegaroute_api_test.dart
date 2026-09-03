@@ -198,35 +198,13 @@ Map<String, dynamic> _tradePayload(PegarouteExecution execution) {
 
 void main() {
   test('validates full origins and only permits loopback HTTP', () {
-    expect(
-      PegarouteConfiguration(baseUrl: 'http://localhost:4000', apiKey: 'test').isValid,
-      isTrue,
-    );
-    expect(
-      PegarouteConfiguration(baseUrl: 'http://127.42.0.9:4000', apiKey: 'test').isValid,
-      isTrue,
-    );
-    expect(
-      PegarouteConfiguration(baseUrl: 'https://api.example.test:443/', apiKey: 'test').isValid,
-      isTrue,
-    );
-    expect(
-      PegarouteConfiguration(baseUrl: 'http://10.0.2.2:4000', apiKey: 'test').isValid,
-      isFalse,
-    );
-    expect(
-      PegarouteConfiguration(baseUrl: 'https://example.test/api', apiKey: 'test').isValid,
-      isFalse,
-    );
-    expect(
-      PegarouteConfiguration(baseUrl: 'https://user:pass@example.test', apiKey: 'test').isValid,
-      isFalse,
-    );
-    expect(
-      PegarouteConfiguration(baseUrl: 'https://example.test?x=1', apiKey: 'test').isValid,
-      isFalse,
-    );
-    expect(PegarouteConfiguration(baseUrl: 'https://example.test', apiKey: ' ').isValid, isFalse);
+    expect(PegarouteConfiguration(baseUrl: 'http://localhost:4000').isValid, isTrue);
+    expect(PegarouteConfiguration(baseUrl: 'http://127.42.0.9:4000').isValid, isTrue);
+    expect(PegarouteConfiguration(baseUrl: 'https://api.example.test:443/').isValid, isTrue);
+    expect(PegarouteConfiguration(baseUrl: 'http://10.0.2.2:4000').isValid, isFalse);
+    expect(PegarouteConfiguration(baseUrl: 'https://example.test/api').isValid, isFalse);
+    expect(PegarouteConfiguration(baseUrl: 'https://user:pass@example.test').isValid, isFalse);
+    expect(PegarouteConfiguration(baseUrl: 'https://example.test?x=1').isValid, isFalse);
   });
 
   test('decodes quote and swap fixtures with exact execution fields', () {
@@ -511,7 +489,7 @@ void main() {
 
   test('requires exact success status for GET and preserves status polling boundaries', () async {
     final client = PegarouteApiClient(
-      configuration: const PegarouteConfiguration(baseUrl: 'https://example.test', apiKey: 'test'),
+      configuration: const PegarouteConfiguration(baseUrl: 'https://example.test'),
       get: (uri, headers) async =>
           very_insecure_http_do_not_use.Response(_fixture('quote.json'), 201),
     );
@@ -529,7 +507,7 @@ void main() {
     );
 
     final statusClient = PegarouteApiClient(
-      configuration: const PegarouteConfiguration(baseUrl: 'https://example.test', apiKey: 'test'),
+      configuration: const PegarouteConfiguration(baseUrl: 'https://example.test'),
       get: (uri, headers) async =>
           very_insecure_http_do_not_use.Response(_fixture('status_refund.json'), 200),
     );
@@ -557,7 +535,7 @@ void main() {
   test('keeps configured but handler-less Pegaroute out of provider I/O', () async {
     var calls = 0;
     final api = PegarouteApiClient(
-      configuration: const PegarouteConfiguration(baseUrl: 'https://example.test', apiKey: 'test'),
+      configuration: const PegarouteConfiguration(baseUrl: 'https://example.test'),
       get: (uri, headers) async {
         calls++;
         return very_insecure_http_do_not_use.Response('{}', 500);
@@ -641,10 +619,7 @@ void main() {
     );
     await expectLater(
       PegarouteApiClient(
-        configuration: const PegarouteConfiguration(
-          baseUrl: 'https://example.test',
-          apiKey: 'test',
-        ),
+        configuration: const PegarouteConfiguration(baseUrl: 'https://example.test'),
       ).tokens(' '),
       throwsA(isA<PegarouteCodecException>()),
     );
@@ -718,7 +693,7 @@ void main() {
   test('rejects blank and ID-only status before transport', () async {
     final calls = <String>[];
     final client = PegarouteApiClient(
-      configuration: const PegarouteConfiguration(baseUrl: 'https://example.test', apiKey: 'test'),
+      configuration: const PegarouteConfiguration(baseUrl: 'https://example.test'),
       get: (uri, headers) async {
         calls.add(uri.path);
         return very_insecure_http_do_not_use.Response(_fixture('status_refund.json'), 200);
@@ -739,7 +714,7 @@ void main() {
     final value = json.decode(_fixture('status_refund.json')) as Map<String, dynamic>;
     (value['input'] as Map<String, dynamic>)['providerReferenceId'] = 'input-reference';
     final client = PegarouteApiClient(
-      configuration: const PegarouteConfiguration(baseUrl: 'https://example.test', apiKey: 'test'),
+      configuration: const PegarouteConfiguration(baseUrl: 'https://example.test'),
       get: (uri, headers) async => very_insecure_http_do_not_use.Response(json.encode(value), 200),
     );
     await expectLater(
@@ -752,7 +727,7 @@ void main() {
     final value = json.decode(_fixture('status_refund.json')) as Map<String, dynamic>;
     (value['input'] as Map<String, dynamic>)['providerReferenceId'] = 'input-reference';
     final client = PegarouteApiClient(
-      configuration: const PegarouteConfiguration(baseUrl: 'https://example.test', apiKey: 'test'),
+      configuration: const PegarouteConfiguration(baseUrl: 'https://example.test'),
       get: (uri, headers) async => very_insecure_http_do_not_use.Response(json.encode(value), 200),
     );
     final trade = await PegarouteExchangeProvider(
@@ -765,10 +740,7 @@ void main() {
     final trade =
         await PegarouteExchangeProvider(
           apiClient: PegarouteApiClient(
-            configuration: const PegarouteConfiguration(
-              baseUrl: 'https://example.test',
-              apiKey: 'test',
-            ),
+            configuration: const PegarouteConfiguration(baseUrl: 'https://example.test'),
             get: (uri, headers) async =>
                 very_insecure_http_do_not_use.Response(_fixture('status_refund.json'), 200),
           ),
@@ -801,10 +773,7 @@ void main() {
     final result =
         await PegarouteExchangeProvider(
           apiClient: PegarouteApiClient(
-            configuration: const PegarouteConfiguration(
-              baseUrl: 'https://example.test',
-              apiKey: 'test',
-            ),
+            configuration: const PegarouteConfiguration(baseUrl: 'https://example.test'),
             get: (uri, headers) async =>
                 very_insecure_http_do_not_use.Response(json.encode(value), 200),
           ),
@@ -825,10 +794,7 @@ void main() {
     await expectLater(
       PegarouteExchangeProvider(
         apiClient: PegarouteApiClient(
-          configuration: const PegarouteConfiguration(
-            baseUrl: 'https://example.test',
-            apiKey: 'test',
-          ),
+          configuration: const PegarouteConfiguration(baseUrl: 'https://example.test'),
           get: (uri, headers) async =>
               very_insecure_http_do_not_use.Response(json.encode(conflict), 200),
         ),
@@ -867,10 +833,7 @@ void main() {
       mutate(value);
       final provider = PegarouteExchangeProvider(
         apiClient: PegarouteApiClient(
-          configuration: const PegarouteConfiguration(
-            baseUrl: 'https://example.test',
-            apiKey: 'test',
-          ),
+          configuration: const PegarouteConfiguration(baseUrl: 'https://example.test'),
           get: (uri, headers) async =>
               very_insecure_http_do_not_use.Response(json.encode(value), 200),
         ),
@@ -892,7 +855,7 @@ void main() {
   test('preflights Pegaroute status and validates the complete response', () async {
     var calls = 0;
     final client = PegarouteApiClient(
-      configuration: const PegarouteConfiguration(baseUrl: 'https://example.test', apiKey: 'test'),
+      configuration: const PegarouteConfiguration(baseUrl: 'https://example.test'),
       get: (uri, headers) async {
         calls++;
         return very_insecure_http_do_not_use.Response(_fixture('status_refund.json'), 200);
@@ -915,10 +878,7 @@ void main() {
     (changedResponse['output'] as Map<String, dynamic>)['address'] = 'different-destination';
     final responseProvider = PegarouteExchangeProvider(
       apiClient: PegarouteApiClient(
-        configuration: const PegarouteConfiguration(
-          baseUrl: 'https://example.test',
-          apiKey: 'test',
-        ),
+        configuration: const PegarouteConfiguration(baseUrl: 'https://example.test'),
         get: (uri, headers) async =>
             very_insecure_http_do_not_use.Response(json.encode(changedResponse), 200),
       ),
@@ -932,10 +892,7 @@ void main() {
     (routeChanged['route'] as Map<String, dynamic>)['expectedOutput'] = '0.50';
     final routeProvider = PegarouteExchangeProvider(
       apiClient: PegarouteApiClient(
-        configuration: const PegarouteConfiguration(
-          baseUrl: 'https://example.test',
-          apiKey: 'test',
-        ),
+        configuration: const PegarouteConfiguration(baseUrl: 'https://example.test'),
         get: (uri, headers) async =>
             very_insecure_http_do_not_use.Response(json.encode(routeChanged), 200),
       ),
@@ -957,10 +914,7 @@ void main() {
     };
     final refundProvider = PegarouteExchangeProvider(
       apiClient: PegarouteApiClient(
-        configuration: const PegarouteConfiguration(
-          baseUrl: 'https://example.test',
-          apiKey: 'test',
-        ),
+        configuration: const PegarouteConfiguration(baseUrl: 'https://example.test'),
         get: (uri, headers) async =>
             very_insecure_http_do_not_use.Response(json.encode(refundChanged), 200),
       ),
@@ -984,10 +938,7 @@ void main() {
     };
     final result = await PegarouteExchangeProvider(
       apiClient: PegarouteApiClient(
-        configuration: const PegarouteConfiguration(
-          baseUrl: 'https://example.test',
-          apiKey: 'test',
-        ),
+        configuration: const PegarouteConfiguration(baseUrl: 'https://example.test'),
         get: (uri, headers) async =>
             very_insecure_http_do_not_use.Response(json.encode(value), 200),
       ),
@@ -1001,7 +952,7 @@ void main() {
     late Trade trade;
     var calls = 0;
     final client = PegarouteApiClient(
-      configuration: const PegarouteConfiguration(baseUrl: 'https://example.test', apiKey: 'test'),
+      configuration: const PegarouteConfiguration(baseUrl: 'https://example.test'),
       get: (uri, headers) async {
         calls++;
         trade.amount = '2';
@@ -1020,10 +971,7 @@ void main() {
     late Trade trade;
     final provider = PegarouteExchangeProvider(
       apiClient: PegarouteApiClient(
-        configuration: const PegarouteConfiguration(
-          baseUrl: 'https://example.test',
-          apiKey: 'test',
-        ),
+        configuration: const PegarouteConfiguration(baseUrl: 'https://example.test'),
         get: (uri, headers) async =>
             very_insecure_http_do_not_use.Response(_fixture('status_refund.json'), 200),
       ),

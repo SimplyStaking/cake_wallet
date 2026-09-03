@@ -135,7 +135,7 @@ PegarouteExchangeProvider _provider(
 }) {
   return PegarouteExchangeProvider(
     apiClient: PegarouteApiClient(
-      configuration: const PegarouteConfiguration(baseUrl: 'https://example.test', apiKey: 'test'),
+      configuration: const PegarouteConfiguration(baseUrl: 'https://example.test'),
       get: (uri, headers) async {
         await beforeResponse?.call();
         return very_insecure_http_do_not_use.Response(json.encode(response), 200);
@@ -274,10 +274,7 @@ void main() {
     var call = 0;
     final provider = PegarouteExchangeProvider(
       apiClient: PegarouteApiClient(
-        configuration: const PegarouteConfiguration(
-          baseUrl: 'https://example.test',
-          apiKey: 'test',
-        ),
+        configuration: const PegarouteConfiguration(baseUrl: 'https://example.test'),
         get: (uri, headers) async {
           final status = call++ == 0 ? 'submitted' : 'executing';
           return very_insecure_http_do_not_use.Response(

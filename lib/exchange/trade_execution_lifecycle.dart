@@ -133,7 +133,7 @@ final class TradeExecutionLifecycle {
       createdAt: createdAt,
       broadcastingAt: broadcastingAt,
       broadcastedAt: broadcastedAt,
-      callbackAttemptedAt: at,
+      callbackAttemptedAt: callbackAttemptedAt,
       callbackAcceptedAt: callbackAcceptedAt,
     );
   }
@@ -156,7 +156,8 @@ final class TradeExecutionLifecycle {
   }
 
   TradeExecutionLifecycle markCallbackAccepted(String at) {
-    if (state != TradeExecutionLifecycleState.broadcasted) {
+    if (state != TradeExecutionLifecycleState.broadcasted ||
+        callbackState == TradeExecutionCallbackState.notRequired) {
       throw StateError('callback is unavailable');
     }
     return TradeExecutionLifecycle(
@@ -166,7 +167,7 @@ final class TradeExecutionLifecycle {
       createdAt: createdAt,
       broadcastingAt: broadcastingAt,
       broadcastedAt: broadcastedAt,
-      callbackAttemptedAt: callbackAttemptedAt,
+      callbackAttemptedAt: callbackAttemptedAt ?? at,
       callbackAcceptedAt: at,
     );
   }
@@ -186,18 +187,57 @@ final class TradeExecutionLifecycle {
   };
 
   void _validate() {
-    if (executionHash.isEmpty || createdAt.isEmpty) {
+    if (executionHash.isEmpty || !_validTimestamp(createdAt)) {
       throw const FormatException('lifecycle identity is required');
+    }
+    for (final timestamp in [
+      broadcastingAt,
+      broadcastedAt,
+      callbackAttemptedAt,
+      callbackAcceptedAt,
+    ]) {
+      if (timestamp != null && !_validTimestamp(timestamp)) {
+        throw const FormatException('invalid lifecycle timestamp');
+      }
     }
     if (state == TradeExecutionLifecycleState.prepared &&
         (broadcastingAt != null || broadcastedAt != null)) {
       throw const FormatException('prepared lifecycle has broadcast timestamps');
     }
-    if (state == TradeExecutionLifecycleState.broadcasted && broadcastedAt == null) {
-      throw const FormatException('broadcasted lifecycle has no timestamp');
+    if (state == TradeExecutionLifecycleState.broadcasting &&
+        (broadcastingAt == null || broadcastedAt != null)) {
+      throw const FormatException('broadcasting lifecycle timestamps are invalid');
     }
-    if (callbackState == TradeExecutionCallbackState.accepted && callbackAcceptedAt == null) {
-      throw const FormatException('accepted callback has no timestamp');
+    if (state == TradeExecutionLifecycleState.broadcastUnknown &&
+        (broadcastingAt == null || broadcastedAt != null)) {
+      throw const FormatException('unknown broadcast lifecycle timestamps are invalid');
+    }
+    if (state == TradeExecutionLifecycleState.broadcasted &&
+        (broadcastingAt == null || broadcastedAt == null)) {
+      throw const FormatException('broadcasted lifecycle timestamps are invalid');
+    }
+    if (state != TradeExecutionLifecycleState.broadcasted &&
+        (callbackState == TradeExecutionCallbackState.failed ||
+            callbackState == TradeExecutionCallbackState.accepted)) {
+      throw const FormatException('callback cannot complete before broadcast');
+    }
+    if (callbackState == TradeExecutionCallbackState.notRequired &&
+        (callbackAttemptedAt != null || callbackAcceptedAt != null)) {
+      throw const FormatException('unrequired callback has timestamps');
+    }
+    if (callbackState == TradeExecutionCallbackState.pending &&
+        (callbackAttemptedAt != null || callbackAcceptedAt != null)) {
+      throw const FormatException('pending callback has timestamps');
+    }
+    if (callbackState == TradeExecutionCallbackState.failed &&
+        (callbackAttemptedAt == null || callbackAcceptedAt != null)) {
+      throw const FormatException('failed callback timestamps are invalid');
+    }
+    if (callbackState == TradeExecutionCallbackState.accepted &&
+        (callbackAttemptedAt == null || callbackAcceptedAt == null)) {
+      throw const FormatException('accepted callback timestamps are invalid');
     }
   }
+
+  static bool _validTimestamp(String value) => DateTime.tryParse(value) != null;
 }

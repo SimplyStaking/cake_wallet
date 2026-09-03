@@ -29,82 +29,82 @@ TradeExecution _execution({
   String baseUnits = '1000000000000000000',
   String destination = 'bc1qfixture',
   Map<String, dynamic>? payload,
-}) =>
-    TradeExecution(
-      family: family,
-      mode: mode,
-      sourceChain: 'ETH',
-      sourceToken: 'ETH',
-      nativeToken: 'ETH',
-      destinationChain: 'BTC',
-      destinationToken: 'BTC',
-      routeProvider: 'instaswap',
-      binding: TradeExecutionBinding(
-        tradeId: tradeId,
-        providerRaw: 17,
-        quoteId: 'quote-fixture',
-        quoteExpiresAt: DateTime.utc(2099),
-        routeExpiry: null,
-        sourceAmount: amount,
-        sourceAmountBaseUnits: baseUnits,
-        sourceDecimals: 18,
-        destinationDecimals: 8,
-        senderAddress: '0x0000000000000000000000000000000000000002',
-        refundAddress: null,
-        destinationAddress: destination,
-        isSendAll: false,
-        walletId: 'wallet-fixture',
-        walletChainId: 1,
-        walletAddress: '0x0000000000000000000000000000000000000002',
-        reviewedRouteJson:
-            '{"provider":"instaswap","providerType":"fixture","subprovider":null,"private":false,"expectedOutput":"0.99","fees":null,"estimatedTimeSeconds":0,"memo":null,"inboundAddress":"0x0000000000000000000000000000000000000001","router":null,"minAmount":null,"expiry":null,"gasRate":null,"resolvedFee":null,"openOceanRoute":null}',
-        providerReferenceId: null,
-      ),
-      payload: payload ??
-          {
-            'chainId': 1,
-            'to': '0x0000000000000000000000000000000000000001',
-            'data': null,
-            'value': {'display': '1', 'baseUnits': baseUnits},
-            'gasLimit': null,
-            'memo': null,
-            'approval': null,
-            'transferAmount': null,
-          },
-    );
+}) => TradeExecution(
+  family: family,
+  mode: mode,
+  sourceChain: 'ETH',
+  sourceToken: 'ETH',
+  nativeToken: 'ETH',
+  destinationChain: 'BTC',
+  destinationToken: 'BTC',
+  routeProvider: 'instaswap',
+  binding: TradeExecutionBinding(
+    tradeId: tradeId,
+    providerRaw: 17,
+    quoteId: 'quote-fixture',
+    quoteExpiresAt: DateTime.utc(2099),
+    routeExpiry: null,
+    sourceAmount: amount,
+    sourceAmountBaseUnits: baseUnits,
+    sourceDecimals: 18,
+    destinationDecimals: 8,
+    senderAddress: '0x0000000000000000000000000000000000000002',
+    refundAddress: null,
+    destinationAddress: destination,
+    isSendAll: false,
+    walletId: 'wallet-fixture',
+    walletChainId: 1,
+    walletAddress: '0x0000000000000000000000000000000000000002',
+    reviewedRouteJson:
+        '{"provider":"instaswap","providerType":"fixture","subprovider":null,"private":false,"expectedOutput":"0.99","fees":null,"estimatedTimeSeconds":0,"memo":null,"inboundAddress":"0x0000000000000000000000000000000000000001","router":null,"minAmount":null,"expiry":null,"gasRate":null,"resolvedFee":null,"openOceanRoute":null}',
+    providerReferenceId: null,
+  ),
+  payload:
+      payload ??
+      {
+        'chainId': 1,
+        'to': '0x0000000000000000000000000000000000000001',
+        'data': null,
+        'value': {'display': '1', 'baseUnits': baseUnits},
+        'gasLimit': null,
+        'memo': null,
+        'approval': null,
+        'transferAmount': null,
+      },
+);
 
 Trade _trade(TradeExecution execution) => Trade(
-      id: execution.binding.tradeId,
-      amount: execution.binding.sourceAmount,
-      from: CryptoCurrency.eth,
-      to: CryptoCurrency.btc,
-      provider: ExchangeProviderDescription.pegaroute,
-      senderAddress: execution.binding.senderAddress,
-      refundAddress: execution.binding.refundAddress,
-      payoutAddress: execution.binding.destinationAddress,
-      walletId: execution.binding.walletId,
-      fromWalletAddress: execution.binding.walletAddress,
-      chainId: execution.binding.walletChainId,
-      providerName: execution.routeProvider,
-      providerId: execution.binding.providerReferenceId,
-      isSendAll: false,
-      executionJson: execution.encode(),
-    );
+  id: execution.binding.tradeId,
+  amount: execution.binding.sourceAmount,
+  from: CryptoCurrency.eth,
+  to: CryptoCurrency.btc,
+  provider: ExchangeProviderDescription.pegaroute,
+  senderAddress: execution.binding.senderAddress,
+  refundAddress: execution.binding.refundAddress,
+  payoutAddress: execution.binding.destinationAddress,
+  walletId: execution.binding.walletId,
+  fromWalletAddress: execution.binding.walletAddress,
+  chainId: execution.binding.walletChainId,
+  providerName: execution.routeProvider,
+  providerId: execution.binding.providerReferenceId,
+  isSendAll: false,
+  executionJson: execution.encode(),
+);
 
 Trade _swapTrade() => Trade(
-      id: 'transaction-fixture',
-      amount: '1',
-      from: CryptoCurrency.eth,
-      to: CryptoCurrency.btc,
-      provider: ExchangeProviderDescription.pegaroute,
-      providerName: 'instaswap',
-      walletId: 'wallet-fixture',
-      fromWalletAddress: '0x0000000000000000000000000000000000000002',
-      chainId: 1,
-      senderAddress: '0x0000000000000000000000000000000000000002',
-      refundAddress: '0x0000000000000000000000000000000000000003',
-      payoutAddress: 'bc1qfixture',
-    );
+  id: 'transaction-fixture',
+  amount: '1',
+  from: CryptoCurrency.eth,
+  to: CryptoCurrency.btc,
+  provider: ExchangeProviderDescription.pegaroute,
+  providerName: 'instaswap',
+  walletId: 'wallet-fixture',
+  fromWalletAddress: '0x0000000000000000000000000000000000000002',
+  chainId: 1,
+  senderAddress: '0x0000000000000000000000000000000000000002',
+  refundAddress: '0x0000000000000000000000000000000000000003',
+  payoutAddress: 'bc1qfixture',
+);
 
 Trade _qualifiedTokenTrade({required bool solana}) {
   final source = solana
@@ -203,20 +203,20 @@ class _Addresses implements WalletAddresses {
 class _Wallet
     extends WalletBase<Balance, TransactionHistoryBase<TransactionInfo>, TransactionInfo> {
   _Wallet()
-      : super(
-          WalletInfo.external(
-            id: 'wallet-fixture',
-            name: 'wallet-fixture',
-            type: WalletType.ethereum,
-            isRecovery: false,
-            restoreHeight: 0,
-            date: DateTime.utc(2024),
-            dirPath: '',
-            path: '',
-            address: '0x0000000000000000000000000000000000000002',
-          ),
-          DerivationInfo(),
-        ) {
+    : super(
+        WalletInfo.external(
+          id: 'wallet-fixture',
+          name: 'wallet-fixture',
+          type: WalletType.ethereum,
+          isRecovery: false,
+          restoreHeight: 0,
+          date: DateTime.utc(2024),
+          dirPath: '',
+          path: '',
+          address: '0x0000000000000000000000000000000000000002',
+        ),
+        DerivationInfo(),
+      ) {
     _walletAddresses = _Addresses();
   }
 
@@ -233,30 +233,30 @@ class _Wallet
 }
 
 Future<PegarouteValidatedQuote> _quote(PegarouteApiClient client) => client.quote(
-      PegarouteQuoteRequest(
-        fromChain: 'ETH',
-        fromToken: 'ETH',
-        toChain: 'BTC',
-        toToken: 'BTC',
-        amount: '1',
-        destinationAddress: 'bc1qfixture',
-        senderAddress: '0x0000000000000000000000000000000000000002',
-        refundAddress: '0x0000000000000000000000000000000000000003',
-      ),
-    );
+  PegarouteQuoteRequest(
+    fromChain: 'ETH',
+    fromToken: 'ETH',
+    toChain: 'BTC',
+    toToken: 'BTC',
+    amount: '1',
+    destinationAddress: 'bc1qfixture',
+    senderAddress: '0x0000000000000000000000000000000000000002',
+    refundAddress: '0x0000000000000000000000000000000000000003',
+  ),
+);
 
 PegarouteSwapRequest _request() => PegarouteSwapRequest(
-      fromChain: 'ETH',
-      fromToken: 'ETH',
-      toChain: 'BTC',
-      toToken: 'BTC',
-      amount: '1',
-      destinationAddress: 'bc1qfixture',
-      senderAddress: '0x0000000000000000000000000000000000000002',
-      refundAddress: '0x0000000000000000000000000000000000000003',
-      quoteId: 'quote-fixture',
-      routeProvider: 'instaswap',
-    );
+  fromChain: 'ETH',
+  fromToken: 'ETH',
+  toChain: 'BTC',
+  toToken: 'BTC',
+  amount: '1',
+  destinationAddress: 'bc1qfixture',
+  senderAddress: '0x0000000000000000000000000000000000000002',
+  refundAddress: '0x0000000000000000000000000000000000000003',
+  quoteId: 'quote-fixture',
+  routeProvider: 'instaswap',
+);
 
 void main() {
   test('validates the complete persisted trade context', () {
@@ -328,9 +328,7 @@ void main() {
         decimals: decimals,
       );
       expect(
-        () => const PegarouteExecutionBindingValidator().validatePersisted(
-          trade: missingIdentity,
-        ),
+        () => const PegarouteExecutionBindingValidator().validatePersisted(trade: missingIdentity),
         throwsA(isA<PegarouteBindingException>()),
       );
     }
@@ -361,15 +359,9 @@ void main() {
   });
 
   test('rejects non-canonical or mismatched source amounts', () {
-    expect(
-      () => _execution(amount: '1.0000000000000000001'),
-      throwsFormatException,
-    );
+    expect(() => _execution(amount: '1.0000000000000000001'), throwsFormatException);
 
-    expect(
-      () => _execution(baseUnits: '1000000000000000001'),
-      throwsFormatException,
-    );
+    expect(() => _execution(baseUnits: '1000000000000000001'), throwsFormatException);
   });
 
   test('rejects family, chain, native value, and approval contradictions', () {
@@ -479,9 +471,7 @@ void main() {
       binding['reviewedRouteJson'] = json.encode(route);
       final tampered = TradeExecution.fromJson(raw);
       expect(
-        () => const PegarouteExecutionBindingValidator().validatePersisted(
-          trade: _trade(tampered),
-        ),
+        () => const PegarouteExecutionBindingValidator().validatePersisted(trade: _trade(tampered)),
         throwsA(isA<PegarouteBindingException>()),
       );
     }
@@ -539,22 +529,26 @@ void main() {
   });
 
   test('requires quote expiry before future swap creation', () async {
-    final value = json.decode(
-      File('test/exchange/fixtures/pegaroute/quote.json').readAsStringSync(),
-    ) as Map<String, dynamic>;
+    final value =
+        json.decode(File('test/exchange/fixtures/pegaroute/quote.json').readAsStringSync())
+            as Map<String, dynamic>;
     value['expiresAt'] = '2099-01-01T00:00:00.000Z';
-    final quote = await PegarouteApiClient(
-      configuration: const PegarouteConfiguration(baseUrl: 'https://example.test', apiKey: 'test'),
-      get: (uri, headers) async => very_insecure_http_do_not_use.Response(json.encode(value), 200),
-    ).quote(PegarouteQuoteRequest(
-      fromChain: 'ETH',
-      fromToken: 'ETH',
-      toChain: 'BTC',
-      toToken: 'BTC',
-      amount: '1',
-      destinationAddress: 'bc1qfixture',
-      senderAddress: '0x0000000000000000000000000000000000000002',
-    ));
+    final quote =
+        await PegarouteApiClient(
+          configuration: const PegarouteConfiguration(baseUrl: 'https://example.test'),
+          get: (uri, headers) async =>
+              very_insecure_http_do_not_use.Response(json.encode(value), 200),
+        ).quote(
+          PegarouteQuoteRequest(
+            fromChain: 'ETH',
+            fromToken: 'ETH',
+            toChain: 'BTC',
+            toToken: 'BTC',
+            amount: '1',
+            destinationAddress: 'bc1qfixture',
+            senderAddress: '0x0000000000000000000000000000000000000002',
+          ),
+        );
     final route = quote.response.routes.single;
     final request = PegarouteSwapRequest(
       fromChain: 'ETH',
@@ -599,7 +593,7 @@ void main() {
     var calls = 0;
     String? sentBody;
     final client = PegarouteApiClient(
-      configuration: const PegarouteConfiguration(baseUrl: 'https://example.test', apiKey: 'test'),
+      configuration: const PegarouteConfiguration(baseUrl: 'https://example.test'),
       get: (uri, headers) async => very_insecure_http_do_not_use.Response(
         File('test/exchange/fixtures/pegaroute/quote.json').readAsStringSync(),
         200,
@@ -624,8 +618,9 @@ void main() {
           at: DateTime.utc(2026, 8, 31),
         );
     final firstPreflight = preflight();
-    final value = json.decode(File('test/exchange/fixtures/pegaroute/swap.json').readAsStringSync())
-        as Map<String, dynamic>;
+    final value =
+        json.decode(File('test/exchange/fixtures/pegaroute/swap.json').readAsStringSync())
+            as Map<String, dynamic>;
     ((value['execution'] as Map<String, dynamic>)['value'] as Map<String, dynamic>)['baseUnits'] =
         '1000000000000000000';
     Future<PegarouteValidatedSwapResult> postResult(Map<String, dynamic> response) {
@@ -636,9 +631,7 @@ void main() {
     final result = await postResult(value);
     expect(result.preflight.requestJson, firstPreflight.requestJson);
     expect(result.response.transactionId, 'transaction-fixture');
-    final execution = const PegarouteExecutionBindingValidator().bindSwapResponse(
-      result: result,
-    );
+    final execution = const PegarouteExecutionBindingValidator().bindSwapResponse(result: result);
     expect(execution.binding.quoteId, 'quote-fixture');
     expect(execution.binding.reviewedRouteJson, isNotEmpty);
 
@@ -646,7 +639,8 @@ void main() {
     (mixedCapabilities['route'] as Map<String, dynamic>)['private'] = 'post-only-private';
     await expectLater(
       postResult(mixedCapabilities).then(
-          (result) => const PegarouteExecutionBindingValidator().bindSwapResponse(result: result)),
+        (result) => const PegarouteExecutionBindingValidator().bindSwapResponse(result: result),
+      ),
       throwsA(isA<PegarouteBindingException>()),
     );
 
@@ -654,7 +648,8 @@ void main() {
     (routeChanged['route'] as Map<String, dynamic>)['expectedOutput'] = '0.50';
     await expectLater(
       postResult(routeChanged).then(
-          (result) => const PegarouteExecutionBindingValidator().bindSwapResponse(result: result)),
+        (result) => const PegarouteExecutionBindingValidator().bindSwapResponse(result: result),
+      ),
       throwsA(isA<PegarouteBindingException>()),
     );
 
@@ -662,7 +657,8 @@ void main() {
     (omittedRouteIdentity['route'] as Map<String, dynamic>).remove('subprovider');
     await expectLater(
       postResult(omittedRouteIdentity).then(
-          (result) => const PegarouteExecutionBindingValidator().bindSwapResponse(result: result)),
+        (result) => const PegarouteExecutionBindingValidator().bindSwapResponse(result: result),
+      ),
       throwsA(isA<PegarouteBindingException>()),
     );
 
@@ -675,7 +671,8 @@ void main() {
     };
     await expectLater(
       postResult(opaqueResponse).then(
-          (result) => const PegarouteExecutionBindingValidator().bindSwapResponse(result: result)),
+        (result) => const PegarouteExecutionBindingValidator().bindSwapResponse(result: result),
+      ),
       throwsA(isA<PegarouteBindingException>()),
     );
 
@@ -692,7 +689,7 @@ void main() {
 
     var staleCalls = 0;
     final staleClient = PegarouteApiClient(
-      configuration: const PegarouteConfiguration(baseUrl: 'https://example.test', apiKey: 'test'),
+      configuration: const PegarouteConfiguration(baseUrl: 'https://example.test'),
       post: (uri, headers, body) async {
         staleCalls++;
         fail('expired preflight must not perform POST');
@@ -707,8 +704,7 @@ void main() {
     var clientPosts = 0;
     var foreignPosts = 0;
     final swapJson = File('test/exchange/fixtures/pegaroute/swap.json').readAsStringSync();
-    final configuration =
-        const PegarouteConfiguration(baseUrl: 'https://example.test', apiKey: 'test');
+    final configuration = const PegarouteConfiguration(baseUrl: 'https://example.test');
     final client = PegarouteApiClient(
       configuration: configuration,
       get: (uri, headers) async => very_insecure_http_do_not_use.Response(
@@ -730,10 +726,7 @@ void main() {
       clock: () => DateTime.utc(2026, 8, 31),
     );
     final foreignOriginClient = PegarouteApiClient(
-      configuration: const PegarouteConfiguration(
-        baseUrl: 'https://other.example.test',
-        apiKey: 'test',
-      ),
+      configuration: const PegarouteConfiguration(baseUrl: 'https://other.example.test'),
       post: (uri, headers, body) async {
         fail('foreign origin must not perform POST');
       },
@@ -753,10 +746,7 @@ void main() {
     );
     expect(preflight.isBoundTo(client), isTrue);
     expect(preflight.isBoundTo(foreignClient), isFalse);
-    await expectLater(
-      foreignClient.swap(preflight),
-      throwsA(isA<PegarouteBindingException>()),
-    );
+    await expectLater(foreignClient.swap(preflight), throwsA(isA<PegarouteBindingException>()));
     await expectLater(
       foreignOriginClient.swap(preflight),
       throwsA(isA<PegarouteBindingException>()),
@@ -768,26 +758,23 @@ void main() {
     expect(result.isBoundTo(client), isTrue);
     expect(result.isBoundTo(foreignClient), isFalse);
     expect(clientPosts, 1);
-    await expectLater(
-      client.swap(preflight),
-      throwsA(isA<PegarouteBindingException>()),
-    );
+    await expectLater(client.swap(preflight), throwsA(isA<PegarouteBindingException>()));
     expect(clientPosts, 1);
   });
 
   test('consumes preflight before provider, timeout, and ambiguous failures', () async {
     final outcomes = <Future<very_insecure_http_do_not_use.Response> Function()>[
       () async => very_insecure_http_do_not_use.Response(
-            json.encode({
-              'error': {
-                'code': 'PROVIDER_FAILED',
-                'message': 'failed',
-                'userMessage': 'failed',
-                'retryable': false,
-              },
-            }),
-            502,
-          ),
+        json.encode({
+          'error': {
+            'code': 'PROVIDER_FAILED',
+            'message': 'failed',
+            'userMessage': 'failed',
+            'retryable': false,
+          },
+        }),
+        502,
+      ),
       () async => throw TimeoutException('fixture timeout'),
       () async => throw StateError('ambiguous fixture failure'),
     ];
@@ -795,8 +782,7 @@ void main() {
     for (final outcome in outcomes) {
       var posts = 0;
       final client = PegarouteApiClient(
-        configuration:
-            const PegarouteConfiguration(baseUrl: 'https://example.test', apiKey: 'test'),
+        configuration: const PegarouteConfiguration(baseUrl: 'https://example.test'),
         get: (uri, headers) async => very_insecure_http_do_not_use.Response(
           File('test/exchange/fixtures/pegaroute/quote.json').readAsStringSync(),
           200,
@@ -817,10 +803,7 @@ void main() {
         at: DateTime.utc(2026, 8, 31),
       );
       await expectLater(client.swap(preflight), throwsA(anything));
-      await expectLater(
-        client.swap(preflight),
-        throwsA(isA<PegarouteBindingException>()),
-      );
+      await expectLater(client.swap(preflight), throwsA(isA<PegarouteBindingException>()));
       expect(posts, 1);
     }
   });
@@ -834,9 +817,7 @@ void main() {
     binding['reviewedRouteJson'] = json.encode(route);
     final malformed = TradeExecution.fromJson(raw);
     expect(
-      () => const PegarouteExecutionBindingValidator().validatePersisted(
-        trade: _trade(malformed),
-      ),
+      () => const PegarouteExecutionBindingValidator().validatePersisted(trade: _trade(malformed)),
       throwsA(isA<PegarouteBindingException>()),
     );
 
@@ -856,19 +837,21 @@ void main() {
 
   test('raw requests cannot cross the swap API boundary', () {
     final dynamic client = PegarouteApiClient(
-      configuration: const PegarouteConfiguration(baseUrl: 'https://example.test', apiKey: 'test'),
+      configuration: const PegarouteConfiguration(baseUrl: 'https://example.test'),
     );
     expect(() => client.swap(_request()), throwsA(isA<TypeError>()));
   });
 
   test('rejects expired or mismatched swap preflight without API I/O', () async {
-    final quote = await _quote(PegarouteApiClient(
-      configuration: const PegarouteConfiguration(baseUrl: 'https://example.test', apiKey: 'test'),
-      get: (uri, headers) async => very_insecure_http_do_not_use.Response(
-        File('test/exchange/fixtures/pegaroute/quote.json').readAsStringSync(),
-        200,
+    final quote = await _quote(
+      PegarouteApiClient(
+        configuration: const PegarouteConfiguration(baseUrl: 'https://example.test'),
+        get: (uri, headers) async => very_insecure_http_do_not_use.Response(
+          File('test/exchange/fixtures/pegaroute/quote.json').readAsStringSync(),
+          200,
+        ),
       ),
-    ));
+    );
     final route = quote.response.routes.single;
     final trade = _swapTrade();
     expect(
