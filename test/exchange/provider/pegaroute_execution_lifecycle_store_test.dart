@@ -146,10 +146,21 @@ void main() {
       tradeInternalId: trade.internalId,
     );
     persisted = await Trade.getByTradeId(trade.id);
-    expect(
-      TradeExecutionLifecycle.fromJsonString(persisted!.executionLifecycleJson!).state,
-      TradeExecutionLifecycleState.broadcasted,
+    var lifecycle = TradeExecutionLifecycle.fromJsonString(persisted!.executionLifecycleJson!);
+    expect(lifecycle.state, TradeExecutionLifecycleState.broadcasted);
+    await store.markCallbackAttempted(
+      execution: execution,
+      executionHash: '0xhash',
+      tradeInternalId: trade.internalId,
     );
+    await store.markCallbackAccepted(
+      execution: execution,
+      executionHash: '0xhash',
+      tradeInternalId: trade.internalId,
+    );
+    persisted = await Trade.getByTradeId(trade.id);
+    lifecycle = TradeExecutionLifecycle.fromJsonString(persisted!.executionLifecycleJson!);
+    expect(lifecycle.callbackState, TradeExecutionCallbackState.accepted);
   });
 
   test('rejects a deleted and recreated trade with the same public id', () async {
@@ -185,7 +196,26 @@ void main() {
     final persisted = await Trade.getByTradeId(trade.id);
     final lifecycle = TradeExecutionLifecycle.fromJsonString(persisted!.executionLifecycleJson!);
     expect(lifecycle.state, TradeExecutionLifecycleState.broadcastUnknown);
-    expect(lifecycle.broadcastingAt, isNotNull);
+    expect(lifecycle.broadcastUnknownAt, isNotNull);
+  });
+
+  test('durably distinguishes a pre-send abort from an ambiguous broadcast', () async {
+    await store.beforeBroadcast(
+      execution: execution,
+      executionHash: '0xhash',
+      tradeInternalId: trade.internalId,
+    );
+    await store.onBroadcastAborted(
+      execution: execution,
+      executionHash: '0xhash',
+      tradeInternalId: trade.internalId,
+    );
+
+    final persisted = await Trade.getByTradeId(trade.id);
+    final lifecycle = TradeExecutionLifecycle.fromJsonString(persisted!.executionLifecycleJson!);
+    expect(lifecycle.state, TradeExecutionLifecycleState.broadcastAborted);
+    expect(lifecycle.broadcastAbortedAt, isNotNull);
+    expect(lifecycle.broadcastUnknownAt, isNull);
   });
 
   test('rejects changed execution bytes and an unsaved row identity', () async {

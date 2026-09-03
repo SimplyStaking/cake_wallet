@@ -19,13 +19,16 @@ const bitcoinOutputPath = 'cw_bitcoin/lib/.secrets.g.dart';
 
 const nanoConfigPath = 'tool/.nano-secrets-config.json';
 const nanoOutputPath = 'cw_nano/lib/.secrets.g.dart';
+const removedClientSecretKeys = {'pegarouteApiKey'};
 
 Future<void> main(List<String> args) async => importSecretsConfig();
 
 Future<void> importSecretsConfig() async {
   final outputFile = File(outputPath);
   final input = json.decode(File(configPath).readAsStringSync()) as Map<String, dynamic>;
-  final output = input.keys.fold('', (String acc, String val) => acc + generateConst(val, input));
+  final output = input.keys
+      .where((key) => !removedClientSecretKeys.contains(key))
+      .fold('', (String acc, String val) => acc + generateConst(val, input));
 
   final evmChainsOutputFile = File(evmChainsOutputPath);
   final evmChainsInput =

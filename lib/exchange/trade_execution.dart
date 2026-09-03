@@ -13,7 +13,7 @@ class TradeExecution {
     required Map<String, dynamic> payload,
     required String routeProvider,
     String? subprovider,
-    Object? privateIntent,
+    Object? privateIntent = false,
     int version = 1,
   }) {
     final execution = TradeExecution._(
@@ -93,7 +93,7 @@ class TradeExecution {
       binding: TradeExecutionBinding.fromJson(map['binding']),
       routeProvider: _required(map, 'routeProvider'),
       subprovider: _optional(map, 'subprovider'),
-      privateIntent: map['privateIntent'],
+      privateIntent: map['privateIntent'] ?? false,
       payload: Map<String, dynamic>.from(payload),
     );
   }

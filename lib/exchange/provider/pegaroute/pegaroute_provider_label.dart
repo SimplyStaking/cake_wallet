@@ -4,6 +4,7 @@ import 'package:cake_wallet/exchange/trade.dart';
 
 String tradeProviderDisplayName(Trade trade) {
   if (trade.provider != ExchangeProviderDescription.pegaroute) return trade.provider.toString();
+  if (trade.internalId <= 0) return trade.provider.title;
   try {
     final execution =
         const PegarouteExecutionBindingValidator().validatePersisted(trade: trade).execution;

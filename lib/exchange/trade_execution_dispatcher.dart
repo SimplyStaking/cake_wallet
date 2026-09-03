@@ -37,6 +37,12 @@ abstract interface class TradeExecutionLifecycleHandler {
     required String executionHash,
     required int tradeInternalId,
   });
+
+  Future<void> onBroadcastAborted({
+    required ValidatedTradeExecution execution,
+    required String executionHash,
+    required int tradeInternalId,
+  });
 }
 
 final class TradeExecutionGuard {
@@ -145,6 +151,8 @@ class RegistryTradeExecutionDispatcher implements TradeExecutionDispatcher {
 
   List<TradeExecutionHandler> _matchingHandlers(TradeExecution execution, {bool external = false}) {
     return handlers
+        .whereType<TradeExecutionLifecycleHandler>()
+        .cast<TradeExecutionHandler>()
         .where((handler) => handler.supports(execution))
         .where((handler) => !external || handler.supportsExternalSend(execution))
         .toList(growable: false);
@@ -307,10 +315,8 @@ class _BoundPendingTransaction with PendingTransaction {
     _commitStarted = true;
     final before = _validate();
     final executionHash = guarded.executionHash;
-    final lifecycle = handler is TradeExecutionLifecycleHandler
-        ? handler as TradeExecutionLifecycleHandler
-        : null;
-    await lifecycle?.beforeBroadcast(
+    final lifecycle = handler as TradeExecutionLifecycleHandler;
+    await lifecycle.beforeBroadcast(
       execution: before,
       executionHash: executionHash,
       tradeInternalId: tradeInternalId,
@@ -319,10 +325,21 @@ class _BoundPendingTransaction with PendingTransaction {
       // Persistence is asynchronous, so revalidate immediately before handing
       // the exact prepared bytes to the wallet broadcast boundary.
       _validate();
+    } catch (_) {
+      try {
+        await lifecycle.onBroadcastAborted(
+          execution: before,
+          executionHash: executionHash,
+          tradeInternalId: tradeInternalId,
+        );
+      } catch (_) {}
+      rethrow;
+    }
+    try {
       await inner.commit();
     } catch (_) {
       try {
-        await lifecycle?.onBroadcastUnknown(
+        await lifecycle.onBroadcastUnknown(
           execution: before,
           executionHash: executionHash,
           tradeInternalId: tradeInternalId,
@@ -338,7 +355,7 @@ class _BoundPendingTransaction with PendingTransaction {
       // pre-broadcast binding, but suppress provider callback I/O below.
     }
     try {
-      await lifecycle?.onBroadcasted(
+      await lifecycle.onBroadcasted(
         execution: current ?? before,
         executionHash: executionHash,
         tradeInternalId: tradeInternalId,

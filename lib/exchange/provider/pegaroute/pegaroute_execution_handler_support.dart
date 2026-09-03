@@ -4,6 +4,7 @@ import 'package:cake_wallet/exchange/provider/pegaroute/pegaroute_execution_bind
 import 'package:cake_wallet/exchange/trade_execution.dart';
 import 'package:cw_core/pending_transaction.dart';
 import 'package:cw_core/wallet_base.dart';
+import 'package:cw_core/wallet_type.dart';
 
 /// The wallet adapter must provide a monotonic generation. A value-only
 /// snapshot is insufficient to detect an ABA wallet/chain switch.
@@ -59,6 +60,38 @@ void pegarouteRequireBoundWalletSnapshot(
       !pegarouteSameAddress(
           execution.execution.sourceChain, snapshot.address, binding.walletAddress)) {
     throw const PegarouteBindingException('wallet generation snapshot is not bound');
+  }
+}
+
+void pegarouteRequireSoftwareWallet({
+  required WalletBase wallet,
+  required PegarouteWalletSnapshot snapshot,
+  required WalletType walletType,
+}) {
+  if (wallet.type != walletType ||
+      wallet.isHardwareWallet ||
+      snapshot.isHardwareWallet != wallet.isHardwareWallet) {
+    throw const PegarouteBindingException('wallet type is unavailable for Pegaroute execution');
+  }
+}
+
+void pegarouteRequirePublicExecution(TradeExecution execution) {
+  if (execution.privateIntent != false) {
+    throw const PegarouteBindingException('private Pegaroute execution is unavailable');
+  }
+}
+
+void pegarouteRequireUnexpiredFunding(
+  ValidatedTradeExecution execution,
+  DateTime now,
+) {
+  final current = now.toUtc();
+  final binding = execution.execution.binding;
+  final routeExpiry = binding.routeExpiry?.instant();
+  final providerExpiry = binding.providerDepositExpiry?.toUtc();
+  if (routeExpiry != null && !current.isBefore(routeExpiry) ||
+      providerExpiry != null && !current.isBefore(providerExpiry)) {
+    throw const PegarouteBindingException('Pegaroute funding deadline has expired');
   }
 }
 

@@ -112,6 +112,7 @@ final class PegarouteExecutionBindingValidator {
         trade.walletId!.isEmpty ||
         trade.walletId != wallet.id ||
         trade.isSendAll == true ||
+        trade.toAddressExtraId?.trim().isNotEmpty == true ||
         trade.providerName == null ||
         trade.providerName!.isEmpty ||
         trade.providerName != route.provider ||
@@ -200,6 +201,7 @@ final class PegarouteExecutionBindingValidator {
     if (route.provider.trim().isEmpty ||
         route.providerType == null ||
         route.providerType!.trim().isEmpty ||
+        (route.privateValue != null && route.privateValue!.value != false) ||
         !quote.routes.any((candidate) => _sameRoute(candidate, route))) {
       throw const PegarouteBindingException('selected route is not from the quote');
     }
@@ -215,6 +217,21 @@ final class PegarouteExecutionBindingValidator {
   }
 
   TradeExecution bindSwapResponse({required PegarouteValidatedSwapResult result}) {
+    try {
+      return _bindSwapResponse(result);
+    } catch (error, stackTrace) {
+      Error.throwWithStackTrace(
+        PegarouteSwapAttemptException(
+          cause: error,
+          userMessage:
+              'Pegaroute created an order, but its execution could not be validated safely.',
+        ),
+        stackTrace,
+      );
+    }
+  }
+
+  TradeExecution _bindSwapResponse(PegarouteValidatedSwapResult result) {
     final preflight = result.preflight;
     final response = result.response;
     final reviewedRoute = _reviewedRoute(preflight.routeSnapshotJson);
@@ -290,7 +307,10 @@ final class PegarouteExecutionBindingValidator {
     WalletBase? wallet,
     String? expectedRawExecutionJson,
   }) {
-    if (trade.providerRaw != 17 || trade.executionJson == null || trade.executionJson!.isEmpty) {
+    if (trade.providerRaw != 17 ||
+        trade.executionJson == null ||
+        trade.executionJson!.isEmpty ||
+        trade.toAddressExtraId?.trim().isNotEmpty == true) {
       throw const PegarouteBindingException('trade is not a bound Pegaroute execution');
     }
     final raw = trade.executionJson!;
@@ -302,6 +322,9 @@ final class PegarouteExecutionBindingValidator {
       execution = TradeExecution.fromJsonString(raw);
     } catch (_) {
       throw const PegarouteBindingException('execution payload is invalid');
+    }
+    if (execution.privateIntent != false) {
+      throw const PegarouteBindingException('private Pegaroute execution is unavailable');
     }
     final binding = execution.binding;
     if (binding.tradeId != trade.id ||
@@ -1116,7 +1139,9 @@ final class PegarouteExecutionBindingValidator {
       String sourceChain, TradeExecutionBinding binding, PegarouteStatusResponse response) {
     final refund = response.refund;
     if (refund == null) return true;
+    final expectedAddress = binding.refundAddress ?? binding.senderAddress;
     return refund.refundAddress.trim().isNotEmpty &&
+        _sameAddress(sourceChain, refund.refundAddress, expectedAddress) &&
         (_chainIdFor(sourceChain) == null ||
             RegExp(r'^0x[0-9a-fA-F]{40}$').hasMatch(refund.refundAddress)) &&
         _canonicalChain(refund.chain) == _canonicalChain(sourceChain) &&

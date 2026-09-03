@@ -31,18 +31,37 @@ void main() {
 
     final unknown = lifecycle.markBroadcastUnknown('2026-09-03T00:01:30Z');
     expect(unknown.state, TradeExecutionLifecycleState.broadcastUnknown);
+    expect(unknown.broadcastUnknownAt, '2026-09-03T00:01:30Z');
     expect(() => unknown.beginBroadcast('later'), throwsStateError);
+  });
+
+  test('records a known pre-send abort separately from ambiguous submission', () {
+    final lifecycle = TradeExecutionLifecycle(
+      executionHash: 'btc-hash',
+      state: TradeExecutionLifecycleState.prepared,
+      callbackState: TradeExecutionCallbackState.pending,
+      createdAt: '2026-09-03T00:00:00Z',
+    ).beginBroadcast('2026-09-03T00:01:00Z');
+
+    final aborted = lifecycle.markBroadcastAborted('2026-09-03T00:01:30Z');
+    expect(aborted.state, TradeExecutionLifecycleState.broadcastAborted);
+    expect(aborted.broadcastAbortedAt, '2026-09-03T00:01:30Z');
+    expect(aborted.broadcastUnknownAt, isNull);
+    expect(aborted.callbackState, TradeExecutionCallbackState.notRequired);
+    expect(() => aborted.beginBroadcast('later'), throwsStateError);
   });
 
   test('rejects unknown fields and invalid callback timestamps', () {
     final value = <String, dynamic>{
-      'version': 1,
+      'version': 2,
       'executionHash': 'hash',
       'state': 'prepared',
       'callbackState': 'accepted',
       'createdAt': 'created',
       'broadcastingAt': null,
       'broadcastedAt': null,
+      'broadcastUnknownAt': null,
+      'broadcastAbortedAt': null,
       'callbackAttemptedAt': null,
       'callbackAcceptedAt': null,
     };
@@ -75,6 +94,10 @@ void main() {
     );
     expect(
       () => broadcasting.markBroadcastUnknown('2026-09-03T00:02:30Z'),
+      throwsFormatException,
+    );
+    expect(
+      () => broadcasting.markBroadcastAborted('2026-09-03T00:02:30Z'),
       throwsFormatException,
     );
   });

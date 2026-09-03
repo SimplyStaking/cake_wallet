@@ -5,6 +5,7 @@ import 'package:cake_wallet/exchange/provider/pegaroute/pegaroute_execution_hand
 import 'package:cake_wallet/exchange/trade_execution.dart';
 import 'package:cake_wallet/exchange/trade_execution_dispatcher.dart';
 import 'package:cw_core/wallet_base.dart';
+import 'package:cw_core/wallet_type.dart';
 
 final class PegarouteBtcTransactionEvidence {
   PegarouteBtcTransactionEvidence({
@@ -63,6 +64,7 @@ final class PegarouteBtcExecutionHandler
       execution.sourceChain == 'BTC' &&
       execution.sourceToken == 'BTC' &&
       execution.nativeToken == 'BTC' &&
+      execution.privateIntent == false &&
       execution.family == 'utxo' &&
       execution.mode == 'payment-with-memo';
 
@@ -72,6 +74,8 @@ final class PegarouteBtcExecutionHandler
   @override
   void validateForExecution({required ValidatedTradeExecution execution, required DateTime now}) {
     final value = execution.execution;
+    pegarouteRequirePublicExecution(value);
+    pegarouteRequireUnexpiredFunding(execution, now);
     if (value.sourceChain != 'BTC' ||
         value.sourceToken != 'BTC' ||
         value.nativeToken != 'BTC' ||
@@ -99,9 +103,11 @@ final class PegarouteBtcExecutionHandler
       (wallet, execution) async {
         before = walletContext.snapshot(wallet);
         pegarouteRequireBoundWalletSnapshot(execution, before);
-        if (before.isHardwareWallet) {
-          throw const PegarouteBindingException('BTC hardware-wallet execution is unavailable');
-        }
+        pegarouteRequireSoftwareWallet(
+          wallet: wallet,
+          snapshot: before,
+          walletType: WalletType.bitcoin,
+        );
         prepared = await adapter.prepare(
           wallet: wallet,
           snapshot: before,
@@ -199,6 +205,21 @@ final class PegarouteBtcExecutionHandler
     final lifecycle = lifecycleHandler;
     if (lifecycle == null) return;
     await lifecycle.onBroadcastUnknown(
+      execution: execution,
+      executionHash: executionHash,
+      tradeInternalId: tradeInternalId,
+    );
+  }
+
+  @override
+  Future<void> onBroadcastAborted({
+    required ValidatedTradeExecution execution,
+    required String executionHash,
+    required int tradeInternalId,
+  }) async {
+    final lifecycle = lifecycleHandler;
+    if (lifecycle == null) return;
+    await lifecycle.onBroadcastAborted(
       execution: execution,
       executionHash: executionHash,
       tradeInternalId: tradeInternalId,

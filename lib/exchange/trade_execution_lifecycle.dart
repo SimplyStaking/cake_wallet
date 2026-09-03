@@ -5,7 +5,13 @@ import 'dart:convert';
 /// This envelope intentionally contains neither a private key nor signed raw
 /// transaction bytes. A transition to [broadcasting] is the commit boundary:
 /// callers must persist it before attempting network submission.
-enum TradeExecutionLifecycleState { prepared, broadcasting, broadcasted, broadcastUnknown }
+enum TradeExecutionLifecycleState {
+  prepared,
+  broadcasting,
+  broadcasted,
+  broadcastUnknown,
+  broadcastAborted,
+}
 
 enum TradeExecutionCallbackState { notRequired, pending, accepted, failed }
 
@@ -17,6 +23,8 @@ final class TradeExecutionLifecycle {
     required this.createdAt,
     this.broadcastingAt,
     this.broadcastedAt,
+    this.broadcastUnknownAt,
+    this.broadcastAbortedAt,
     this.callbackAttemptedAt,
     this.callbackAcceptedAt,
   }) {
@@ -38,13 +46,15 @@ final class TradeExecutionLifecycle {
       'createdAt',
       'broadcastingAt',
       'broadcastedAt',
+      'broadcastUnknownAt',
+      'broadcastAbortedAt',
       'callbackAttemptedAt',
       'callbackAcceptedAt',
     };
     if (value.length != keys.length || value.keys.any((key) => !keys.contains(key))) {
       throw const FormatException('invalid lifecycle fields');
     }
-    if (value['version'] != 1 ||
+    if (value['version'] != 2 ||
         value['executionHash'] is! String ||
         value['state'] is! String ||
         value['callbackState'] is! String ||
@@ -74,6 +84,8 @@ final class TradeExecutionLifecycle {
       createdAt: value['createdAt'] as String,
       broadcastingAt: optionalString(value['broadcastingAt']),
       broadcastedAt: optionalString(value['broadcastedAt']),
+      broadcastUnknownAt: optionalString(value['broadcastUnknownAt']),
+      broadcastAbortedAt: optionalString(value['broadcastAbortedAt']),
       callbackAttemptedAt: optionalString(value['callbackAttemptedAt']),
       callbackAcceptedAt: optionalString(value['callbackAcceptedAt']),
     );
@@ -85,6 +97,8 @@ final class TradeExecutionLifecycle {
   final String createdAt;
   final String? broadcastingAt;
   final String? broadcastedAt;
+  final String? broadcastUnknownAt;
+  final String? broadcastAbortedAt;
   final String? callbackAttemptedAt;
   final String? callbackAcceptedAt;
 
@@ -99,6 +113,8 @@ final class TradeExecutionLifecycle {
       createdAt: createdAt,
       broadcastingAt: at,
       broadcastedAt: broadcastedAt,
+      broadcastUnknownAt: broadcastUnknownAt,
+      broadcastAbortedAt: broadcastAbortedAt,
       callbackAttemptedAt: callbackAttemptedAt,
       callbackAcceptedAt: callbackAcceptedAt,
     );
@@ -117,6 +133,8 @@ final class TradeExecutionLifecycle {
       createdAt: createdAt,
       broadcastingAt: broadcastingAt,
       broadcastedAt: at,
+      broadcastUnknownAt: broadcastUnknownAt,
+      broadcastAbortedAt: broadcastAbortedAt,
       callbackAttemptedAt: callbackAttemptedAt,
       callbackAcceptedAt: callbackAcceptedAt,
     );
@@ -126,9 +144,6 @@ final class TradeExecutionLifecycle {
     if (state != TradeExecutionLifecycleState.broadcasting) {
       throw StateError('broadcast is not in progress');
     }
-    if (!_validTimestamp(at) || DateTime.parse(at).isBefore(_timestamp(broadcastingAt)!)) {
-      throw const FormatException('unknown broadcast timestamp is invalid');
-    }
     return TradeExecutionLifecycle(
       executionHash: executionHash,
       state: TradeExecutionLifecycleState.broadcastUnknown,
@@ -136,8 +151,28 @@ final class TradeExecutionLifecycle {
       createdAt: createdAt,
       broadcastingAt: broadcastingAt,
       broadcastedAt: broadcastedAt,
+      broadcastUnknownAt: at,
+      broadcastAbortedAt: broadcastAbortedAt,
       callbackAttemptedAt: callbackAttemptedAt,
       callbackAcceptedAt: callbackAcceptedAt,
+    );
+  }
+
+  TradeExecutionLifecycle markBroadcastAborted(String at) {
+    if (state != TradeExecutionLifecycleState.broadcasting) {
+      throw StateError('broadcast is not in progress');
+    }
+    return TradeExecutionLifecycle(
+      executionHash: executionHash,
+      state: TradeExecutionLifecycleState.broadcastAborted,
+      callbackState: TradeExecutionCallbackState.notRequired,
+      createdAt: createdAt,
+      broadcastingAt: broadcastingAt,
+      broadcastedAt: broadcastedAt,
+      broadcastUnknownAt: broadcastUnknownAt,
+      broadcastAbortedAt: at,
+      callbackAttemptedAt: null,
+      callbackAcceptedAt: null,
     );
   }
 
@@ -154,6 +189,8 @@ final class TradeExecutionLifecycle {
       createdAt: createdAt,
       broadcastingAt: broadcastingAt,
       broadcastedAt: broadcastedAt,
+      broadcastUnknownAt: broadcastUnknownAt,
+      broadcastAbortedAt: broadcastAbortedAt,
       callbackAttemptedAt: at,
       callbackAcceptedAt: callbackAcceptedAt,
     );
@@ -172,6 +209,8 @@ final class TradeExecutionLifecycle {
       createdAt: createdAt,
       broadcastingAt: broadcastingAt,
       broadcastedAt: broadcastedAt,
+      broadcastUnknownAt: broadcastUnknownAt,
+      broadcastAbortedAt: broadcastAbortedAt,
       callbackAttemptedAt: callbackAttemptedAt ?? at,
       callbackAcceptedAt: at,
     );
@@ -180,13 +219,15 @@ final class TradeExecutionLifecycle {
   String encode() => json.encode(toJson());
 
   Map<String, dynamic> toJson() => {
-        'version': 1,
+        'version': 2,
         'executionHash': executionHash,
         'state': state.name,
         'callbackState': callbackState.name,
         'createdAt': createdAt,
         'broadcastingAt': broadcastingAt,
         'broadcastedAt': broadcastedAt,
+        'broadcastUnknownAt': broadcastUnknownAt,
+        'broadcastAbortedAt': broadcastAbortedAt,
         'callbackAttemptedAt': callbackAttemptedAt,
         'callbackAcceptedAt': callbackAcceptedAt,
       };
@@ -200,6 +241,8 @@ final class TradeExecutionLifecycle {
     for (final timestamp in [
       broadcastingAt,
       broadcastedAt,
+      broadcastUnknownAt,
+      broadcastAbortedAt,
       callbackAttemptedAt,
       callbackAcceptedAt,
     ]) {
@@ -208,20 +251,39 @@ final class TradeExecutionLifecycle {
       }
     }
     if (state == TradeExecutionLifecycleState.prepared &&
-        (broadcastingAt != null || broadcastedAt != null)) {
+        (broadcastingAt != null ||
+            broadcastedAt != null ||
+            broadcastUnknownAt != null ||
+            broadcastAbortedAt != null)) {
       throw const FormatException('prepared lifecycle has broadcast timestamps');
     }
     if (state == TradeExecutionLifecycleState.broadcasting &&
-        (broadcastingAt == null || broadcastedAt != null)) {
+        (broadcastingAt == null ||
+            broadcastedAt != null ||
+            broadcastUnknownAt != null ||
+            broadcastAbortedAt != null)) {
       throw const FormatException('broadcasting lifecycle timestamps are invalid');
     }
     if (state == TradeExecutionLifecycleState.broadcastUnknown &&
-        (broadcastingAt == null || broadcastedAt != null)) {
+        (broadcastingAt == null ||
+            broadcastedAt != null ||
+            broadcastUnknownAt == null ||
+            broadcastAbortedAt != null)) {
       throw const FormatException('unknown broadcast lifecycle timestamps are invalid');
     }
     if (state == TradeExecutionLifecycleState.broadcasted &&
-        (broadcastingAt == null || broadcastedAt == null)) {
+        (broadcastingAt == null ||
+            broadcastedAt == null ||
+            broadcastUnknownAt != null ||
+            broadcastAbortedAt != null)) {
       throw const FormatException('broadcasted lifecycle timestamps are invalid');
+    }
+    if (state == TradeExecutionLifecycleState.broadcastAborted &&
+        (broadcastingAt == null ||
+            broadcastedAt != null ||
+            broadcastUnknownAt != null ||
+            broadcastAbortedAt == null)) {
+      throw const FormatException('aborted broadcast lifecycle timestamps are invalid');
     }
     if (state != TradeExecutionLifecycleState.broadcasted &&
         (callbackState == TradeExecutionCallbackState.failed ||
@@ -247,10 +309,14 @@ final class TradeExecutionLifecycle {
     final created = _timestamp(createdAt)!;
     final broadcasting = _timestamp(broadcastingAt);
     final broadcasted = _timestamp(broadcastedAt);
+    final unknown = _timestamp(broadcastUnknownAt);
+    final aborted = _timestamp(broadcastAbortedAt);
     final callbackAttempted = _timestamp(callbackAttemptedAt);
     final callbackAccepted = _timestamp(callbackAcceptedAt);
     if ((broadcasting != null && broadcasting.isBefore(created)) ||
         (broadcasted != null && (broadcasting == null || broadcasted.isBefore(broadcasting))) ||
+        (unknown != null && (broadcasting == null || unknown.isBefore(broadcasting))) ||
+        (aborted != null && (broadcasting == null || aborted.isBefore(broadcasting))) ||
         (callbackAttempted != null &&
             (broadcasted == null || callbackAttempted.isBefore(broadcasted))) ||
         (callbackAccepted != null &&

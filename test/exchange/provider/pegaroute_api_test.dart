@@ -9,7 +9,6 @@ import 'package:cake_wallet/exchange/provider/pegaroute_exchange_provider.dart';
 import 'package:cake_wallet/exchange/exchange_provider_description.dart';
 import 'package:cake_wallet/exchange/trade.dart';
 import 'package:cake_wallet/exchange/trade_execution.dart';
-import 'package:cake_wallet/exchange/trade_refund.dart';
 import 'package:cw_core/crypto_currency.dart';
 import 'package:http/http.dart' as very_insecure_http_do_not_use;
 
@@ -923,7 +922,7 @@ void main() {
     );
   });
 
-  test('accepts and preserves a differing observed VIN0 refund address', () async {
+  test('rejects a refund address that differs from bound refund intent', () async {
     final value = json.decode(_fixture('status_refund.json')) as Map<String, dynamic>;
     value['refund'] = {
       'status': 'completed',
@@ -934,16 +933,16 @@ void main() {
       'feeDescription': 'fixture',
       'refundAddress': '0x0000000000000000000000000000000000000004',
     };
-    final result = await PegarouteExchangeProvider(
-      apiClient: PegarouteApiClient(
-        configuration: const PegarouteConfiguration(baseUrl: 'https://example.test'),
-        get: (uri, headers) async =>
-            very_insecure_http_do_not_use.Response(json.encode(value), 200),
-      ),
-    ).findTradeForContext(trade: _boundStatusTrade());
-    final refund = TradeRefund.fromJsonString(result.refundJson!);
-    expect(refund.configuredAddress, '0x0000000000000000000000000000000000000003');
-    expect(refund.observedAddress, '0x0000000000000000000000000000000000000004');
+    await expectLater(
+      PegarouteExchangeProvider(
+        apiClient: PegarouteApiClient(
+          configuration: const PegarouteConfiguration(baseUrl: 'https://example.test'),
+          get: (uri, headers) async =>
+              very_insecure_http_do_not_use.Response(json.encode(value), 200),
+        ),
+      ).findTradeForContext(trade: _boundStatusTrade()),
+      throwsA(isA<PegarouteBindingException>()),
+    );
   });
 
   test('rejects a local context mutation while status HTTP is awaited', () async {

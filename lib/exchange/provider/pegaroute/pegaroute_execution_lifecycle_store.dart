@@ -1,4 +1,5 @@
 import 'package:cake_wallet/exchange/provider/pegaroute/pegaroute_execution_binding.dart';
+import 'package:cake_wallet/exchange/exchange_provider_description.dart';
 import 'package:cake_wallet/exchange/trade.dart';
 import 'package:cake_wallet/exchange/trade_execution_dispatcher.dart';
 import 'package:cake_wallet/exchange/trade_execution_lifecycle.dart';
@@ -76,6 +77,24 @@ final class PegarouteExecutionLifecycleStore implements TradeExecutionLifecycleH
     );
   }
 
+  @override
+  Future<void> onBroadcastAborted({
+    required ValidatedTradeExecution execution,
+    required String executionHash,
+    required int tradeInternalId,
+  }) async {
+    await _transition(
+      execution: execution,
+      executionHash: executionHash,
+      tradeInternalId: tradeInternalId,
+      transition: (current, at) => _advance(
+        current: current,
+        executionHash: executionHash,
+        next: (value) => value.markBroadcastAborted(at),
+      ),
+    );
+  }
+
   Future<void> markCallbackAttempted({
     required ValidatedTradeExecution execution,
     required String executionHash,
@@ -139,7 +158,11 @@ final class PegarouteExecutionLifecycleStore implements TradeExecutionLifecycleH
       final rows = await txn.query(
         Trade.tableName,
         where: '${Trade.selfIdColumn} = ? AND id = ? AND providerRaw = ?',
-        whereArgs: [tradeInternalId, execution.execution.binding.tradeId, 17],
+        whereArgs: [
+          tradeInternalId,
+          execution.execution.binding.tradeId,
+          ExchangeProviderDescription.pegaroute.raw,
+        ],
         limit: 1,
       );
       if (rows.isEmpty) throw const PegarouteBindingException('bound Pegaroute trade is missing');

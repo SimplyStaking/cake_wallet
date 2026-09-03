@@ -5,6 +5,7 @@ import 'package:cake_wallet/exchange/provider/pegaroute/pegaroute_execution_hand
 import 'package:cake_wallet/exchange/trade_execution.dart';
 import 'package:cake_wallet/exchange/trade_execution_dispatcher.dart';
 import 'package:cw_core/wallet_base.dart';
+import 'package:cw_core/wallet_type.dart';
 
 final class PegarouteEvmDepositWithExpiryEvidence {
   const PegarouteEvmDepositWithExpiryEvidence({
@@ -85,6 +86,7 @@ final class PegarouteEthExecutionHandler
       execution.sourceChain == 'ETH' &&
       execution.sourceToken == 'ETH' &&
       execution.nativeToken == 'ETH' &&
+      execution.privateIntent == false &&
       execution.binding.walletChainId == 1 &&
       execution.family == 'evm' &&
       (execution.mode == 'native-transfer' ||
@@ -97,6 +99,8 @@ final class PegarouteEthExecutionHandler
   @override
   void validateForExecution({required ValidatedTradeExecution execution, required DateTime now}) {
     final value = execution.execution;
+    pegarouteRequirePublicExecution(value);
+    pegarouteRequireUnexpiredFunding(execution, now);
     final payload = pegaroutePayload(execution);
     if (value.sourceChain != 'ETH' ||
         value.sourceToken != 'ETH' ||
@@ -143,7 +147,12 @@ final class PegarouteEthExecutionHandler
       (wallet, execution) async {
         before = walletContext.snapshot(wallet);
         pegarouteRequireBoundWalletSnapshot(execution, before);
-        if (before.isHardwareWallet || before.chainId != 1) {
+        pegarouteRequireSoftwareWallet(
+          wallet: wallet,
+          snapshot: before,
+          walletType: WalletType.ethereum,
+        );
+        if (before.chainId != 1) {
           throw const PegarouteBindingException('ETH wallet context is unavailable');
         }
         prepared = await adapter.prepare(
@@ -295,6 +304,21 @@ final class PegarouteEthExecutionHandler
     final lifecycle = lifecycleHandler;
     if (lifecycle == null) return;
     await lifecycle.onBroadcastUnknown(
+      execution: execution,
+      executionHash: executionHash,
+      tradeInternalId: tradeInternalId,
+    );
+  }
+
+  @override
+  Future<void> onBroadcastAborted({
+    required ValidatedTradeExecution execution,
+    required String executionHash,
+    required int tradeInternalId,
+  }) async {
+    final lifecycle = lifecycleHandler;
+    if (lifecycle == null) return;
+    await lifecycle.onBroadcastAborted(
       execution: execution,
       executionHash: executionHash,
       tradeInternalId: tradeInternalId,

@@ -57,12 +57,13 @@ TradeExecution _execution() => TradeExecution(
       },
     );
 
-class _Handler implements TradeExecutionHandler {
+class _Handler implements TradeExecutionHandler, TradeExecutionLifecycleHandler {
   _Handler(
     this.external, {
     this.mutateDuringCommit = false,
     this.prepareCompleter,
     this.throwOnCommitted = false,
+    this.throwDuringCommit = false,
     this.ignoreGuard = false,
     this.validatePreparedGeneration = false,
   });
@@ -71,6 +72,7 @@ class _Handler implements TradeExecutionHandler {
   final bool mutateDuringCommit;
   final Completer<void>? prepareCompleter;
   final bool throwOnCommitted;
+  final bool throwDuringCommit;
   final bool ignoreGuard;
   final bool validatePreparedGeneration;
   int preparedGeneration = 0;
@@ -125,17 +127,50 @@ class _Handler implements TradeExecutionHandler {
     if (throwOnCommitted) throw StateError('callback failed');
   }
 
+  @override
+  Future<void> beforeBroadcast({
+    required ValidatedTradeExecution execution,
+    required String executionHash,
+    required int tradeInternalId,
+  }) async {}
+
+  @override
+  Future<void> onBroadcasted({
+    required ValidatedTradeExecution execution,
+    required String executionHash,
+    required int tradeInternalId,
+  }) async {}
+
+  @override
+  Future<void> onBroadcastUnknown({
+    required ValidatedTradeExecution execution,
+    required String executionHash,
+    required int tradeInternalId,
+  }) async {}
+
+  @override
+  Future<void> onBroadcastAborted({
+    required ValidatedTradeExecution execution,
+    required String executionHash,
+    required int tradeInternalId,
+  }) async {}
+
   PendingTransaction _prepared() {
     prepareCalls++;
-    pending = _Pending(onCommit: mutateDuringCommit ? () => trade.amount = '2' : null);
+    pending = _Pending(
+      onCommit: mutateDuringCommit ? () => trade.amount = '2' : null,
+      throwDuringCommit: throwDuringCommit,
+    );
     return pending;
   }
 }
 
 class _LifecycleHandler extends _Handler implements TradeExecutionLifecycleHandler {
-  _LifecycleHandler() : super(false);
+  _LifecycleHandler({this.mutateBeforeBroadcast = false, bool throwDuringCommit = false})
+      : super(false, throwDuringCommit: throwDuringCommit);
 
   final events = <String>[];
+  final bool mutateBeforeBroadcast;
 
   @override
   Future<void> beforeBroadcast({
@@ -144,6 +179,7 @@ class _LifecycleHandler extends _Handler implements TradeExecutionLifecycleHandl
     required int tradeInternalId,
   }) async {
     events.add('before:$executionHash');
+    if (mutateBeforeBroadcast) trade.amount = '2';
   }
 
   @override
@@ -163,6 +199,35 @@ class _LifecycleHandler extends _Handler implements TradeExecutionLifecycleHandl
   }) async {
     events.add('unknown:$executionHash');
   }
+
+  @override
+  Future<void> onBroadcastAborted({
+    required ValidatedTradeExecution execution,
+    required String executionHash,
+    required int tradeInternalId,
+  }) async {
+    events.add('aborted:$executionHash');
+  }
+}
+
+class _NoLifecycleHandler implements TradeExecutionHandler {
+  @override
+  bool supports(TradeExecution execution) => true;
+
+  @override
+  bool supportsExternalSend(TradeExecution execution) => true;
+
+  @override
+  void validateForExecution({required ValidatedTradeExecution execution, required DateTime now}) {}
+
+  @override
+  Future<GuardedPendingTransaction?> prepare({required TradeExecutionGuard guard}) async => null;
+
+  @override
+  Future<void> onCommitted({
+    required ValidatedTradeExecution execution,
+    required CommittedTradeExecution receipt,
+  }) async {}
 }
 
 class _Addresses implements WalletAddresses {
@@ -206,9 +271,10 @@ class _Wallet
 }
 
 class _Pending with PendingTransaction {
-  _Pending({this.onCommit});
+  _Pending({this.onCommit, this.throwDuringCommit = false});
 
   final void Function()? onCommit;
+  final bool throwDuringCommit;
   int commits = 0;
   int urCommits = 0;
   String transactionId = 'pending';
@@ -232,6 +298,7 @@ class _Pending with PendingTransaction {
   Future<void> commit() async {
     commits++;
     onCommit?.call();
+    if (throwDuringCommit) throw StateError('ambiguous broadcast failure');
   }
 
   @override
@@ -267,6 +334,12 @@ void main() {
       RegistryTradeExecutionDispatcher([_Handler(true)]).supportsExternalSend(execution),
       isTrue,
     );
+  });
+
+  test('registry rejects handlers without durable lifecycle persistence', () {
+    final dispatcher = RegistryTradeExecutionDispatcher([_NoLifecycleHandler()]);
+    expect(dispatcher.supports(_execution()), isFalse);
+    expect(dispatcher.supportsExternalSend(_execution()), isFalse);
   });
 
   test('validates before prepare and guards commit while disabling commitUR', () async {
@@ -446,6 +519,55 @@ void main() {
     expect(handler.events.first, startsWith('before:'));
     expect(handler.events.last, startsWith('broadcasted:'));
     await expectLater(pending.commit(), throwsA(isA<PegarouteBindingException>()));
+  });
+
+  test('records a pre-send validation failure as aborted, not ambiguous', () async {
+    final trade = Trade(
+      id: 'trade',
+      amount: '1',
+      from: CryptoCurrency.xmr,
+      to: CryptoCurrency.btc,
+      provider: ExchangeProviderDescription.pegaroute,
+      senderAddress: 'sender',
+      payoutAddress: 'destination',
+      walletId: 'wallet',
+      fromWalletAddress: 'sender',
+      providerName: 'instaswap',
+      executionJson: _execution().encode(),
+    );
+    final handler = _LifecycleHandler(mutateBeforeBroadcast: true)..trade = trade;
+    final pending = await RegistryTradeExecutionDispatcher([
+      handler,
+    ]).prepare(wallet: _Wallet(), trade: trade);
+    await expectLater(pending!.commit(), throwsA(isA<PegarouteBindingException>()));
+    expect(handler.pending.commits, 0);
+    expect(handler.events.where((event) => event.startsWith('aborted:')), hasLength(1));
+    expect(handler.events.where((event) => event.startsWith('unknown:')), isEmpty);
+  });
+
+  test('records an entered wallet broadcast failure as ambiguous, not aborted', () async {
+    final trade = Trade(
+      id: 'trade',
+      amount: '1',
+      from: CryptoCurrency.xmr,
+      to: CryptoCurrency.btc,
+      provider: ExchangeProviderDescription.pegaroute,
+      senderAddress: 'sender',
+      payoutAddress: 'destination',
+      walletId: 'wallet',
+      fromWalletAddress: 'sender',
+      providerName: 'instaswap',
+      executionJson: _execution().encode(),
+    );
+    final handler = _LifecycleHandler(throwDuringCommit: true)..trade = trade;
+    final pending = await RegistryTradeExecutionDispatcher([
+      handler,
+    ]).prepare(wallet: _Wallet(), trade: trade);
+
+    await expectLater(pending!.commit(), throwsStateError);
+    expect(handler.pending.commits, 1);
+    expect(handler.events.where((event) => event.startsWith('unknown:')), hasLength(1));
+    expect(handler.events.where((event) => event.startsWith('aborted:')), isEmpty);
   });
 
   test('rejects a changed prepared transaction identity before broadcast', () async {

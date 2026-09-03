@@ -61,6 +61,33 @@ TradeExecutionBinding _binding({
 ValidatedTradeExecution _validated(TradeExecution execution) =>
     ValidatedTradeExecution(execution: execution, rawExecutionJson: execution.encode());
 
+TradeExecution _withPrivateIntent(TradeExecution execution) {
+  final raw = json.decode(execution.encode()) as Map<String, dynamic>;
+  raw['privateIntent'] = 'private-route';
+  final binding = raw['binding'] as Map<String, dynamic>;
+  final route = json.decode(binding['reviewedRouteJson'] as String) as Map<String, dynamic>;
+  route['private'] = 'private-route';
+  binding['reviewedRouteJson'] = json.encode(route);
+  return TradeExecution.fromJson(raw);
+}
+
+TradeExecution _withExpiredProviderDeposit(TradeExecution execution) {
+  final raw = json.decode(execution.encode()) as Map<String, dynamic>;
+  (raw['binding'] as Map<String, dynamic>)['providerDepositExpiry'] = '2025-01-01T00:00:00.000Z';
+  return TradeExecution.fromJson(raw);
+}
+
+TradeExecution _withRouteExpiry(TradeExecution execution, DateTime expiry) {
+  final raw = json.decode(execution.encode()) as Map<String, dynamic>;
+  final binding = raw['binding'] as Map<String, dynamic>;
+  final encodedExpiry = TradeExecutionExpiry.fromProviderValue(expiry.toUtc().toIso8601String());
+  binding['routeExpiry'] = encodedExpiry.toJson();
+  final route = json.decode(binding['reviewedRouteJson'] as String) as Map<String, dynamic>;
+  route['expiry'] = encodedExpiry.toJson();
+  binding['reviewedRouteJson'] = json.encode(route);
+  return TradeExecution.fromJson(raw);
+}
+
 void main() {
   final now = DateTime.utc(2026);
 
@@ -97,6 +124,26 @@ void main() {
       () => handler.validateForExecution(execution: _validated(execution), now: now),
       returnsNormally,
     );
+    final privateExecution = _withPrivateIntent(execution);
+    expect(handler.supports(privateExecution), isFalse);
+    expect(
+      () => handler.validateForExecution(execution: _validated(privateExecution), now: now),
+      throwsA(isA<PegarouteBindingException>()),
+    );
+    expect(
+      () => handler.validateForExecution(
+        execution: _validated(_withExpiredProviderDeposit(execution)),
+        now: now,
+      ),
+      throwsA(isA<PegarouteBindingException>()),
+    );
+    expect(
+      () => handler.validateForExecution(
+        execution: _validated(_withRouteExpiry(execution, now)),
+        now: now,
+      ),
+      throwsA(isA<PegarouteBindingException>()),
+    );
   });
 
   test('XMR handler rejects a memo or payment id', () {
@@ -130,6 +177,21 @@ void main() {
     expect(handler.supports(execution), isTrue);
     expect(
       () => handler.validateForExecution(execution: _validated(execution), now: now),
+      throwsA(isA<PegarouteBindingException>()),
+    );
+    final raw = json.decode(execution.encode()) as Map<String, dynamic>;
+    (raw['payload'] as Map<String, dynamic>)['memo'] = null;
+    final publicExecution = TradeExecution.fromJson(raw);
+    expect(
+      () => handler.validateForExecution(execution: _validated(publicExecution), now: now),
+      returnsNormally,
+    );
+    expect(handler.supports(_withPrivateIntent(publicExecution)), isFalse);
+    expect(
+      () => handler.validateForExecution(
+        execution: _validated(_withExpiredProviderDeposit(publicExecution)),
+        now: now,
+      ),
       throwsA(isA<PegarouteBindingException>()),
     );
   });
@@ -170,6 +232,14 @@ void main() {
     expect(
       () => handler.validateForExecution(execution: _validated(execution), now: now),
       returnsNormally,
+    );
+    expect(handler.supports(_withPrivateIntent(execution)), isFalse);
+    expect(
+      () => handler.validateForExecution(
+        execution: _validated(_withExpiredProviderDeposit(execution)),
+        now: now,
+      ),
+      throwsA(isA<PegarouteBindingException>()),
     );
   });
 
@@ -236,6 +306,44 @@ void main() {
       () => decodePegarouteDepositWithExpiryCalldata('${calldata}00'),
       throwsA(isA<PegarouteBindingException>()),
     );
+    expect(
+      () => decodePegarouteDepositWithExpiryCalldata(
+        '${calldata.substring(0, 10)}1${calldata.substring(11)}',
+      ),
+      throwsA(isA<PegarouteBindingException>()),
+    );
+    expect(
+      () => decodePegarouteDepositWithExpiryCalldata(
+        _replaceCalldataWord(calldata, 3, BigInt.from(192)),
+      ),
+      throwsA(isA<PegarouteBindingException>()),
+    );
+    expect(
+      () => decodePegarouteDepositWithExpiryCalldata(
+        _replaceCalldataWord(calldata, 5, BigInt.from(utf8.encode(memo).length + 1)),
+      ),
+      throwsA(isA<PegarouteBindingException>()),
+    );
+    final paddedCalldata = _depositWithExpiryCalldata(
+      vault: vault,
+      asset: asset,
+      amount: BigInt.from(42),
+      memo: '=:BTC.BTC:bc1qfixture',
+      expiry: BigInt.from(4102444800),
+    );
+    expect(
+      () => decodePegarouteDepositWithExpiryCalldata(
+        '${paddedCalldata.substring(0, paddedCalldata.length - 1)}1',
+      ),
+      throwsA(isA<PegarouteBindingException>()),
+    );
+    const memoStart = 2 + 8 + 6 * 64;
+    expect(
+      () => decodePegarouteDepositWithExpiryCalldata(
+        '${calldata.substring(0, memoStart)}ff${calldata.substring(memoStart + 2)}',
+      ),
+      throwsA(isA<PegarouteBindingException>()),
+    );
   });
 
   test('BTC preparation binds raw bytes and rejects a later ABA generation', () async {
@@ -266,14 +374,40 @@ void main() {
     );
     final context = _WalletContext();
     final adapter = _BtcAdapter(context);
-    final pending = await RegistryTradeExecutionDispatcher([
+    final dispatcher = RegistryTradeExecutionDispatcher([
       PegarouteBtcExecutionHandler(walletContext: context, adapter: adapter),
-    ]).prepare(
+    ]);
+    expect(
+      await dispatcher.prepare(
+        wallet: _Wallet(type: WalletType.ethereum, chainId: null),
+        trade: _trade(execution, from: CryptoCurrency.btc, to: CryptoCurrency.eth),
+      ),
+      isNull,
+    );
+    expect(
+      await dispatcher.prepare(
+        wallet: _Wallet(type: WalletType.bitcoin, chainId: null, isHardwareWallet: true),
+        trade: _trade(execution, from: CryptoCurrency.btc, to: CryptoCurrency.eth),
+      ),
+      isNull,
+    );
+    expect(adapter.prepareCalls, 0);
+    final pending = await dispatcher.prepare(
       wallet: _Wallet(type: WalletType.bitcoin, chainId: null),
       trade: _trade(execution, from: CryptoCurrency.btc, to: CryptoCurrency.eth),
     );
 
     expect(pending, isNotNull);
+    final multiOutput = await RegistryTradeExecutionDispatcher([
+      PegarouteBtcExecutionHandler(
+        walletContext: context,
+        adapter: _BtcAdapter(context, paymentOutputCount: 2),
+      ),
+    ]).prepare(
+      wallet: _Wallet(type: WalletType.bitcoin, chainId: null),
+      trade: _trade(execution, from: CryptoCurrency.btc, to: CryptoCurrency.eth),
+    );
+    expect(multiOutput, isNull);
     context.generation++;
     await expectLater(pending!.commit(), throwsA(isA<PegarouteBindingException>()));
     expect(adapter.pending.commits, 0);
@@ -315,6 +449,16 @@ void main() {
     );
 
     expect(pending, isNull);
+    final multiOutput = await RegistryTradeExecutionDispatcher([
+      PegarouteXmrExecutionHandler(
+        walletContext: context,
+        adapter: _XmrAdapter(context, evidenceRawHex: '0102', paymentOutputCount: 2),
+      ),
+    ]).prepare(
+      wallet: _Wallet(type: WalletType.monero, chainId: null),
+      trade: _trade(execution, from: CryptoCurrency.xmr, to: CryptoCurrency.btc),
+    );
+    expect(multiOutput, isNull);
   });
 
   test('native ETH preparation requires a hash derived from the exact pending bytes', () async {
@@ -460,6 +604,12 @@ String _depositWithExpiryCalldata({
       '${word(expiry)}${word(BigInt.from(utf8.encode(memo).length))}$paddedMemo';
 }
 
+String _replaceCalldataWord(String calldata, int index, BigInt value) {
+  final start = 2 + 8 + index * 64;
+  final replacement = value.toRadixString(16).padLeft(64, '0');
+  return '${calldata.substring(0, start)}$replacement${calldata.substring(start + 64)}';
+}
+
 Trade _trade(
   TradeExecution execution, {
   required CryptoCurrency from,
@@ -494,8 +644,12 @@ final class _Addresses implements WalletAddresses {
 
 final class _Wallet
     extends WalletBase<Balance, TransactionHistoryBase<TransactionInfo>, TransactionInfo> {
-  _Wallet({required WalletType type, required this.chainId, String address = 'sender'})
-      : _addresses = _Addresses(address),
+  _Wallet({
+    required WalletType type,
+    required this.chainId,
+    String address = 'sender',
+    this.isHardwareWallet = false,
+  })  : _addresses = _Addresses(address),
         super(
           WalletInfo.external(
             id: 'wallet-fixture',
@@ -515,6 +669,9 @@ final class _Wallet
 
   @override
   final int? chainId;
+
+  @override
+  final bool isHardwareWallet;
 
   @override
   WalletAddresses get walletAddresses => _addresses;
@@ -570,47 +727,55 @@ final class _WalletContext implements PegarouteWalletContext {
 }
 
 final class _BtcAdapter implements PegarouteBtcWalletAdapter {
-  _BtcAdapter(this.context)
+  _BtcAdapter(this.context, {this.paymentOutputCount = 1})
       : pending = _Pending(
           id: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
           hex: '0102',
         );
 
   final _WalletContext context;
+  final int paymentOutputCount;
   final _Pending pending;
+  int prepareCalls = 0;
 
   @override
   Future<PegaroutePreparedTransaction<PegarouteBtcTransactionEvidence>> prepare({
     required WalletBase wallet,
     required PegarouteWalletSnapshot snapshot,
     required ValidatedTradeExecution execution,
-  }) async =>
-      PegaroutePreparedTransaction(
-        pending: pending,
-        evidence: PegarouteBtcTransactionEvidence(
-          rawHex: '0102',
-          transactionId: pending.id,
-          chain: 'BTC',
-          destination: 'provider-inbound',
-          amountBaseUnits: '100000000',
-          paymentOutputCount: 1,
-          opReturnPayloads: [utf8.encode('memo')],
-          hasSilentPayment: false,
-          snapshot: context.snapshot(wallet),
-        ),
+  }) async {
+    prepareCalls++;
+    return PegaroutePreparedTransaction(
+      pending: pending,
+      evidence: PegarouteBtcTransactionEvidence(
+        rawHex: '0102',
+        transactionId: pending.id,
+        chain: 'BTC',
+        destination: 'provider-inbound',
+        amountBaseUnits: '100000000',
+        paymentOutputCount: paymentOutputCount,
+        opReturnPayloads: [utf8.encode('memo')],
+        hasSilentPayment: false,
         snapshot: context.snapshot(wallet),
-      );
+      ),
+      snapshot: context.snapshot(wallet),
+    );
+  }
 }
 
 final class _XmrAdapter implements PegarouteXmrWalletAdapter {
-  _XmrAdapter(this.context, {required this.evidenceRawHex})
-      : pending = _Pending(
+  _XmrAdapter(
+    this.context, {
+    required this.evidenceRawHex,
+    this.paymentOutputCount = 1,
+  }) : pending = _Pending(
           id: 'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',
           hex: '0102',
         );
 
   final _WalletContext context;
   final String evidenceRawHex;
+  final int paymentOutputCount;
   final _Pending pending;
 
   @override
@@ -627,7 +792,7 @@ final class _XmrAdapter implements PegarouteXmrWalletAdapter {
           chain: 'XMR',
           destination: 'provider-inbound',
           amountBaseUnits: '1000000000000',
-          paymentOutputCount: 1,
+          paymentOutputCount: paymentOutputCount,
           paymentId: '',
           memo: null,
           snapshot: context.snapshot(wallet),
