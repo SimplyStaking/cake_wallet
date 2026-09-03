@@ -52,6 +52,7 @@ class Trade {
     this.chainId,
     this.executionJson,
     this.refundJson,
+    this.executionLifecycleJson,
   }) {
     if (provider != null) providerRaw = provider.raw;
     if (state != null) stateRaw = state.raw;
@@ -119,6 +120,7 @@ class Trade {
   double? fee;
   String? executionJson;
   String? refundJson;
+  String? executionLifecycleJson;
 
   String get chainName {
     if (chainId == null) return '';
@@ -133,33 +135,18 @@ class Trade {
     if (json[selfIdColumn] == 0) {
       json[selfIdColumn] = null;
     }
-    internalId = await db!.insert(
-      tableName,
-      json,
-      conflictAlgorithm: ConflictAlgorithm.replace,
-    );
+    internalId = await db!.insert(tableName, json, conflictAlgorithm: ConflictAlgorithm.replace);
     onChanged.add(null);
     return internalId;
   }
 
   static Future<List<Trade>> getAll({String? orderBy}) async {
-    final list = await db!.query(
-      tableName,
-      orderBy: orderBy ?? 'createdAt DESC',
-    );
-    return List.generate(
-      list.length,
-      (i) => Trade.fromSqliteRow(list[i]),
-    );
+    final list = await db!.query(tableName, orderBy: orderBy ?? 'createdAt DESC');
+    return List.generate(list.length, (i) => Trade.fromSqliteRow(list[i]));
   }
 
   static Future<Trade?> getByTradeId(String id) async {
-    final list = await db!.query(
-      tableName,
-      where: 'id = ?',
-      whereArgs: [id],
-      limit: 1,
-    );
+    final list = await db!.query(tableName, where: 'id = ?', whereArgs: [id], limit: 1);
     if (list.isEmpty) return null;
     return Trade.fromSqliteRow(list.first);
   }
@@ -180,8 +167,7 @@ class Trade {
   Future<Trade> mergeAndSavePegaroute(
     Trade updated, {
     required String expectedRawExecutionJson,
-  }) async =>
-      throw StateError('Pegaroute status writes are provider-owned');
+  }) async => throw StateError('Pegaroute status writes are provider-owned');
 
   // ── SQLite serialization ─────────────────────────────
   void mergeFindTradeByIdResult(Trade updated) {
@@ -222,8 +208,8 @@ class Trade {
       final currentRefundJson = refundJson?.isNotEmpty == true
           ? refundJson
           : refundAddress == null
-              ? null
-              : TradeRefund(configuredAddress: refundAddress).encode();
+          ? null
+          : TradeRefund(configuredAddress: refundAddress).encode();
       refundJson = TradeRefund.mergeJson(currentRefundJson, updated.refundJson!);
     }
   }
@@ -275,6 +261,7 @@ class Trade {
     fee = other.fee;
     executionJson = other.executionJson;
     refundJson = other.refundJson;
+    executionLifecycleJson = other.executionLifecycleJson;
     from = localFrom ?? from;
     to = localTo ?? to;
     if (localAmount.isNotEmpty) amount = localAmount;
@@ -339,6 +326,7 @@ class Trade {
       'fee': fee,
       'executionJson': executionJson,
       'refundJson': refundJson,
+      'executionLifecycleJson': executionLifecycleJson,
     };
   }
 
@@ -348,14 +336,10 @@ class Trade {
       amount: row['amount'] as String? ?? '',
       receiveAmount: row['receiveAmount'] as String?,
       createdAt: row['createdAt'] != null
-          ? DateTime.fromMillisecondsSinceEpoch(
-              row['createdAt'] as int,
-            )
+          ? DateTime.fromMillisecondsSinceEpoch(row['createdAt'] as int)
           : null,
       expiredAt: row['expiredAt'] != null
-          ? DateTime.fromMillisecondsSinceEpoch(
-              row['expiredAt'] as int,
-            )
+          ? DateTime.fromMillisecondsSinceEpoch(row['expiredAt'] as int)
           : null,
       inputAddress: row['inputAddress'] as String?,
       extraId: row['extraId'] as String?,
@@ -388,6 +372,7 @@ class Trade {
       chainId: row['chainId'] as int?,
       executionJson: row['executionJson'] as String?,
       refundJson: row['refundJson'] as String?,
+      executionLifecycleJson: row['executionLifecycleJson'] as String?,
     );
     trade.internalId = row[selfIdColumn] as int? ?? 0;
     trade.providerRaw = row['providerRaw'] as int? ?? 0;

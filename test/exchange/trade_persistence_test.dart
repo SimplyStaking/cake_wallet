@@ -44,7 +44,7 @@ CREATE TABLE Trade (
   sourceTokenAddress TEXT, sourceTokenDecimals INTEGER, routerData TEXT,
   routerValue TEXT, routerChainId INTEGER, sourceTokenAmountRaw TEXT,
   requiresTokenApproval INTEGER DEFAULT 0, chainId INTEGER, fee REAL,
-  executionJson TEXT, refundJson TEXT
+  executionJson TEXT, refundJson TEXT, executionLifecycleJson TEXT
 )
 ''');
       await database.execute('CREATE UNIQUE INDEX idx_trade_id_unique ON Trade (id)');
@@ -116,16 +116,16 @@ Trade _boundTrade({String id = 'refresh', String state = 'created'}) {
 }
 
 Map<String, dynamic> _statusResponse(String id, {String internalStatus = 'submitted'}) {
-  final value = json.decode(
-    File('test/exchange/fixtures/pegaroute/status_refund.json').readAsStringSync(),
-  ) as Map<String, dynamic>;
+  final value =
+      json.decode(File('test/exchange/fixtures/pegaroute/status_refund.json').readAsStringSync())
+          as Map<String, dynamic>;
   value['transactionId'] = id;
   value['internalStatus'] = internalStatus;
   value['status'] = internalStatus == 'completed'
       ? 'success'
       : internalStatus == 'failed' || internalStatus == 'refunded'
-          ? 'fail'
-          : 'pending';
+      ? 'fail'
+      : 'pending';
   return value;
 }
 
@@ -255,10 +255,7 @@ void main() {
       },
     );
 
-    await expectLater(
-      provider.refreshTradeStatus(trade: trade),
-      throwsA(isA<StateError>()),
-    );
+    await expectLater(provider.refreshTradeStatus(trade: trade), throwsA(isA<StateError>()));
     final replacement = await Trade.getByTradeId(trade.id);
     expect(replacement!.internalId, isNot(originalInternalId));
     expect(replacement.state, TradeState.created);
@@ -277,8 +274,10 @@ void main() {
     var call = 0;
     final provider = PegarouteExchangeProvider(
       apiClient: PegarouteApiClient(
-        configuration:
-            const PegarouteConfiguration(baseUrl: 'https://example.test', apiKey: 'test'),
+        configuration: const PegarouteConfiguration(
+          baseUrl: 'https://example.test',
+          apiKey: 'test',
+        ),
         get: (uri, headers) async {
           final status = call++ == 0 ? 'submitted' : 'executing';
           return very_insecure_http_do_not_use.Response(
@@ -305,14 +304,16 @@ void main() {
     final trade = _boundTrade(id: 'graph');
     await trade.save();
     for (final status in ['submitted', 'executing', 'confirming', 'completed']) {
-      await _provider(_statusResponse(trade.id, internalStatus: status))
-          .refreshTradeStatus(trade: trade);
+      await _provider(
+        _statusResponse(trade.id, internalStatus: status),
+      ).refreshTradeStatus(trade: trade);
     }
     expect(trade.state, TradeState.success);
     trade.receiveAmount = 'local';
     await trade.save();
-    await _provider(_statusResponse(trade.id, internalStatus: 'submitted'))
-        .refreshTradeStatus(trade: trade);
+    await _provider(
+      _statusResponse(trade.id, internalStatus: 'submitted'),
+    ).refreshTradeStatus(trade: trade);
     expect(trade.state, TradeState.success);
     expect(trade.receiveAmount, 'local');
   });
@@ -360,8 +361,9 @@ void main() {
     final trade = _boundTrade(id: 'refund-transition', state: 'refund');
     await trade.save();
 
-    await _provider(_statusResponse(trade.id, internalStatus: 'refunded'))
-        .refreshTradeStatus(trade: trade);
+    await _provider(
+      _statusResponse(trade.id, internalStatus: 'refunded'),
+    ).refreshTradeStatus(trade: trade);
 
     expect(trade.state, TradeState.refunded);
   });

@@ -19,7 +19,7 @@ class _FakePathProviderPlatform extends PathProviderPlatform {
 }
 
 void main() {
-  test('migrates Trade version 10 to the Phase 1 envelope columns', () async {
+  test('migrates Trade version 11 to the execution lifecycle column', () async {
     final root = await Directory.systemTemp.createTemp('pegaroute-trade-migration-');
     addTearDown(() => root.delete(recursive: true));
     PathProviderPlatform.instance = _FakePathProviderPlatform(root.path);
@@ -30,7 +30,7 @@ void main() {
     final appDir = await getAppDir();
     final oldDb = await openDatabase(
       '${appDir.path}/cake.db',
-      version: 10,
+      version: 11,
       onCreate: (database, _) async {
         await database.execute('''
 CREATE TABLE Trade (
@@ -48,7 +48,7 @@ CREATE TABLE Trade (
     await initDb();
     final columns = await db!.rawQuery('PRAGMA table_info(Trade)');
     final names = columns.map((row) => row['name']).toSet();
-    expect(names, containsAll({'senderAddress', 'executionJson', 'refundJson'}));
+    expect(names, contains('executionLifecycleJson'));
 
     await db!.close();
     db = null;
