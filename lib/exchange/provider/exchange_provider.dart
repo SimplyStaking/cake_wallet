@@ -21,6 +21,10 @@ abstract class ExchangeProvider {
 
   bool get supportsMemoOrDestinationTag => true;
 
+  /// True only when a successful return proves the provider has already
+  /// created recoverable server-side state.
+  bool get createsOrderBeforeReturning => false;
+
   @override
   String toString() => title;
 

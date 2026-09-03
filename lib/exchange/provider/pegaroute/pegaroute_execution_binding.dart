@@ -557,7 +557,6 @@ final class PegarouteExecutionBindingValidator {
         'destinationAddress',
         'senderAddress',
         'refundAddress',
-        'integrationId',
       };
       Map<String, dynamic> base(Object value) {
         final map = Map<String, dynamic>.from(value as Map);

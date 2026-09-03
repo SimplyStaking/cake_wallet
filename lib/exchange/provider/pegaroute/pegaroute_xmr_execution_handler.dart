@@ -6,17 +6,23 @@ import 'package:cw_core/wallet_base.dart';
 
 final class PegarouteXmrTransactionEvidence {
   const PegarouteXmrTransactionEvidence({
+    required this.rawHex,
+    required this.transactionId,
     required this.chain,
     required this.destination,
     required this.amountBaseUnits,
+    required this.paymentOutputCount,
     required this.paymentId,
     required this.memo,
     required this.snapshot,
   });
 
+  final String rawHex;
+  final String transactionId;
   final String chain;
   final String destination;
   final String amountBaseUnits;
+  final int paymentOutputCount;
   final String paymentId;
   final String? memo;
   final PegarouteWalletSnapshot snapshot;
@@ -44,7 +50,11 @@ final class PegarouteXmrExecutionHandler
 
   @override
   bool supports(TradeExecution execution) =>
-      execution.family == 'other' && execution.mode == 'deposit-transfer';
+      execution.sourceChain == 'XMR' &&
+      execution.sourceToken == 'XMR' &&
+      execution.nativeToken == 'XMR' &&
+      execution.family == 'other' &&
+      execution.mode == 'deposit-transfer';
 
   @override
   bool supportsExternalSend(TradeExecution execution) => false;
@@ -72,31 +82,49 @@ final class PegarouteXmrExecutionHandler
 
   @override
   Future<GuardedPendingTransaction?> prepare({required TradeExecutionGuard guard}) async {
-    return guard.withWalletConstruction((wallet, execution) async {
-      final before = walletContext.snapshot(wallet);
-      if (before.isHardwareWallet) {
-        throw const PegarouteBindingException('XMR hardware-wallet execution is unavailable');
-      }
-      final prepared = await adapter.prepare(
-        wallet: wallet,
-        snapshot: before,
-        execution: execution,
-      );
-      final expectedTarget = pegarouteExpectedProviderTarget(execution);
-      final payload = pegaroutePayload(execution);
-      final amount = (payload['amount'] as Map)['baseUnits'];
-      final evidence = prepared.evidence;
-      if (!before.matches(prepared.snapshot) ||
-          !before.matches(evidence.snapshot) ||
-          evidence.chain != 'XMR' ||
-          evidence.destination != expectedTarget ||
-          evidence.amountBaseUnits != amount ||
-          evidence.paymentId.isNotEmpty ||
-          evidence.memo != null) {
-        throw const PegarouteBindingException('XMR transaction evidence is not exact');
-      }
-      return prepared.pending;
-    });
+    late final PegarouteWalletSnapshot before;
+    late final PegaroutePreparedTransaction<PegarouteXmrTransactionEvidence> prepared;
+    return guard.withWalletConstruction(
+      (wallet, execution) async {
+        before = walletContext.snapshot(wallet);
+        pegarouteRequireBoundWalletSnapshot(execution, before);
+        if (before.isHardwareWallet) {
+          throw const PegarouteBindingException('XMR hardware-wallet execution is unavailable');
+        }
+        prepared = await adapter.prepare(
+          wallet: wallet,
+          snapshot: before,
+          execution: execution,
+        );
+        return prepared.pending;
+      },
+      executionHash: (_) => prepared.evidence.transactionId,
+      validatePrepared: (wallet, execution, pending) {
+        final current = walletContext.snapshot(wallet);
+        pegarouteRequireBoundWalletSnapshot(execution, current);
+        if (!before.matches(current) || !identical(prepared.pending, pending)) {
+          throw const PegarouteBindingException('XMR wallet context changed during preparation');
+        }
+        final expectedTarget = pegarouteExpectedProviderTarget(execution);
+        final payload = pegaroutePayload(execution);
+        final amount = (payload['amount'] as Map)['baseUnits'];
+        final evidence = prepared.evidence;
+        if (!before.matches(prepared.snapshot) ||
+            !before.matches(evidence.snapshot) ||
+            !pegarouteIsHex(evidence.rawHex) ||
+            prepared.pending.hex != evidence.rawHex ||
+            !RegExp(r'^[0-9a-fA-F]{64}$').hasMatch(evidence.transactionId) ||
+            prepared.pending.id != evidence.transactionId ||
+            evidence.chain != 'XMR' ||
+            evidence.destination != expectedTarget ||
+            evidence.amountBaseUnits != amount ||
+            evidence.paymentOutputCount != 1 ||
+            evidence.paymentId.isNotEmpty ||
+            evidence.memo != null) {
+          throw const PegarouteBindingException('XMR transaction evidence is not exact');
+        }
+      },
+    );
   }
 
   @override
@@ -109,31 +137,46 @@ final class PegarouteXmrExecutionHandler
   Future<void> beforeBroadcast({
     required ValidatedTradeExecution execution,
     required String executionHash,
+    required int tradeInternalId,
   }) async {
     final lifecycle = lifecycleHandler;
     if (lifecycle == null) {
       throw const PegarouteBindingException('XMR lifecycle persistence is unavailable');
     }
-    await lifecycle.beforeBroadcast(execution: execution, executionHash: executionHash);
+    await lifecycle.beforeBroadcast(
+      execution: execution,
+      executionHash: executionHash,
+      tradeInternalId: tradeInternalId,
+    );
   }
 
   @override
   Future<void> onBroadcasted({
     required ValidatedTradeExecution execution,
     required String executionHash,
+    required int tradeInternalId,
   }) async {
     final lifecycle = lifecycleHandler;
     if (lifecycle == null) return;
-    await lifecycle.onBroadcasted(execution: execution, executionHash: executionHash);
+    await lifecycle.onBroadcasted(
+      execution: execution,
+      executionHash: executionHash,
+      tradeInternalId: tradeInternalId,
+    );
   }
 
   @override
   Future<void> onBroadcastUnknown({
     required ValidatedTradeExecution execution,
     required String executionHash,
+    required int tradeInternalId,
   }) async {
     final lifecycle = lifecycleHandler;
     if (lifecycle == null) return;
-    await lifecycle.onBroadcastUnknown(execution: execution, executionHash: executionHash);
+    await lifecycle.onBroadcastUnknown(
+      execution: execution,
+      executionHash: executionHash,
+      tradeInternalId: tradeInternalId,
+    );
   }
 }

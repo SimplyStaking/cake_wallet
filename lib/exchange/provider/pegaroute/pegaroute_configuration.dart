@@ -1,10 +1,14 @@
 import 'dart:io';
 
+import 'package:cake_wallet/.secrets.g.dart' as secrets;
+
 class PegarouteConfiguration {
   const PegarouteConfiguration({required this.baseUrl});
 
-  // The Cake-operated proxy supplies authentication server-side.
-  factory PegarouteConfiguration.generated() => const PegarouteConfiguration(baseUrl: '');
+  // This origin is the Cake-operated proxy. Provider authentication remains
+  // server-side and must never be generated into the app.
+  factory PegarouteConfiguration.generated() =>
+      const PegarouteConfiguration(baseUrl: secrets.pegarouteApiBaseUrl);
 
   final String baseUrl;
 

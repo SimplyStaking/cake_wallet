@@ -94,6 +94,9 @@ class PegarouteExchangeProvider extends ExchangeProvider {
   bool get supportsMemoOrDestinationTag => false;
 
   @override
+  bool get createsOrderBeforeReturning => true;
+
+  @override
   ExchangeProviderDescription get description => ExchangeProviderDescription.pegaroute;
 
   @override

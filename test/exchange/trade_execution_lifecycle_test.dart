@@ -50,4 +50,47 @@ void main() {
     value['unexpected'] = true;
     expect(() => TradeExecutionLifecycle.fromJson(value), throwsFormatException);
   });
+
+  test('requires UTC monotonic lifecycle timestamps', () {
+    expect(
+      () => TradeExecutionLifecycle(
+        executionHash: 'hash',
+        state: TradeExecutionLifecycleState.prepared,
+        callbackState: TradeExecutionCallbackState.pending,
+        createdAt: '2026-09-03T00:00:00+01:00',
+      ),
+      throwsFormatException,
+    );
+    final prepared = TradeExecutionLifecycle(
+      executionHash: 'hash',
+      state: TradeExecutionLifecycleState.prepared,
+      callbackState: TradeExecutionCallbackState.pending,
+      createdAt: '2026-09-03T00:02:00Z',
+    );
+    expect(() => prepared.beginBroadcast('2026-09-03T00:01:00Z'), throwsFormatException);
+    final broadcasting = prepared.beginBroadcast('2026-09-03T00:03:00Z');
+    expect(
+      () => broadcasting.markBroadcasted('2026-09-03T00:02:30Z'),
+      throwsFormatException,
+    );
+    expect(
+      () => broadcasting.markBroadcastUnknown('2026-09-03T00:02:30Z'),
+      throwsFormatException,
+    );
+  });
+
+  test('accepted callback state is terminal', () {
+    final accepted = TradeExecutionLifecycle(
+      executionHash: 'hash',
+      state: TradeExecutionLifecycleState.prepared,
+      callbackState: TradeExecutionCallbackState.pending,
+      createdAt: '2026-09-03T00:00:00Z',
+    )
+        .beginBroadcast('2026-09-03T00:01:00Z')
+        .markBroadcasted('2026-09-03T00:02:00Z')
+        .markCallbackAccepted('2026-09-03T00:03:00Z');
+
+    expect(() => accepted.markCallbackAttempted('2026-09-03T00:04:00Z'), throwsStateError);
+    expect(() => accepted.markCallbackAccepted('2026-09-03T00:04:00Z'), throwsStateError);
+  });
 }

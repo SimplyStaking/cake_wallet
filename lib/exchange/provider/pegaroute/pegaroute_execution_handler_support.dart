@@ -1,7 +1,5 @@
 import 'dart:convert';
 
-import 'dart:convert';
-
 import 'package:cake_wallet/exchange/provider/pegaroute/pegaroute_execution_binding.dart';
 import 'package:cake_wallet/exchange/trade_execution.dart';
 import 'package:cw_core/pending_transaction.dart';
@@ -48,6 +46,33 @@ final class PegaroutePreparedTransaction<E> {
   final PegarouteWalletSnapshot snapshot;
 }
 
+void pegarouteRequireBoundWalletSnapshot(
+  ValidatedTradeExecution execution,
+  PegarouteWalletSnapshot snapshot,
+) {
+  final binding = execution.execution.binding;
+  if (snapshot.walletId.isEmpty ||
+      snapshot.address.isEmpty ||
+      snapshot.generation < 0 ||
+      snapshot.walletId != binding.walletId ||
+      snapshot.chainId != binding.walletChainId ||
+      !pegarouteSameAddress(
+          execution.execution.sourceChain, snapshot.address, binding.walletAddress)) {
+    throw const PegarouteBindingException('wallet generation snapshot is not bound');
+  }
+}
+
+bool pegarouteSameAddress(String chain, String first, String second) {
+  if (_evmChains.contains(chain)) return first.toLowerCase() == second.toLowerCase();
+  return first == second;
+}
+
+bool pegarouteIsHex(String value, {bool allow0x = true}) {
+  final raw =
+      allow0x && (value.startsWith('0x') || value.startsWith('0X')) ? value.substring(2) : value;
+  return raw.isNotEmpty && raw.length.isEven && RegExp(r'^[0-9a-fA-F]+$').hasMatch(raw);
+}
+
 String pegarouteExpectedProviderTarget(ValidatedTradeExecution execution) {
   final binding = execution.execution.binding;
   if (binding.providerDepositAddress?.isNotEmpty == true) {
@@ -75,3 +100,5 @@ Map<String, dynamic> _reviewedRoute(String raw) {
   if (decoded is! Map) throw const PegarouteBindingException('reviewed route is invalid');
   return Map<String, dynamic>.from(decoded);
 }
+
+const _evmChains = {'ETH', 'BSC', 'POLYGON', 'AVAX', 'ARBITRUM', 'BASE'};

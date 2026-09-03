@@ -1,6 +1,7 @@
 import 'package:cake_wallet/core/utilities.dart';
 import 'package:cake_wallet/entities/new_ui_entities/list_item/list_item_regular_row.dart';
 import 'package:cake_wallet/exchange/exchange_provider_description.dart';
+import 'package:cake_wallet/exchange/provider/pegaroute/pegaroute_provider_label.dart';
 import 'package:cake_wallet/generated/i18n.dart';
 import 'package:cake_wallet/new-ui/widgets/new_primary_button.dart';
 import 'package:cake_wallet/new-ui/widgets/receive_page/receive_top_bar.dart';
@@ -233,12 +234,7 @@ class SwapTransactionDetails extends StatelessWidget {
                           keyValue: "provider",
                           onTap: () => Clipboard.setData(
                               ClipboardData(text: exchangeTradeViewModel.trade.id)),
-                          label: exchangeTradeViewModel.trade.provider ==
-                                  ExchangeProviderDescription.pegaroute &&
-                              exchangeTradeViewModel.trade.providerName != null &&
-                              exchangeTradeViewModel.trade.providerName!.isNotEmpty
-                              ? '${exchangeTradeViewModel.trade.provider.title} via ${exchangeTradeViewModel.trade.providerName}'
-                              : exchangeTradeViewModel.trade.provider.title,
+                          label: tradeProviderDisplayName(exchangeTradeViewModel.trade),
                           iconPath: exchangeTradeViewModel.trade.provider.image,
                           trailingIconPath: "assets/new-ui/copy.svg",
                           trailingText: exchangeTradeViewModel.trade.id.toString().length > 18

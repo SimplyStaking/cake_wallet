@@ -23,16 +23,19 @@ abstract interface class TradeExecutionLifecycleHandler {
   Future<void> beforeBroadcast({
     required ValidatedTradeExecution execution,
     required String executionHash,
+    required int tradeInternalId,
   });
 
   Future<void> onBroadcasted({
     required ValidatedTradeExecution execution,
     required String executionHash,
+    required int tradeInternalId,
   });
 
   Future<void> onBroadcastUnknown({
     required ValidatedTradeExecution execution,
     required String executionHash,
+    required int tradeInternalId,
   });
 }
 
@@ -56,8 +59,14 @@ final class TradeExecutionGuard {
 
   Future<GuardedPendingTransaction?> withWalletConstruction(
     FutureOr<PendingTransaction?> Function(WalletBase wallet, ValidatedTradeExecution execution)
-    operation,
-  ) async {
+        operation, {
+    required String Function(PendingTransaction pending) executionHash,
+    void Function(
+      WalletBase wallet,
+      ValidatedTradeExecution execution,
+      PendingTransaction pending,
+    )? validatePrepared,
+  }) async {
     // Concrete handler activation must document wallet-internal async/ABA guarantees.
     final execution = _validate();
     late final PendingTransaction? pending;
@@ -66,16 +75,35 @@ final class TradeExecutionGuard {
     } finally {
       _validate();
     }
-    return pending == null ? null : GuardedPendingTransaction._(pending);
+    final prepared = pending;
+    if (prepared == null) return null;
+    final current = _validate();
+    validatePrepared?.call(_wallet, current, prepared);
+    final hash = executionHash(prepared);
+    if (hash.isEmpty || hash.trim() != hash) {
+      throw const PegarouteBindingException('prepared transaction identity is invalid');
+    }
+    return GuardedPendingTransaction._(
+      prepared,
+      hash,
+      (execution) {
+        validatePrepared?.call(_wallet, execution, prepared);
+        if (executionHash(prepared) != hash) {
+          throw const PegarouteBindingException('prepared transaction identity changed');
+        }
+      },
+    );
   }
 
   final WalletBase _wallet;
 }
 
 final class GuardedPendingTransaction {
-  const GuardedPendingTransaction._(this._inner);
+  const GuardedPendingTransaction._(this._inner, this.executionHash, this._validatePrepared);
 
   final PendingTransaction _inner;
+  final String executionHash;
+  final void Function(ValidatedTradeExecution execution) _validatePrepared;
 }
 
 final class CommittedTradeExecution {
@@ -168,12 +196,13 @@ class RegistryTradeExecutionDispatcher implements TradeExecutionDispatcher {
       handler.validateForExecution(execution: current, now: validator.now);
       return current;
     }, wallet);
-    return _finishPrepare(handler: handler, guard: guard);
+    return _finishPrepare(handler: handler, guard: guard, tradeInternalId: trade.internalId);
   }
 
   Future<PendingTransaction?> _finishPrepare({
     required TradeExecutionHandler handler,
     required TradeExecutionGuard guard,
+    required int tradeInternalId,
   }) async {
     late final GuardedPendingTransaction? guarded;
     try {
@@ -185,33 +214,43 @@ class RegistryTradeExecutionDispatcher implements TradeExecutionDispatcher {
     late final ValidatedTradeExecution current;
     try {
       current = guard.validate();
+      guarded._validatePrepared(current);
     } catch (_) {
       return null;
     }
     return _BoundPendingTransaction(
-      inner: guarded._inner,
+      guarded: guarded,
       handler: handler,
       guard: guard,
       execution: current,
+      tradeInternalId: tradeInternalId,
     );
   }
 }
 
 class _BoundPendingTransaction with PendingTransaction {
   _BoundPendingTransaction({
-    required this.inner,
+    required this.guarded,
     required this.handler,
     required this.guard,
     required this.execution,
+    required this.tradeInternalId,
   });
 
-  final PendingTransaction inner;
+  final GuardedPendingTransaction guarded;
   final TradeExecutionHandler handler;
   final TradeExecutionGuard guard;
   final ValidatedTradeExecution execution;
+  final int tradeInternalId;
   bool _commitStarted = false;
 
-  ValidatedTradeExecution _validate() => guard.validate();
+  PendingTransaction get inner => guarded._inner;
+
+  ValidatedTradeExecution _validate() {
+    final current = guard.validate();
+    guarded._validatePrepared(current);
+    return current;
+  }
 
   @override
   String get id => inner.id;
@@ -267,36 +306,47 @@ class _BoundPendingTransaction with PendingTransaction {
     }
     _commitStarted = true;
     final before = _validate();
-    final executionHash = inner.evmTxHashFromRawHex ?? inner.id;
+    final executionHash = guarded.executionHash;
     final lifecycle = handler is TradeExecutionLifecycleHandler
         ? handler as TradeExecutionLifecycleHandler
         : null;
-    await lifecycle?.beforeBroadcast(execution: before, executionHash: executionHash);
+    await lifecycle?.beforeBroadcast(
+      execution: before,
+      executionHash: executionHash,
+      tradeInternalId: tradeInternalId,
+    );
     try {
+      // Persistence is asynchronous, so revalidate immediately before handing
+      // the exact prepared bytes to the wallet broadcast boundary.
+      _validate();
       await inner.commit();
     } catch (_) {
       try {
-        await lifecycle?.onBroadcastUnknown(execution: _validate(), executionHash: executionHash);
+        await lifecycle?.onBroadcastUnknown(
+          execution: before,
+          executionHash: executionHash,
+          tradeInternalId: tradeInternalId,
+        );
       } catch (_) {}
-      try {
-        _validate();
-      } catch (_) {
-        // A changed context must not trigger follow-up I/O after a failed send.
-      }
       rethrow;
     }
-    late final ValidatedTradeExecution current;
+    ValidatedTradeExecution? current;
     try {
       current = _validate();
     } on Object {
-      // The broadcast succeeded, but a changed context must suppress follow-up I/O.
-      return;
+      // The broadcast succeeded. Persist that local fact using the exact
+      // pre-broadcast binding, but suppress provider callback I/O below.
     }
     try {
-      await lifecycle?.onBroadcasted(execution: current, executionHash: executionHash);
+      await lifecycle?.onBroadcasted(
+        execution: current ?? before,
+        executionHash: executionHash,
+        tradeInternalId: tradeInternalId,
+      );
     } on Object {
       // The network broadcast succeeded; lifecycle bookkeeping is best effort.
     }
+    if (current == null) return;
     try {
       await handler.onCommitted(
         execution: current,

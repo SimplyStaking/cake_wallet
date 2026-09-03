@@ -124,8 +124,8 @@ Map<String, dynamic> _statusResponse(String id, {String internalStatus = 'submit
   value['status'] = internalStatus == 'completed'
       ? 'success'
       : internalStatus == 'failed' || internalStatus == 'refunded'
-      ? 'fail'
-      : 'pending';
+          ? 'fail'
+          : 'pending';
   return value;
 }
 

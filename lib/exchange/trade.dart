@@ -167,7 +167,8 @@ class Trade {
   Future<Trade> mergeAndSavePegaroute(
     Trade updated, {
     required String expectedRawExecutionJson,
-  }) async => throw StateError('Pegaroute status writes are provider-owned');
+  }) async =>
+      throw StateError('Pegaroute status writes are provider-owned');
 
   // ── SQLite serialization ─────────────────────────────
   void mergeFindTradeByIdResult(Trade updated) {
@@ -208,8 +209,8 @@ class Trade {
       final currentRefundJson = refundJson?.isNotEmpty == true
           ? refundJson
           : refundAddress == null
-          ? null
-          : TradeRefund(configuredAddress: refundAddress).encode();
+              ? null
+              : TradeRefund(configuredAddress: refundAddress).encode();
       refundJson = TradeRefund.mergeJson(currentRefundJson, updated.refundJson!);
     }
   }

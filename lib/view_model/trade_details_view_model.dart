@@ -9,6 +9,7 @@ import 'package:cake_wallet/exchange/provider/letsexchange_exchange_provider.dar
 import 'package:cake_wallet/exchange/provider/jupiter_exchange_provider.dart';
 import 'package:cake_wallet/exchange/provider/near_Intents_exchange_provider.dart';
 import 'package:cake_wallet/exchange/provider/pegaroute_exchange_provider.dart';
+import 'package:cake_wallet/exchange/provider/pegaroute/pegaroute_provider_label.dart';
 import 'package:cake_wallet/exchange/provider/swapsxyz_exchange_provider.dart';
 import 'package:cake_wallet/exchange/provider/swaptrade_exchange_provider.dart';
 import 'package:cake_wallet/exchange/provider/sideshift_exchange_provider.dart';
@@ -200,12 +201,12 @@ abstract class TradeDetailsViewModelBase with Store {
           value: destinationMemo));
     }
 
-    final providerValue = trade.provider == ExchangeProviderDescription.pegaroute &&
-            trade.providerName != null &&
-            trade.providerName!.isNotEmpty
-        ? '${trade.provider.title} via ${trade.providerName}'
-        : trade.provider.toString();
-    items.add(StandartListItem(title: S.current.trade_details_provider, value: providerValue));
+    items.add(
+      StandartListItem(
+        title: S.current.trade_details_provider,
+        value: tradeProviderDisplayName(trade),
+      ),
+    );
 
     final trackUrl = TradeDetailsViewModelBase.getTrackUrl(trade.provider, trade);
     if (trackUrl != null) {

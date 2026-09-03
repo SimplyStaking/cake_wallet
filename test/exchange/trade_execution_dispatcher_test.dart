@@ -18,44 +18,44 @@ import 'package:cw_core/wallet_type.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 TradeExecutionBinding _binding() => TradeExecutionBinding(
-  tradeId: 'trade',
-  providerRaw: 17,
-  quoteId: 'quote',
-  quoteExpiresAt: DateTime.utc(2099),
-  routeExpiry: null,
-  sourceAmount: '1',
-  sourceAmountBaseUnits: '1000000000000',
-  sourceDecimals: 12,
-  destinationDecimals: 8,
-  senderAddress: 'sender',
-  refundAddress: null,
-  destinationAddress: 'destination',
-  isSendAll: false,
-  walletId: 'wallet',
-  walletChainId: null,
-  walletAddress: 'sender',
-  reviewedRouteJson:
-      '{"provider":"instaswap","providerType":"fixture","subprovider":null,"private":false,"expectedOutput":"0.99","fees":null,"estimatedTimeSeconds":0,"memo":null,"inboundAddress":"destination","router":null,"minAmount":null,"expiry":null,"gasRate":null,"resolvedFee":null,"openOceanRoute":null}',
-  providerReferenceId: null,
-);
+      tradeId: 'trade',
+      providerRaw: 17,
+      quoteId: 'quote',
+      quoteExpiresAt: DateTime.utc(2099),
+      routeExpiry: null,
+      sourceAmount: '1',
+      sourceAmountBaseUnits: '1000000000000',
+      sourceDecimals: 12,
+      destinationDecimals: 8,
+      senderAddress: 'sender',
+      refundAddress: null,
+      destinationAddress: 'destination',
+      isSendAll: false,
+      walletId: 'wallet',
+      walletChainId: null,
+      walletAddress: 'sender',
+      reviewedRouteJson:
+          '{"provider":"instaswap","providerType":"fixture","subprovider":null,"private":false,"expectedOutput":"0.99","fees":null,"estimatedTimeSeconds":0,"memo":null,"inboundAddress":"destination","router":null,"minAmount":null,"expiry":null,"gasRate":null,"resolvedFee":null,"openOceanRoute":null}',
+      providerReferenceId: null,
+    );
 
 TradeExecution _execution() => TradeExecution(
-  family: 'other',
-  mode: 'deposit-transfer',
-  sourceChain: 'XMR',
-  sourceToken: 'XMR',
-  nativeToken: 'XMR',
-  destinationChain: 'BTC',
-  destinationToken: 'BTC',
-  binding: _binding(),
-  routeProvider: 'instaswap',
-  payload: const {
-    'chain': 'XMR',
-    'to': 'destination',
-    'amount': {'display': '1', 'baseUnits': '1000000000000'},
-    'memo': null,
-  },
-);
+      family: 'other',
+      mode: 'deposit-transfer',
+      sourceChain: 'XMR',
+      sourceToken: 'XMR',
+      nativeToken: 'XMR',
+      destinationChain: 'BTC',
+      destinationToken: 'BTC',
+      binding: _binding(),
+      routeProvider: 'instaswap',
+      payload: const {
+        'chain': 'XMR',
+        'to': 'destination',
+        'amount': {'display': '1', 'baseUnits': '1000000000000'},
+        'memo': null,
+      },
+    );
 
 class _Handler implements TradeExecutionHandler {
   _Handler(
@@ -64,6 +64,7 @@ class _Handler implements TradeExecutionHandler {
     this.prepareCompleter,
     this.throwOnCommitted = false,
     this.ignoreGuard = false,
+    this.validatePreparedGeneration = false,
   });
 
   final bool external;
@@ -71,6 +72,8 @@ class _Handler implements TradeExecutionHandler {
   final Completer<void>? prepareCompleter;
   final bool throwOnCommitted;
   final bool ignoreGuard;
+  final bool validatePreparedGeneration;
+  int preparedGeneration = 0;
   int prepareCalls = 0;
   int validationCalls = 0;
   int validationsAfterConstruction = 0;
@@ -94,11 +97,23 @@ class _Handler implements TradeExecutionHandler {
   @override
   Future<GuardedPendingTransaction?> prepare({required TradeExecutionGuard guard}) async {
     if (ignoreGuard) return _prepared() as GuardedPendingTransaction?;
-    return guard.withWalletConstruction((wallet, execution) async {
-      if (prepareCompleter != null) await prepareCompleter!.future;
-      constructionStarted = true;
-      return _prepared();
-    });
+    late final int capturedGeneration;
+    return guard.withWalletConstruction(
+      (wallet, execution) async {
+        if (prepareCompleter != null) await prepareCompleter!.future;
+        constructionStarted = true;
+        capturedGeneration = preparedGeneration;
+        return _prepared();
+      },
+      executionHash: (pending) => pending.id,
+      validatePrepared: validatePreparedGeneration
+          ? (wallet, execution, pending) {
+              if (preparedGeneration != capturedGeneration) {
+                throw const PegarouteBindingException('prepared generation changed');
+              }
+            }
+          : null,
+    );
   }
 
   @override
@@ -126,6 +141,7 @@ class _LifecycleHandler extends _Handler implements TradeExecutionLifecycleHandl
   Future<void> beforeBroadcast({
     required ValidatedTradeExecution execution,
     required String executionHash,
+    required int tradeInternalId,
   }) async {
     events.add('before:$executionHash');
   }
@@ -134,6 +150,7 @@ class _LifecycleHandler extends _Handler implements TradeExecutionLifecycleHandl
   Future<void> onBroadcasted({
     required ValidatedTradeExecution execution,
     required String executionHash,
+    required int tradeInternalId,
   }) async {
     events.add('broadcasted:$executionHash');
   }
@@ -142,6 +159,7 @@ class _LifecycleHandler extends _Handler implements TradeExecutionLifecycleHandl
   Future<void> onBroadcastUnknown({
     required ValidatedTradeExecution execution,
     required String executionHash,
+    required int tradeInternalId,
   }) async {
     events.add('unknown:$executionHash');
   }
@@ -158,20 +176,20 @@ class _Addresses implements WalletAddresses {
 class _Wallet
     extends WalletBase<Balance, TransactionHistoryBase<TransactionInfo>, TransactionInfo> {
   _Wallet()
-    : super(
-        WalletInfo.external(
-          id: 'wallet',
-          name: 'wallet',
-          type: WalletType.ethereum,
-          isRecovery: false,
-          restoreHeight: 0,
-          date: DateTime.utc(2024),
-          dirPath: '',
-          path: '',
-          address: 'sender',
-        ),
-        DerivationInfo(),
-      ) {
+      : super(
+          WalletInfo.external(
+            id: 'wallet',
+            name: 'wallet',
+            type: WalletType.ethereum,
+            isRecovery: false,
+            restoreHeight: 0,
+            date: DateTime.utc(2024),
+            dirPath: '',
+            path: '',
+            address: 'sender',
+          ),
+          DerivationInfo(),
+        ) {
     _walletAddresses = _Addresses();
   }
 
@@ -193,9 +211,10 @@ class _Pending with PendingTransaction {
   final void Function()? onCommit;
   int commits = 0;
   int urCommits = 0;
+  String transactionId = 'pending';
 
   @override
-  String get id => 'pending';
+  String get id => transactionId;
 
   @override
   Money get amount => Money.zero(CryptoCurrency.eth);
@@ -427,5 +446,53 @@ void main() {
     expect(handler.events.first, startsWith('before:'));
     expect(handler.events.last, startsWith('broadcasted:'));
     await expectLater(pending.commit(), throwsA(isA<PegarouteBindingException>()));
+  });
+
+  test('rejects a changed prepared transaction identity before broadcast', () async {
+    final trade = Trade(
+      id: 'trade',
+      amount: '1',
+      from: CryptoCurrency.xmr,
+      to: CryptoCurrency.btc,
+      provider: ExchangeProviderDescription.pegaroute,
+      senderAddress: 'sender',
+      payoutAddress: 'destination',
+      walletId: 'wallet',
+      fromWalletAddress: 'sender',
+      providerName: 'instaswap',
+      executionJson: _execution().encode(),
+    );
+    final handler = _Handler(false);
+    final pending = await RegistryTradeExecutionDispatcher([
+      handler,
+    ]).prepare(wallet: _Wallet(), trade: trade);
+    handler.pending.transactionId = 'changed';
+
+    await expectLater(pending!.commit(), throwsA(isA<PegarouteBindingException>()));
+    expect(handler.pending.commits, 0);
+  });
+
+  test('rejects a monotonic prepared-context generation change', () async {
+    final trade = Trade(
+      id: 'trade',
+      amount: '1',
+      from: CryptoCurrency.xmr,
+      to: CryptoCurrency.btc,
+      provider: ExchangeProviderDescription.pegaroute,
+      senderAddress: 'sender',
+      payoutAddress: 'destination',
+      walletId: 'wallet',
+      fromWalletAddress: 'sender',
+      providerName: 'instaswap',
+      executionJson: _execution().encode(),
+    );
+    final handler = _Handler(false, validatePreparedGeneration: true);
+    final pending = await RegistryTradeExecutionDispatcher([
+      handler,
+    ]).prepare(wallet: _Wallet(), trade: trade);
+    handler.preparedGeneration++;
+
+    await expectLater(pending!.commit(), throwsA(isA<PegarouteBindingException>()));
+    expect(handler.pending.commits, 0);
   });
 }

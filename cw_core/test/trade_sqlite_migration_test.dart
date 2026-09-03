@@ -18,21 +18,20 @@ class _FakePathProviderPlatform extends PathProviderPlatform {
   Future<String?> getApplicationSupportPath() async => root;
 }
 
-void main() {
-  test('migrates Trade version 11 to the execution lifecycle column', () async {
-    final root = await Directory.systemTemp.createTemp('pegaroute-trade-migration-');
-    addTearDown(() => root.delete(recursive: true));
-    PathProviderPlatform.instance = _FakePathProviderPlatform(root.path);
-    Directory('${root.path}/cake_wallet').createSync(recursive: true);
-    sqfliteFfiInit();
-    databaseFactory = databaseFactoryFfi;
+Future<Set<Object?>> _migrateFrom(int oldVersion) async {
+  final root = await Directory.systemTemp.createTemp('pegaroute-trade-migration-');
+  addTearDown(() => root.delete(recursive: true));
+  PathProviderPlatform.instance = _FakePathProviderPlatform(root.path);
+  Directory('${root.path}/cake_wallet').createSync(recursive: true);
+  sqfliteFfiInit();
+  databaseFactory = databaseFactoryFfi;
 
-    final appDir = await getAppDir();
-    final oldDb = await openDatabase(
-      '${appDir.path}/cake.db',
-      version: 11,
-      onCreate: (database, _) async {
-        await database.execute('''
+  final appDir = await getAppDir();
+  final oldDb = await openDatabase(
+    '${appDir.path}/cake.db',
+    version: oldVersion,
+    onCreate: (database, _) async {
+      await database.execute('''
 CREATE TABLE Trade (
   tradeId INTEGER PRIMARY KEY AUTOINCREMENT,
   id TEXT NOT NULL,
@@ -41,16 +40,29 @@ CREATE TABLE Trade (
   stateRaw TEXT NOT NULL DEFAULT ''
 )
 ''');
-      },
-    );
-    await oldDb.close();
+    },
+  );
+  await oldDb.close();
 
-    await initDb();
-    final columns = await db!.rawQuery('PRAGMA table_info(Trade)');
-    final names = columns.map((row) => row['name']).toSet();
+  await initDb();
+  final columns = await db!.rawQuery('PRAGMA table_info(Trade)');
+  final names = columns.map((row) => row['name']).toSet();
+  await db!.close();
+  db = null;
+  return names;
+}
+
+void main() {
+  test('migrates Trade version 11 to the execution lifecycle column', () async {
+    final names = await _migrateFrom(11);
     expect(names, contains('executionLifecycleJson'));
+  });
 
-    await db!.close();
-    db = null;
+  test('preserves the version 10 Phase 1 envelope migration', () async {
+    final names = await _migrateFrom(10);
+    expect(
+      names,
+      containsAll({'senderAddress', 'executionJson', 'refundJson', 'executionLifecycleJson'}),
+    );
   });
 }

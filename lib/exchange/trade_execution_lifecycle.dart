@@ -126,6 +126,9 @@ final class TradeExecutionLifecycle {
     if (state != TradeExecutionLifecycleState.broadcasting) {
       throw StateError('broadcast is not in progress');
     }
+    if (!_validTimestamp(at) || DateTime.parse(at).isBefore(_timestamp(broadcastingAt)!)) {
+      throw const FormatException('unknown broadcast timestamp is invalid');
+    }
     return TradeExecutionLifecycle(
       executionHash: executionHash,
       state: TradeExecutionLifecycleState.broadcastUnknown,
@@ -140,7 +143,8 @@ final class TradeExecutionLifecycle {
 
   TradeExecutionLifecycle markCallbackAttempted(String at) {
     if (state != TradeExecutionLifecycleState.broadcasted ||
-        callbackState == TradeExecutionCallbackState.notRequired) {
+        (callbackState != TradeExecutionCallbackState.pending &&
+            callbackState != TradeExecutionCallbackState.failed)) {
       throw StateError('callback is unavailable');
     }
     return TradeExecutionLifecycle(
@@ -157,7 +161,8 @@ final class TradeExecutionLifecycle {
 
   TradeExecutionLifecycle markCallbackAccepted(String at) {
     if (state != TradeExecutionLifecycleState.broadcasted ||
-        callbackState == TradeExecutionCallbackState.notRequired) {
+        (callbackState != TradeExecutionCallbackState.pending &&
+            callbackState != TradeExecutionCallbackState.failed)) {
       throw StateError('callback is unavailable');
     }
     return TradeExecutionLifecycle(
@@ -175,19 +180,21 @@ final class TradeExecutionLifecycle {
   String encode() => json.encode(toJson());
 
   Map<String, dynamic> toJson() => {
-    'version': 1,
-    'executionHash': executionHash,
-    'state': state.name,
-    'callbackState': callbackState.name,
-    'createdAt': createdAt,
-    'broadcastingAt': broadcastingAt,
-    'broadcastedAt': broadcastedAt,
-    'callbackAttemptedAt': callbackAttemptedAt,
-    'callbackAcceptedAt': callbackAcceptedAt,
-  };
+        'version': 1,
+        'executionHash': executionHash,
+        'state': state.name,
+        'callbackState': callbackState.name,
+        'createdAt': createdAt,
+        'broadcastingAt': broadcastingAt,
+        'broadcastedAt': broadcastedAt,
+        'callbackAttemptedAt': callbackAttemptedAt,
+        'callbackAcceptedAt': callbackAcceptedAt,
+      };
 
   void _validate() {
-    if (executionHash.isEmpty || !_validTimestamp(createdAt)) {
+    if (executionHash.isEmpty ||
+        executionHash.trim() != executionHash ||
+        !_validTimestamp(createdAt)) {
       throw const FormatException('lifecycle identity is required');
     }
     for (final timestamp in [
@@ -237,7 +244,25 @@ final class TradeExecutionLifecycle {
         (callbackAttemptedAt == null || callbackAcceptedAt == null)) {
       throw const FormatException('accepted callback timestamps are invalid');
     }
+    final created = _timestamp(createdAt)!;
+    final broadcasting = _timestamp(broadcastingAt);
+    final broadcasted = _timestamp(broadcastedAt);
+    final callbackAttempted = _timestamp(callbackAttemptedAt);
+    final callbackAccepted = _timestamp(callbackAcceptedAt);
+    if ((broadcasting != null && broadcasting.isBefore(created)) ||
+        (broadcasted != null && (broadcasting == null || broadcasted.isBefore(broadcasting))) ||
+        (callbackAttempted != null &&
+            (broadcasted == null || callbackAttempted.isBefore(broadcasted))) ||
+        (callbackAccepted != null &&
+            (callbackAttempted == null || callbackAccepted.isBefore(callbackAttempted)))) {
+      throw const FormatException('lifecycle timestamps are out of order');
+    }
   }
 
-  static bool _validTimestamp(String value) => DateTime.tryParse(value) != null;
+  static bool _validTimestamp(String value) {
+    final timestamp = DateTime.tryParse(value);
+    return value.endsWith('Z') && timestamp != null && timestamp.isUtc;
+  }
+
+  static DateTime? _timestamp(String? value) => value == null ? null : DateTime.parse(value);
 }

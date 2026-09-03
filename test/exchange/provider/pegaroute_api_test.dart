@@ -16,26 +16,26 @@ import 'package:http/http.dart' as very_insecure_http_do_not_use;
 String _fixture(String name) => File('test/exchange/fixtures/pegaroute/$name').readAsStringSync();
 
 TradeExecutionBinding _binding() => TradeExecutionBinding(
-  tradeId: 'trade-fixture',
-  providerRaw: 17,
-  quoteId: 'quote-fixture',
-  quoteExpiresAt: DateTime.utc(2099),
-  routeExpiry: null,
-  sourceAmount: '1',
-  sourceAmountBaseUnits: '1',
-  sourceDecimals: 0,
-  destinationDecimals: 8,
-  senderAddress: 'sender',
-  refundAddress: null,
-  destinationAddress: 'destination',
-  isSendAll: false,
-  walletId: 'wallet-fixture',
-  walletChainId: null,
-  walletAddress: 'sender',
-  reviewedRouteJson:
-      '{"provider":"instaswap","providerType":"fixture","subprovider":null,"private":false,"expectedOutput":"0.99","fees":{"affiliate":"0","liquidity":"0.01","outbound":"0","subAffiliate":null,"total":"0.01","totalBps":null,"slippageBps":null},"estimatedTimeSeconds":120,"memo":null,"inboundAddress":"0x0000000000000000000000000000000000000001","router":null,"minAmount":null,"expiry":null,"gasRate":null,"resolvedFee":null,"openOceanRoute":null}',
-  providerReferenceId: null,
-);
+      tradeId: 'trade-fixture',
+      providerRaw: 17,
+      quoteId: 'quote-fixture',
+      quoteExpiresAt: DateTime.utc(2099),
+      routeExpiry: null,
+      sourceAmount: '1',
+      sourceAmountBaseUnits: '1',
+      sourceDecimals: 0,
+      destinationDecimals: 8,
+      senderAddress: 'sender',
+      refundAddress: null,
+      destinationAddress: 'destination',
+      isSendAll: false,
+      walletId: 'wallet-fixture',
+      walletChainId: null,
+      walletAddress: 'sender',
+      reviewedRouteJson:
+          '{"provider":"instaswap","providerType":"fixture","subprovider":null,"private":false,"expectedOutput":"0.99","fees":{"affiliate":"0","liquidity":"0.01","outbound":"0","subAffiliate":null,"total":"0.01","totalBps":null,"slippageBps":null},"estimatedTimeSeconds":120,"memo":null,"inboundAddress":"0x0000000000000000000000000000000000000001","router":null,"minAmount":null,"expiry":null,"gasRate":null,"resolvedFee":null,"openOceanRoute":null}',
+      providerReferenceId: null,
+    );
 
 Map<String, dynamic> _amount() => {'display': '1', 'baseUnits': '1'};
 
@@ -108,86 +108,86 @@ Trade _boundStatusTrade({
 }
 
 List<Map<String, dynamic>> _executionVariants() => [
-  {
-    'family': 'evm',
-    'mode': 'contract-call',
-    'chainId': 1,
-    'to': '0x0000000000000000000000000000000000000001',
-    'data': '0xabcdef',
-    'value': null,
-    'gasLimit': null,
-    'memo': null,
-    'approval': null,
-    'transferAmount': null,
-  },
-  {
-    'family': 'evm',
-    'mode': 'native-transfer',
-    'chainId': 1,
-    'to': '0x0000000000000000000000000000000000000001',
-    'data': null,
-    'value': _amount(),
-    'gasLimit': null,
-    'memo': null,
-    'approval': null,
-    'transferAmount': null,
-  },
-  {
-    'family': 'evm',
-    'mode': 'erc20-transfer',
-    'chainId': 1,
-    'to': '0x0000000000000000000000000000000000000001',
-    'data': null,
-    'value': null,
-    'gasLimit': null,
-    'memo': null,
-    'approval': null,
-    'transferAmount': _amount(),
-  },
-  {
-    'family': 'utxo',
-    'mode': 'payment-with-memo',
-    'to': 'bc1qfixture',
-    'amount': _amount(),
-    'memo': null,
-    'gasRate': null,
-  },
-  {
-    'family': 'cosmos',
-    'mode': 'bank-send',
-    'to': 'cosmos1fixture',
-    'amount': _amount(),
-    'memo': null,
-  },
-  {
-    'family': 'cosmos',
-    'mode': 'msg-deposit',
-    'to': 'cosmos1fixture',
-    'amount': _amount(),
-    'memo': null,
-    'asset': 'THOR.RUNE',
-    'assetDecimals': 8,
-  },
-  {'family': 'solana', 'mode': 'serialized-tx', 'serializedTransaction': '3MN', 'minOut': null},
-  {'family': 'sui', 'mode': 'serialized-tx', 'serializedTransaction': 'dHh4', 'minOut': null},
-  ...['solana', 'sui', 'xrp', 'tron', 'near', 'hypercore', 'cardano'].map(
-    (family) => <String, dynamic>{
-      'family': family,
-      'mode': 'deposit-transfer',
-      'to': 'deposit-destination',
-      'amount': _amount(),
-      'memo': null,
-    },
-  ),
-  {
-    'family': 'other',
-    'mode': 'deposit-transfer',
-    'chain': 'APTOS',
-    'to': 'deposit-destination',
-    'amount': _amount(),
-    'memo': null,
-  },
-];
+      {
+        'family': 'evm',
+        'mode': 'contract-call',
+        'chainId': 1,
+        'to': '0x0000000000000000000000000000000000000001',
+        'data': '0xabcdef',
+        'value': null,
+        'gasLimit': null,
+        'memo': null,
+        'approval': null,
+        'transferAmount': null,
+      },
+      {
+        'family': 'evm',
+        'mode': 'native-transfer',
+        'chainId': 1,
+        'to': '0x0000000000000000000000000000000000000001',
+        'data': null,
+        'value': _amount(),
+        'gasLimit': null,
+        'memo': null,
+        'approval': null,
+        'transferAmount': null,
+      },
+      {
+        'family': 'evm',
+        'mode': 'erc20-transfer',
+        'chainId': 1,
+        'to': '0x0000000000000000000000000000000000000001',
+        'data': null,
+        'value': null,
+        'gasLimit': null,
+        'memo': null,
+        'approval': null,
+        'transferAmount': _amount(),
+      },
+      {
+        'family': 'utxo',
+        'mode': 'payment-with-memo',
+        'to': 'bc1qfixture',
+        'amount': _amount(),
+        'memo': null,
+        'gasRate': null,
+      },
+      {
+        'family': 'cosmos',
+        'mode': 'bank-send',
+        'to': 'cosmos1fixture',
+        'amount': _amount(),
+        'memo': null,
+      },
+      {
+        'family': 'cosmos',
+        'mode': 'msg-deposit',
+        'to': 'cosmos1fixture',
+        'amount': _amount(),
+        'memo': null,
+        'asset': 'THOR.RUNE',
+        'assetDecimals': 8,
+      },
+      {'family': 'solana', 'mode': 'serialized-tx', 'serializedTransaction': '3MN', 'minOut': null},
+      {'family': 'sui', 'mode': 'serialized-tx', 'serializedTransaction': 'dHh4', 'minOut': null},
+      ...['solana', 'sui', 'xrp', 'tron', 'near', 'hypercore', 'cardano'].map(
+        (family) => <String, dynamic>{
+          'family': family,
+          'mode': 'deposit-transfer',
+          'to': 'deposit-destination',
+          'amount': _amount(),
+          'memo': null,
+        },
+      ),
+      {
+        'family': 'other',
+        'mode': 'deposit-transfer',
+        'chain': 'APTOS',
+        'to': 'deposit-destination',
+        'amount': _amount(),
+        'memo': null,
+      },
+    ];
 
 Map<String, dynamic> _tradePayload(PegarouteExecution execution) {
   final payload = execution.toJson();
@@ -737,21 +737,20 @@ void main() {
   });
 
   test('preserves bound provider details when compact status omits them', () async {
-    final trade =
-        await PegarouteExchangeProvider(
-          apiClient: PegarouteApiClient(
-            configuration: const PegarouteConfiguration(baseUrl: 'https://example.test'),
-            get: (uri, headers) async =>
-                very_insecure_http_do_not_use.Response(_fixture('status_refund.json'), 200),
-          ),
-        ).findTradeForContext(
-          trade: _boundStatusTrade(
-            providerReferenceId: 'bound-reference',
-            providerDepositAddress: '0x0000000000000000000000000000000000000001',
-            providerDepositAmountExact: '1',
-            providerDepositExpiry: DateTime.utc(2099),
-          ),
-        );
+    final trade = await PegarouteExchangeProvider(
+      apiClient: PegarouteApiClient(
+        configuration: const PegarouteConfiguration(baseUrl: 'https://example.test'),
+        get: (uri, headers) async =>
+            very_insecure_http_do_not_use.Response(_fixture('status_refund.json'), 200),
+      ),
+    ).findTradeForContext(
+      trade: _boundStatusTrade(
+        providerReferenceId: 'bound-reference',
+        providerDepositAddress: '0x0000000000000000000000000000000000000001',
+        providerDepositAmountExact: '1',
+        providerDepositExpiry: DateTime.utc(2099),
+      ),
+    );
     expect(trade.providerId, 'bound-reference');
   });
 
@@ -770,21 +769,20 @@ void main() {
       'referenceId': 'bound-reference',
       'details': {'instaswapSwapLite': details},
     };
-    final result =
-        await PegarouteExchangeProvider(
-          apiClient: PegarouteApiClient(
-            configuration: const PegarouteConfiguration(baseUrl: 'https://example.test'),
-            get: (uri, headers) async =>
-                very_insecure_http_do_not_use.Response(json.encode(value), 200),
-          ),
-        ).findTradeForContext(
-          trade: _boundStatusTrade(
-            providerReferenceId: 'bound-reference',
-            providerDepositAddress: '0x0000000000000000000000000000000000000001',
-            providerDepositAmountExact: '1',
-            providerDepositExpiry: DateTime.utc(2099),
-          ),
-        );
+    final result = await PegarouteExchangeProvider(
+      apiClient: PegarouteApiClient(
+        configuration: const PegarouteConfiguration(baseUrl: 'https://example.test'),
+        get: (uri, headers) async =>
+            very_insecure_http_do_not_use.Response(json.encode(value), 200),
+      ),
+    ).findTradeForContext(
+      trade: _boundStatusTrade(
+        providerReferenceId: 'bound-reference',
+        providerDepositAddress: '0x0000000000000000000000000000000000000001',
+        providerDepositAmountExact: '1',
+        providerDepositExpiry: DateTime.utc(2099),
+      ),
+    );
     expect(result.providerId, 'bound-reference');
 
     final conflict = json.decode(json.encode(value)) as Map<String, dynamic>;

@@ -37,6 +37,7 @@ import 'package:cake_wallet/exchange/provider/swaptrade_exchange_provider.dart';
 import 'package:cake_wallet/exchange/provider/trocador_exchange_provider.dart';
 import 'package:cake_wallet/exchange/provider/xoswap_exchange_provider.dart';
 import 'package:cake_wallet/exchange/trade.dart';
+import 'package:cake_wallet/exchange/trade_creation_failure.dart';
 import 'package:cake_wallet/exchange/trade_request.dart';
 import 'package:cake_wallet/generated/i18n.dart';
 import 'package:cake_wallet/new-ui/widgets/currency_picker/fiat_currency_picker_sheet.dart';
@@ -1273,6 +1274,7 @@ abstract class ExchangeViewModelBase extends WalletChangeListenerViewModel with 
           } else if (limits.max != null && double.parse(amount) > limits.max!) {
             continue;
           } else {
+            var providerOrderCreated = false;
             try {
               tradeState = TradeIsCreating();
               final trade = await provider.createTrade(
@@ -1280,6 +1282,7 @@ abstract class ExchangeViewModelBase extends WalletChangeListenerViewModel with 
                 isFixedRateMode: isFixedRateMode,
                 isSendAll: isSendAllEnabled,
               );
+              providerOrderCreated = provider.createsOrderBeforeReturning;
               trade.walletId = wallet.id;
               trade.chainId = wallet.chainId;
               trade.fromWalletAddress = wallet.walletAddresses.address;
@@ -1303,6 +1306,14 @@ abstract class ExchangeViewModelBase extends WalletChangeListenerViewModel with 
                     'toAmount': _receiveAmount,
                   },
                 );
+                if (provider.createsOrderBeforeReturning) {
+                  tradeState = TradeIsCreatedFailure(
+                    title: S.current.trade_not_created,
+                    error: canCreateTrade.errorMessage ??
+                        'The provider order was created but cannot be used safely.',
+                  );
+                  return;
+                }
                 continue;
               }
 
@@ -1327,6 +1338,15 @@ abstract class ExchangeViewModelBase extends WalletChangeListenerViewModel with 
                   'refundAddress': depositAddress,
                 },
               );
+              if (providerOrderCreated || blocksTradeCreationFallback(e)) {
+                tradeState = TradeIsCreatedFailure(
+                  title: S.current.trade_not_created,
+                  error: e is TradeCreationFailure
+                      ? e.userMessage
+                      : 'The provider order was created but cannot be used safely.',
+                );
+                return;
+              }
               continue;
             }
           }

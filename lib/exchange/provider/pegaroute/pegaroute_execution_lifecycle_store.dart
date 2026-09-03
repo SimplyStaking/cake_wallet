@@ -1,7 +1,5 @@
 import 'package:cake_wallet/exchange/provider/pegaroute/pegaroute_execution_binding.dart';
-import 'package:cake_wallet/exchange/provider/pegaroute/pegaroute_execution_binding.dart';
 import 'package:cake_wallet/exchange/trade.dart';
-import 'package:cake_wallet/exchange/trade_execution.dart';
 import 'package:cake_wallet/exchange/trade_execution_dispatcher.dart';
 import 'package:cake_wallet/exchange/trade_execution_lifecycle.dart';
 import 'package:cw_core/db/sqlite.dart';
@@ -20,13 +18,14 @@ final class PegarouteExecutionLifecycleStore implements TradeExecutionLifecycleH
   Future<void> beforeBroadcast({
     required ValidatedTradeExecution execution,
     required String executionHash,
+    required int tradeInternalId,
   }) async {
     await _transition(
       execution: execution,
       executionHash: executionHash,
+      tradeInternalId: tradeInternalId,
       transition: (current, at) {
-        final prepared =
-            current ??
+        final prepared = current ??
             TradeExecutionLifecycle(
               executionHash: executionHash,
               state: TradeExecutionLifecycleState.prepared,
@@ -45,10 +44,12 @@ final class PegarouteExecutionLifecycleStore implements TradeExecutionLifecycleH
   Future<void> onBroadcasted({
     required ValidatedTradeExecution execution,
     required String executionHash,
+    required int tradeInternalId,
   }) async {
     await _transition(
       execution: execution,
       executionHash: executionHash,
+      tradeInternalId: tradeInternalId,
       transition: (current, at) => _advance(
         current: current,
         executionHash: executionHash,
@@ -61,10 +62,12 @@ final class PegarouteExecutionLifecycleStore implements TradeExecutionLifecycleH
   Future<void> onBroadcastUnknown({
     required ValidatedTradeExecution execution,
     required String executionHash,
+    required int tradeInternalId,
   }) async {
     await _transition(
       execution: execution,
       executionHash: executionHash,
+      tradeInternalId: tradeInternalId,
       transition: (current, at) => _advance(
         current: current,
         executionHash: executionHash,
@@ -76,10 +79,12 @@ final class PegarouteExecutionLifecycleStore implements TradeExecutionLifecycleH
   Future<void> markCallbackAttempted({
     required ValidatedTradeExecution execution,
     required String executionHash,
+    required int tradeInternalId,
   }) async {
     await _transition(
       execution: execution,
       executionHash: executionHash,
+      tradeInternalId: tradeInternalId,
       transition: (current, at) => _advance(
         current: current,
         executionHash: executionHash,
@@ -91,10 +96,12 @@ final class PegarouteExecutionLifecycleStore implements TradeExecutionLifecycleH
   Future<void> markCallbackAccepted({
     required ValidatedTradeExecution execution,
     required String executionHash,
+    required int tradeInternalId,
   }) async {
     await _transition(
       execution: execution,
       executionHash: executionHash,
+      tradeInternalId: tradeInternalId,
       transition: (current, at) => _advance(
         current: current,
         executionHash: executionHash,
@@ -117,9 +124,13 @@ final class PegarouteExecutionLifecycleStore implements TradeExecutionLifecycleH
   Future<void> _transition({
     required ValidatedTradeExecution execution,
     required String executionHash,
+    required int tradeInternalId,
     required TradeExecutionLifecycle Function(TradeExecutionLifecycle? current, String at)
-    transition,
+        transition,
   }) async {
+    if (tradeInternalId <= 0) {
+      throw const PegarouteBindingException('Pegaroute lifecycle trade is not persisted');
+    }
     final database = db;
     if (database == null)
       throw const PegarouteBindingException('Pegaroute database is unavailable');
@@ -127,8 +138,8 @@ final class PegarouteExecutionLifecycleStore implements TradeExecutionLifecycleH
     await database.transaction((txn) async {
       final rows = await txn.query(
         Trade.tableName,
-        where: 'id = ? AND providerRaw = ?',
-        whereArgs: [execution.execution.binding.tradeId, 17],
+        where: '${Trade.selfIdColumn} = ? AND id = ? AND providerRaw = ?',
+        whereArgs: [tradeInternalId, execution.execution.binding.tradeId, 17],
         limit: 1,
       );
       if (rows.isEmpty) throw const PegarouteBindingException('bound Pegaroute trade is missing');
@@ -141,28 +152,24 @@ final class PegarouteExecutionLifecycleStore implements TradeExecutionLifecycleH
       final oldJson = row.executionLifecycleJson;
       final current = oldJson == null ? null : TradeExecutionLifecycle.fromJsonString(oldJson);
       final next = transition(current, at);
+      final expected = row.toSqliteMap()..remove(Trade.selfIdColumn);
+      final predicates = <String>['${Trade.selfIdColumn} = ?'];
+      final predicateArgs = <Object?>[tradeInternalId];
+      for (final entry in expected.entries) {
+        if (entry.value == null) {
+          predicates.add('${entry.key} IS NULL');
+        } else {
+          predicates.add('${entry.key} = ?');
+          predicateArgs.add(entry.value);
+        }
+      }
       final changed = await txn.update(
         Trade.tableName,
         {'executionLifecycleJson': next.encode()},
-        where: _casWhere(oldJson),
-        whereArgs: _casArgs(row, oldJson),
+        where: predicates.join(' AND '),
+        whereArgs: predicateArgs,
       );
       if (changed != 1) throw const PegarouteBindingException('lifecycle row changed concurrently');
     });
   }
-
-  String _casWhere(String? oldJson) {
-    final lifecycle = oldJson == null
-        ? 'executionLifecycleJson IS NULL'
-        : 'executionLifecycleJson = ?';
-    return '${Trade.selfIdColumn} = ? AND id = ? AND providerRaw = ? AND executionJson = ? AND $lifecycle';
-  }
-
-  List<Object?> _casArgs(Trade row, String? oldJson) => [
-    row.internalId,
-    row.id,
-    row.providerRaw,
-    row.executionJson,
-    if (oldJson != null) oldJson,
-  ];
 }
