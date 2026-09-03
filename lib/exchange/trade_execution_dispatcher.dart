@@ -11,16 +11,28 @@ import 'provider/pegaroute/pegaroute_execution_binding.dart';
 abstract interface class TradeExecutionHandler {
   bool supports(TradeExecution execution);
   bool supportsExternalSend(TradeExecution execution);
-  void validateForExecution({
-    required ValidatedTradeExecution execution,
-    required DateTime now,
-  });
-  Future<GuardedPendingTransaction?> prepare({
-    required TradeExecutionGuard guard,
-  });
+  void validateForExecution({required ValidatedTradeExecution execution, required DateTime now});
+  Future<GuardedPendingTransaction?> prepare({required TradeExecutionGuard guard});
   Future<void> onCommitted({
     required ValidatedTradeExecution execution,
     required CommittedTradeExecution receipt,
+  });
+}
+
+abstract interface class TradeExecutionLifecycleHandler {
+  Future<void> beforeBroadcast({
+    required ValidatedTradeExecution execution,
+    required String executionHash,
+  });
+
+  Future<void> onBroadcasted({
+    required ValidatedTradeExecution execution,
+    required String executionHash,
+  });
+
+  Future<void> onBroadcastUnknown({
+    required ValidatedTradeExecution execution,
+    required String executionHash,
   });
 }
 
@@ -32,7 +44,8 @@ final class TradeExecutionGuard {
   ValidatedTradeExecution validate() => _validate();
 
   Future<T> withProviderIo<T>(
-      FutureOr<T> Function(ValidatedTradeExecution execution) operation) async {
+    FutureOr<T> Function(ValidatedTradeExecution execution) operation,
+  ) async {
     final execution = _validate();
     try {
       return await operation(execution);
@@ -43,7 +56,7 @@ final class TradeExecutionGuard {
 
   Future<GuardedPendingTransaction?> withWalletConstruction(
     FutureOr<PendingTransaction?> Function(WalletBase wallet, ValidatedTradeExecution execution)
-        operation,
+    operation,
   ) async {
     // Concrete handler activation must document wallet-internal async/ABA guarantees.
     final execution = _validate();
@@ -102,10 +115,7 @@ class RegistryTradeExecutionDispatcher implements TradeExecutionDispatcher {
 
   final List<TradeExecutionHandler> handlers;
 
-  List<TradeExecutionHandler> _matchingHandlers(
-    TradeExecution execution, {
-    bool external = false,
-  }) {
+  List<TradeExecutionHandler> _matchingHandlers(TradeExecution execution, {bool external = false}) {
     return handlers
         .where((handler) => handler.supports(execution))
         .where((handler) => !external || handler.supportsExternalSend(execution))
@@ -149,22 +159,16 @@ class RegistryTradeExecutionDispatcher implements TradeExecutionDispatcher {
       return Future.value(null);
     }
     final validator = const PegarouteExecutionBindingValidator();
-    final guard = TradeExecutionGuard._(
-      () {
-        final current = validator.validatePersisted(
-          trade: trade,
-          wallet: wallet,
-          expectedRawExecutionJson: validated.rawExecutionJson,
-        );
-        handler.validateForExecution(execution: current, now: validator.now);
-        return current;
-      },
-      wallet,
-    );
-    return _finishPrepare(
-      handler: handler,
-      guard: guard,
-    );
+    final guard = TradeExecutionGuard._(() {
+      final current = validator.validatePersisted(
+        trade: trade,
+        wallet: wallet,
+        expectedRawExecutionJson: validated.rawExecutionJson,
+      );
+      handler.validateForExecution(execution: current, now: validator.now);
+      return current;
+    }, wallet);
+    return _finishPrepare(handler: handler, guard: guard);
   }
 
   Future<PendingTransaction?> _finishPrepare({
@@ -205,6 +209,7 @@ class _BoundPendingTransaction with PendingTransaction {
   final TradeExecutionHandler handler;
   final TradeExecutionGuard guard;
   final ValidatedTradeExecution execution;
+  bool _commitStarted = false;
 
   ValidatedTradeExecution _validate() => guard.validate();
 
@@ -255,10 +260,24 @@ class _BoundPendingTransaction with PendingTransaction {
 
   @override
   Future<void> commit() async {
-    _validate();
+    if (_commitStarted) {
+      throw const PegarouteBindingException(
+        'Pegaroute broadcast is already committed or ambiguous',
+      );
+    }
+    _commitStarted = true;
+    final before = _validate();
+    final executionHash = inner.evmTxHashFromRawHex ?? inner.id;
+    final lifecycle = handler is TradeExecutionLifecycleHandler
+        ? handler as TradeExecutionLifecycleHandler
+        : null;
+    await lifecycle?.beforeBroadcast(execution: before, executionHash: executionHash);
     try {
       await inner.commit();
     } catch (_) {
+      try {
+        await lifecycle?.onBroadcastUnknown(execution: _validate(), executionHash: executionHash);
+      } catch (_) {}
       try {
         _validate();
       } catch (_) {
@@ -272,6 +291,11 @@ class _BoundPendingTransaction with PendingTransaction {
     } on Object {
       // The broadcast succeeded, but a changed context must suppress follow-up I/O.
       return;
+    }
+    try {
+      await lifecycle?.onBroadcasted(execution: current, executionHash: executionHash);
+    } on Object {
+      // The network broadcast succeeded; lifecycle bookkeeping is best effort.
     }
     try {
       await handler.onCommitted(
