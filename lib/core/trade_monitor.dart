@@ -224,7 +224,9 @@ class TradeMonitor {
 
   bool _isFinalStateForTrade(Trade trade) {
     if (trade.provider == ExchangeProviderDescription.pegaroute) {
-      return trade.state == TradeState.success || trade.state == TradeState.refunded;
+      return trade.state == TradeState.success ||
+          trade.state == TradeState.failed ||
+          trade.state == TradeState.refunded;
     }
     return _isFinalState(trade.state);
   }

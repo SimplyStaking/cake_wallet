@@ -233,7 +233,12 @@ class SwapTransactionDetails extends StatelessWidget {
                           keyValue: "provider",
                           onTap: () => Clipboard.setData(
                               ClipboardData(text: exchangeTradeViewModel.trade.id)),
-                          label: exchangeTradeViewModel.trade.provider.title,
+                          label: exchangeTradeViewModel.trade.provider ==
+                                  ExchangeProviderDescription.pegaroute &&
+                              exchangeTradeViewModel.trade.providerName != null &&
+                              exchangeTradeViewModel.trade.providerName!.isNotEmpty
+                              ? '${exchangeTradeViewModel.trade.provider.title} via ${exchangeTradeViewModel.trade.providerName}'
+                              : exchangeTradeViewModel.trade.provider.title,
                           iconPath: exchangeTradeViewModel.trade.provider.image,
                           trailingIconPath: "assets/new-ui/copy.svg",
                           trailingText: exchangeTradeViewModel.trade.id.toString().length > 18

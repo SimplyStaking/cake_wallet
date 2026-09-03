@@ -200,8 +200,12 @@ abstract class TradeDetailsViewModelBase with Store {
           value: destinationMemo));
     }
 
-    items.add(StandartListItem(
-        title: S.current.trade_details_provider, value: trade.provider.toString()));
+    final providerValue = trade.provider == ExchangeProviderDescription.pegaroute &&
+            trade.providerName != null &&
+            trade.providerName!.isNotEmpty
+        ? '${trade.provider.title} via ${trade.providerName}'
+        : trade.provider.toString();
+    items.add(StandartListItem(title: S.current.trade_details_provider, value: providerValue));
 
     final trackUrl = TradeDetailsViewModelBase.getTrackUrl(trade.provider, trade);
     if (trackUrl != null) {
