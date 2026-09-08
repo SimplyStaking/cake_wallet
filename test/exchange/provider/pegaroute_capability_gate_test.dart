@@ -28,13 +28,14 @@ void main() {
     );
   });
 
-  test('never reports availability without registered handlers', () {
+  test('reports quote availability separately from execution availability', () {
     final provider = PegarouteExchangeProvider(
       configuration: const PegarouteConfiguration(baseUrl: 'https://example.test'),
       capabilityGate: const PegarouteCapabilityGate(
         supportedExecutionKeys: {'evm/native-transfer'},
       ),
     );
-    expect(provider.isAvailable, isFalse);
+    expect(provider.isAvailable, isTrue);
+    expect(provider.isExecutionAvailable, isFalse);
   });
 }

@@ -7,8 +7,10 @@ import 'package:cake_wallet/exchange/provider/pegaroute/pegaroute_configuration.
 import 'package:cake_wallet/exchange/provider/pegaroute/pegaroute_execution_binding.dart';
 import 'package:cake_wallet/exchange/provider/pegaroute_exchange_provider.dart';
 import 'package:cake_wallet/exchange/exchange_provider_description.dart';
+import 'package:cake_wallet/exchange/limits.dart';
 import 'package:cake_wallet/exchange/trade.dart';
 import 'package:cake_wallet/exchange/trade_execution.dart';
+import 'package:cake_wallet/exchange/trade_request.dart';
 import 'package:cw_core/crypto_currency.dart';
 import 'package:http/http.dart' as very_insecure_http_do_not_use;
 
@@ -531,30 +533,209 @@ void main() {
     );
   });
 
-  test('keeps configured but handler-less Pegaroute out of provider I/O', () async {
-    var calls = 0;
+  test('enables priority native quote discovery without enabling execution', () async {
+    final requests = <Uri>[];
     final api = PegarouteApiClient(
       configuration: const PegarouteConfiguration(baseUrl: 'https://example.test'),
       get: (uri, headers) async {
-        calls++;
-        return very_insecure_http_do_not_use.Response('{}', 500);
+        requests.add(uri);
+        return very_insecure_http_do_not_use.Response(_fixture('quote.json'), 200);
       },
     );
     final provider = PegarouteExchangeProvider(apiClient: api);
+    expect(provider.isAvailable, isTrue);
+    expect(await provider.checkIsAvailable(), isTrue);
+    expect(provider.isExecutionAvailable, isFalse);
+    expect(provider.isEnabled, isTrue);
+    expect(provider.supportsMemoOrDestinationTag, isFalse);
+    expect(
+      await provider.fetchLimits(
+        from: CryptoCurrency.eth,
+        to: CryptoCurrency.xmr,
+        isFixedRateMode: false,
+      ),
+      isA<Limits>()
+          .having((limits) => limits.min, 'minimum', 0.01)
+          .having((limits) => limits.max, 'maximum', isNull),
+    );
+    expect(
+      await provider.fetchRate(
+        from: CryptoCurrency.eth,
+        to: CryptoCurrency.xmr,
+        amount: 1,
+        isFixedRateMode: false,
+        isReceiveAmount: false,
+      ),
+      0.99,
+    );
+    expect(requests, hasLength(2));
+    expect(requests.last.path, '/quote');
+    expect(requests.last.queryParameters, {
+      'fromChain': 'ETH',
+      'fromToken': 'ETH',
+      'toChain': 'XMR',
+      'toToken': 'XMR',
+      'amount': '1',
+    });
+  });
+
+  test('keeps quote discovery disabled without a configured proxy', () async {
+    final provider = PegarouteExchangeProvider(
+      configuration: const PegarouteConfiguration(baseUrl: ''),
+    );
+
     expect(provider.isAvailable, isFalse);
     expect(provider.isEnabled, isFalse);
-    expect(provider.supportsMemoOrDestinationTag, isFalse);
+    expect(provider.isExecutionAvailable, isFalse);
+    expect(await provider.checkIsAvailable(), isFalse);
+    expect(
+      await provider.fetchRate(
+        from: CryptoCurrency.eth,
+        to: CryptoCurrency.xmr,
+        amount: 1,
+        isFixedRateMode: false,
+        isReceiveAmount: false,
+      ),
+      0,
+    );
+  });
+
+  test('quotes native BTC and XMR sources through GET only', () async {
+    final requests = <Uri>[];
+    var postCalls = 0;
+    final provider = PegarouteExchangeProvider(
+      apiClient: PegarouteApiClient(
+        configuration: const PegarouteConfiguration(baseUrl: 'https://example.test'),
+        get: (uri, headers) async {
+          requests.add(uri);
+          return very_insecure_http_do_not_use.Response(_fixture('quote.json'), 200);
+        },
+        post: (uri, headers, body) async {
+          postCalls++;
+          return very_insecure_http_do_not_use.Response('{}', 500);
+        },
+      ),
+    );
+
+    expect(
+      await provider.fetchRate(
+        from: CryptoCurrency.btc,
+        to: CryptoCurrency.eth,
+        amount: 0.00000001,
+        isFixedRateMode: false,
+        isReceiveAmount: false,
+      ),
+      greaterThan(0),
+    );
+    expect(
+      await provider.fetchRate(
+        from: CryptoCurrency.xmr,
+        to: CryptoCurrency.btc,
+        amount: 1,
+        isFixedRateMode: false,
+        isReceiveAmount: false,
+      ),
+      0.99,
+    );
+    expect(requests.map((request) => request.queryParameters), [
+      {
+        'fromChain': 'BTC',
+        'fromToken': 'BTC',
+        'toChain': 'ETH',
+        'toToken': 'ETH',
+        'amount': '0.00000001',
+      },
+      {
+        'fromChain': 'XMR',
+        'fromToken': 'XMR',
+        'toChain': 'BTC',
+        'toToken': 'BTC',
+        'amount': '1',
+      },
+    ]);
+    expect(postCalls, 0);
+  });
+
+  test('keeps swap creation closed before POST', () async {
+    var postCalls = 0;
+    final provider = PegarouteExchangeProvider(
+      apiClient: PegarouteApiClient(
+        configuration: const PegarouteConfiguration(baseUrl: 'https://example.test'),
+        post: (uri, headers, body) async {
+          postCalls++;
+          return very_insecure_http_do_not_use.Response('{}', 500);
+        },
+      ),
+    );
+
     await expectLater(
-      provider.fetchRate(
+      provider.createTrade(
+        request: TradeRequest(
+          fromCurrency: CryptoCurrency.btc,
+          toCurrency: CryptoCurrency.eth,
+          fromAmount: '1',
+          toAmount: '1',
+          senderAddress: 'sender',
+          refundAddress: 'refund',
+          toAddress: 'destination',
+        ),
+        isFixedRateMode: false,
+        isSendAll: false,
+      ),
+      throwsA(isA<PegarouteUnavailableException>()),
+    );
+    expect(postCalls, 0);
+  });
+
+  test('keeps non-priority, private, and incompatible XMR routes out of quotes', () async {
+    var calls = 0;
+    final quote = json.decode(_fixture('quote.json')) as Map<String, dynamic>;
+    (quote['routes'] as List).single['memo'] = 'required-memo';
+    final provider = PegarouteExchangeProvider(
+      apiClient: PegarouteApiClient(
+        configuration: const PegarouteConfiguration(baseUrl: 'https://example.test'),
+        get: (uri, headers) async {
+          calls++;
+          return very_insecure_http_do_not_use.Response(json.encode(quote), 200);
+        },
+      ),
+    );
+
+    expect(
+      await provider.fetchRate(
+        from: CryptoCurrency.bch,
+        to: CryptoCurrency.xmr,
+        amount: 1,
+        isFixedRateMode: false,
+        isReceiveAmount: false,
+      ),
+      0,
+    );
+    expect(calls, 0);
+    expect(
+      await provider.fetchRate(
+        from: CryptoCurrency.xmr,
+        to: CryptoCurrency.eth,
+        amount: 1,
+        isFixedRateMode: false,
+        isReceiveAmount: false,
+      ),
+      0,
+    );
+    expect(calls, 1);
+    (quote['routes'] as List).single['memo'] = null;
+    (quote['routes'] as List).single['private'] = true;
+    expect(
+      await provider.fetchRate(
         from: CryptoCurrency.eth,
         to: CryptoCurrency.btc,
         amount: 1,
         isFixedRateMode: false,
         isReceiveAmount: false,
       ),
-      throwsA(isA<PegarouteUnavailableException>()),
+      0,
     );
-    expect(calls, 0);
+    expect(calls, 2);
   });
 
   test('accepts empty warning providers but keeps warning fields typed', () {

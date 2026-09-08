@@ -80,12 +80,15 @@ class PegarouteExchangeProvider extends ExchangeProvider {
   @override
   String get title => 'Pegaroute';
 
-  // No executor is registered until a later phase.
+  // Quote discovery is available for the priority native sources. Swap
+  // creation and execution remain closed until concrete handlers are ready.
   @override
-  bool get isAvailable => _apiClient.configuration.isValid && _capabilityGate.hasExecutionHandlers;
+  bool get isAvailable => _apiClient.configuration.isValid;
+
+  bool get isExecutionAvailable => isAvailable && _capabilityGate.hasExecutionHandlers;
 
   @override
-  bool get isEnabled => false;
+  bool get isEnabled => isAvailable;
 
   @override
   bool get supportsFixedRate => false;
@@ -100,7 +103,7 @@ class PegarouteExchangeProvider extends ExchangeProvider {
   ExchangeProviderDescription get description => ExchangeProviderDescription.pegaroute;
 
   @override
-  Future<bool> checkIsAvailable() async => false;
+  Future<bool> checkIsAvailable() async => isAvailable;
 
   @override
   Future<Limits?> fetchLimits({
@@ -108,8 +111,32 @@ class PegarouteExchangeProvider extends ExchangeProvider {
     required CryptoCurrency to,
     required bool isFixedRateMode,
   }) async {
-    _ensureUnavailable(from, to);
-    return null;
+    if (isFixedRateMode) return null;
+    final assets = _priorityQuoteAssets(from, to);
+    if (assets == null) return null;
+    try {
+      final quote = await _apiClient.quote(
+        PegarouteQuoteRequest(
+          fromChain: assets.first.chain,
+          fromToken: assets.first.token,
+          toChain: assets.last.chain,
+          toToken: assets.last.token,
+          amount: '1',
+        ),
+      );
+      final minimums = quote.response.routes
+          .where((route) => _isQuoteRouteEligible(route, assets.first.chain))
+          .map((route) => double.tryParse(route.minAmount ?? ''))
+          .whereType<double>()
+          .where((amount) => amount.isFinite && amount >= 0)
+          .toList(growable: false);
+      return Limits(
+        min: minimums.isEmpty ? 0 : minimums.reduce((a, b) => a < b ? a : b),
+        max: null,
+      );
+    } catch (_) {
+      return null;
+    }
   }
 
   @override
@@ -120,8 +147,29 @@ class PegarouteExchangeProvider extends ExchangeProvider {
     required bool isFixedRateMode,
     required bool isReceiveAmount,
   }) async {
-    _ensureUnavailable(from, to);
-    return 0;
+    if (amount <= 0 || !amount.isFinite || isFixedRateMode || isReceiveAmount) return 0;
+    final assets = _priorityQuoteAssets(from, to);
+    if (assets == null) return 0;
+    try {
+      final quote = await _apiClient.quote(
+        PegarouteQuoteRequest(
+          fromChain: assets.first.chain,
+          fromToken: assets.first.token,
+          toChain: assets.last.chain,
+          toToken: assets.last.token,
+          amount: _decimalAmount(amount),
+        ),
+      );
+      var bestOutput = 0.0;
+      for (final route in quote.response.routes) {
+        if (!_isQuoteRouteEligible(route, assets.first.chain)) continue;
+        final output = double.tryParse(route.expectedOutput);
+        if (output != null && output.isFinite && output > bestOutput) bestOutput = output;
+      }
+      return bestOutput == 0 ? 0 : bestOutput / amount;
+    } catch (_) {
+      return 0;
+    }
   }
 
   @override
@@ -378,6 +426,30 @@ class PegarouteExchangeProvider extends ExchangeProvider {
     throw const PegarouteUnavailableException();
   }
 
+  List<PegarouteAssetId>? _priorityQuoteAssets(CryptoCurrency from, CryptoCurrency to) {
+    try {
+      final source = _currencyMapper.map(from);
+      final destination = _currencyMapper.map(to);
+      if (!_priorityQuoteChains.contains(source.chain) || source.token != source.nativeToken) {
+        return null;
+      }
+      return [source, destination];
+    } on PegarouteCurrencyException {
+      return null;
+    }
+  }
+
+  bool _isQuoteRouteEligible(PegarouteRoute route, String sourceChain) {
+    final private = route.privateValue?.value;
+    if (private != null && private != false) return false;
+    return sourceChain != 'XMR' || route.memo == null;
+  }
+
+  String _decimalAmount(double amount) {
+    final fixed = amount.toStringAsFixed(18);
+    return fixed.replaceFirst(RegExp(r'\.?0+$'), '');
+  }
+
   Future<CryptoCurrency?> _parseCurrency(String? chain, String? token) async {
     if (_currencyLookup != null) return _currencyLookup(chain, token);
     if (token == null || token.isEmpty) return null;
@@ -512,3 +584,5 @@ class PegarouteExchangeProvider extends ExchangeProvider {
     }
   }
 }
+
+const _priorityQuoteChains = {'BTC', 'ETH', 'XMR'};
