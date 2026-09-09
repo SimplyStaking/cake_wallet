@@ -234,7 +234,9 @@ class _Wallet
   dynamic noSuchMethod(Invocation invocation) => throw UnimplementedError();
 }
 
-Future<PegarouteValidatedQuote> _quote(PegarouteApiClient client) => client.quote(
+Future<PegarouteValidatedQuote> _quote(PegarouteApiClient client,
+        {PegaroutePrivateValue? privateValue}) =>
+    client.quote(
       PegarouteQuoteRequest(
         fromChain: 'ETH',
         fromToken: 'ETH',
@@ -244,6 +246,7 @@ Future<PegarouteValidatedQuote> _quote(PegarouteApiClient client) => client.quot
         destinationAddress: 'bc1qfixture',
         senderAddress: '0x0000000000000000000000000000000000000002',
         refundAddress: '0x0000000000000000000000000000000000000003',
+        privateValue: privateValue,
       ),
     );
 
@@ -667,6 +670,8 @@ void main() {
       ),
       post: (uri, headers, body) async {
         calls++;
+        expect(uri.queryParameters, isEmpty);
+        expect(json.decode(body).containsKey('private'), isFalse);
         sentBody = body;
         return very_insecure_http_do_not_use.Response(json.encode(responseValue), 202);
       },
@@ -771,6 +776,61 @@ void main() {
     );
     await expectLater(staleClient.swap(preflight()), throwsA(isA<PegarouteBindingException>()));
     expect(staleCalls, 0);
+  });
+
+  test('rejects every private route and private-to-public downgrade before POST', () async {
+    final value = json.decode(
+      File('test/exchange/fixtures/pegaroute/quote_private_zk.json').readAsStringSync(),
+    ) as Map<String, dynamic>;
+    var posts = 0;
+    final client = PegarouteApiClient(
+      configuration: const PegarouteConfiguration(baseUrl: 'https://example.test'),
+      get: (uri, headers) async => very_insecure_http_do_not_use.Response(json.encode(value), 200),
+      post: (uri, headers, body) async {
+        posts++;
+        return very_insecure_http_do_not_use.Response('{}', 500);
+      },
+      clock: () => DateTime.utc(2026, 8, 31),
+    );
+    const validator = PegarouteExecutionBindingValidator();
+    for (final mode in [true, 'zk', 'future-mode']) {
+      for (final echoed in [mode, false, null]) {
+        final route = (value['routes'] as List).single as Map<String, dynamic>;
+        if (echoed == null) {
+          route.remove('private');
+        } else {
+          route['private'] = echoed;
+        }
+        final quote = await _quote(client, privateValue: PegaroutePrivateValue(mode));
+        await expectLater(
+          Future.sync(() => client.swap(validator.preflightSwap(
+                trade: _swapTrade(),
+                wallet: _Wallet(),
+                quote: quote,
+                route: quote.response.routes.single,
+                request: _request(),
+                at: DateTime.utc(2026, 8, 31),
+              ))),
+          throwsA(isA<PegarouteBindingException>()),
+        );
+      }
+    }
+    expect(posts, 0);
+    for (final mode in [null, false]) {
+      final quote = await _quote(client,
+          privateValue: mode == null ? null : PegaroutePrivateValue(mode));
+      expect(
+        () => validator.preflightSwap(
+          trade: _swapTrade(),
+          wallet: _Wallet(),
+          quote: quote,
+          route: quote.response.routes.single,
+          request: _request(),
+          at: DateTime.utc(2026, 8, 31),
+        ),
+        returnsNormally,
+      );
+    }
   });
 
   test('binds quote, preflight, and result to one client and origin', () async {

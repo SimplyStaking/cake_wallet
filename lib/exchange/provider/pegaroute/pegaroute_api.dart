@@ -134,7 +134,20 @@ final class PegaroutePrivateValue {
 
   final Object value;
 
+  // Only an omitted value or boolean false is public. In particular, a
+  // provider-declared string must never be interpreted by truthiness.
+  bool get isEnabled => value != false;
+
   Object toJson() => value;
+
+  String toQueryValue() {
+    // The API normalizes these query spellings to booleans. Reject string
+    // modes that cannot survive transport with their identity intact.
+    if (value == 'true' || value == 'false') {
+      throw const PegarouteCodecException('private string mode collides with a query boolean');
+    }
+    return value.toString();
+  }
 }
 
 final class PegarouteQuoteRequest {
@@ -147,6 +160,7 @@ final class PegarouteQuoteRequest {
     String? destinationAddress,
     String? senderAddress,
     String? refundAddress,
+    this.privateValue,
   })  : fromChain = _requiredRequestId(fromChain, 'fromChain'),
         fromToken = _requiredRequestId(fromToken, 'fromToken'),
         toChain = _requiredRequestId(toChain, 'toChain'),
@@ -168,6 +182,7 @@ final class PegarouteQuoteRequest {
   final String? destinationAddress;
   final String? senderAddress;
   final String? refundAddress;
+  final PegaroutePrivateValue? privateValue;
 
   factory PegarouteQuoteRequest.fromIntent({
     required String fromChain,
@@ -176,6 +191,7 @@ final class PegarouteQuoteRequest {
     required String toToken,
     required String amount,
     required PegarouteAddressIntent intent,
+    PegaroutePrivateValue? privateValue,
   }) =>
       PegarouteQuoteRequest(
         fromChain: fromChain,
@@ -186,18 +202,22 @@ final class PegarouteQuoteRequest {
         destinationAddress: intent.destinationAddress,
         senderAddress: intent.senderAddress,
         refundAddress: intent.refundAddress,
+        privateValue: privateValue,
       );
 
-  Map<String, String> toQuery() => _requestQuery(
-        fromChain: fromChain,
-        fromToken: fromToken,
-        toChain: toChain,
-        toToken: toToken,
-        amount: amount,
-        destinationAddress: destinationAddress,
-        senderAddress: senderAddress,
-        refundAddress: refundAddress,
-      );
+  Map<String, String> toQuery() => {
+        ..._requestQuery(
+          fromChain: fromChain,
+          fromToken: fromToken,
+          toChain: toChain,
+          toToken: toToken,
+          amount: amount,
+          destinationAddress: destinationAddress,
+          senderAddress: senderAddress,
+          refundAddress: refundAddress,
+        ),
+        if (privateValue != null) 'private': privateValue!.toQueryValue(),
+      };
 }
 
 class PegarouteAddressIntent {
@@ -1648,7 +1668,11 @@ class PegarouteApiClient {
 
   Future<PegarouteValidatedQuote> quote(PegarouteQuoteRequest request) async {
     final query = request.toQuery();
-    final requestJson = json.encode(query);
+    final requestJson = json.encode({
+      ...query,
+      // Bind the canonical typed intent, not its query-string representation.
+      'private': request.privateValue?.value ?? false,
+    });
     final origin = _origin;
     final response = await _get(origin.replace(path: '/quote', queryParameters: query), _headers);
     final quote = _decode(response, PegarouteQuoteResponse.fromJson, expectedStatus: 200);
@@ -1681,6 +1705,8 @@ class PegarouteApiClient {
 
   Future<PegarouteValidatedSwapResult> swap(PegarouteValidatedSwapPreflight preflight) async {
     final current = (_clock ?? DateTime.now)().toUtc();
+    // Only public intent can acquire a preflight. Canonical main accepts
+    // private in the query only; never add it to the JSON body.
     final uri = _uri('/swap');
     final headers = {..._headers, 'Content-Type': 'application/json'};
     // This is deliberately the last synchronous operation before the first

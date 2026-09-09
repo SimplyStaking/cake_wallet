@@ -201,7 +201,7 @@ final class PegarouteExecutionBindingValidator {
     if (route.provider.trim().isEmpty ||
         route.providerType == null ||
         route.providerType!.trim().isEmpty ||
-        (route.privateValue != null && route.privateValue!.value != false) ||
+        (route.privateValue?.isEnabled ?? false) ||
         !quote.routes.any((candidate) => _sameRoute(candidate, route))) {
       throw const PegarouteBindingException('selected route is not from the quote');
     }
@@ -589,7 +589,10 @@ final class PegarouteExecutionBindingValidator {
         };
       }
 
-      return const DeepCollectionEquality().equals(base(quote), base(swap)) &&
+      // Swap requests are public-only. An enabled quote intent must not
+      // acquire a preflight even if a response incorrectly echoes public.
+      return _samePrivate(quote['private'], swap['private']) &&
+          const DeepCollectionEquality().equals(base(quote), base(swap)) &&
           base(quote).length == base(swap).length;
     } catch (_) {
       return false;

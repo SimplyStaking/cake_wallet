@@ -440,8 +440,7 @@ class PegarouteExchangeProvider extends ExchangeProvider {
   }
 
   bool _isQuoteRouteEligible(PegarouteRoute route, String sourceChain) {
-    final private = route.privateValue?.value;
-    if (private != null && private != false) return false;
+    if (route.privateValue?.isEnabled ?? false) return false;
     return sourceChain != 'XMR' || route.memo == null;
   }
 

@@ -328,7 +328,7 @@ void main() {
     expect(swap.toJson()['refundAddress'], quote.toQuery()['refundAddress']);
   });
 
-  test('preserves private mode as a JSON boolean for swaps', () {
+  test('public-only swaps omit the retired private JSON body field', () {
     final request = PegarouteSwapRequest(
       fromChain: 'ETH',
       fromToken: 'ETH',
@@ -339,6 +339,65 @@ void main() {
       senderAddress: 'sender',
     );
     expect(request.toJson().containsKey('private'), isFalse);
+  });
+
+  test('decodes canonical private modes and preserves the warning audit trail', () {
+    final value = json.decode(_fixture('quote_private_zk.json')) as Map<String, dynamic>;
+    final quote = PegarouteQuoteResponse.fromJson(value);
+    expect(quote.routes.single.privateValue!.value, 'zk');
+    expect(quote.warnings.map((warning) => warning.provider), ['thorchain', 'maya', 'openocean']);
+    final route = (value['routes'] as List).single as Map<String, dynamic>;
+    for (final mode in [false, true, 'zk', 'future-mode', 'false', 'x' * 64]) {
+      route['private'] = mode;
+      final decoded = PegarouteQuoteResponse.fromJson(value).routes.single.privateValue!;
+      expect(decoded.toJson(), mode);
+      expect(decoded.isEnabled, mode != false);
+    }
+    for (final mode in [null, '', '   ', 'x' * 65, 0, [], {}]) {
+      route['private'] = mode;
+      expect(() => PegarouteQuoteResponse.fromJson(value), throwsA(isA<PegarouteCodecException>()));
+    }
+  });
+
+  test('binds typed private intent independently of the GET query encoding', () async {
+    final uris = <Uri>[];
+    final client = PegarouteApiClient(
+      configuration: const PegarouteConfiguration(baseUrl: 'https://example.test'),
+      get: (uri, headers) async {
+        uris.add(uri);
+        expect(headers, isEmpty);
+        return very_insecure_http_do_not_use.Response(_fixture('quote_private_zk.json'), 200);
+      },
+    );
+    for (final mode in [null, false, true, 'zk', 'future-mode']) {
+      final request = PegarouteQuoteRequest(
+        fromChain: 'ETH',
+        fromToken: 'ETH',
+        toChain: 'BTC',
+        toToken: 'BTC',
+        amount: '1',
+        privateValue: mode == null ? null : PegaroutePrivateValue(mode),
+      );
+      final quote = await client.quote(request);
+      expect(uris.last.queryParameters['private'], mode?.toString());
+      expect(json.decode(quote.requestJson)['private'], mode ?? false);
+      expect(uris.last.queryParameters.containsKey('integrationId'), isFalse);
+    }
+    final count = uris.length;
+    for (final mode in ['true', 'false']) {
+      await expectLater(
+        client.quote(PegarouteQuoteRequest(
+          fromChain: 'ETH',
+          fromToken: 'ETH',
+          toChain: 'BTC',
+          toToken: 'BTC',
+          amount: '1',
+          privateValue: PegaroutePrivateValue(mode),
+        )),
+        throwsA(isA<PegarouteCodecException>()),
+      );
+    }
+    expect(uris, hasLength(count));
   });
 
   test('omits a refund address equivalent to the normalized sender', () {
@@ -776,18 +835,20 @@ void main() {
     );
     expect(calls, 1);
     (quote['routes'] as List).single['memo'] = null;
-    (quote['routes'] as List).single['private'] = true;
-    expect(
-      await provider.fetchRate(
-        from: CryptoCurrency.eth,
-        to: CryptoCurrency.btc,
-        amount: 1,
-        isFixedRateMode: false,
-        isReceiveAmount: false,
-      ),
-      0,
-    );
-    expect(calls, 2);
+    for (final mode in [true, 'zk', 'future-mode', 'false']) {
+      (quote['routes'] as List).single['private'] = mode;
+      expect(
+        await provider.fetchRate(
+          from: CryptoCurrency.eth,
+          to: CryptoCurrency.btc,
+          amount: 1,
+          isFixedRateMode: false,
+          isReceiveAmount: false,
+        ),
+        0,
+      );
+    }
+    expect(calls, 5);
   });
 
   test('accepts empty warning providers but keeps warning fields typed', () {
