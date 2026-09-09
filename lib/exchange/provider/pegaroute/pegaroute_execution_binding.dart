@@ -457,7 +457,7 @@ final class PegarouteExecutionBindingValidator {
         !_sameRouteEchoFromSnapshot(
             _reviewedRoute(binding.reviewedRouteJson), response.route, null) ||
         !_sameProviderReference(binding, response) ||
-        !_sameRefund(execution.sourceChain, binding, response)) {
+        !_validRefundEvidence(execution.sourceChain, binding, response)) {
       throw const PegarouteBindingException('status context does not match execution binding');
     }
     _validateStatusLifecycle(response);
@@ -1138,13 +1138,14 @@ final class PegarouteExecutionBindingValidator {
         binding.providerReferenceId != null && observed == binding.providerReferenceId;
   }
 
-  static bool _sameRefund(
+  static bool _validRefundEvidence(
       String sourceChain, TradeExecutionBinding binding, PegarouteStatusResponse response) {
     final refund = response.refund;
     if (refund == null) return true;
-    final expectedAddress = binding.refundAddress ?? binding.senderAddress;
+    // Configured intent is bound through input.refundAddress above. The
+    // provider's observed recipient can differ (for example a VIN0 refund)
+    // and must be retained as separate evidence, never as new funding intent.
     return refund.refundAddress.trim().isNotEmpty &&
-        _sameAddress(sourceChain, refund.refundAddress, expectedAddress) &&
         (_chainIdFor(sourceChain) == null ||
             RegExp(r'^0x[0-9a-fA-F]{40}$').hasMatch(refund.refundAddress)) &&
         _canonicalChain(refund.chain) == _canonicalChain(sourceChain) &&
@@ -1161,9 +1162,8 @@ final class PegarouteExecutionBindingValidator {
 
   static void _validateStatusLifecycle(PegarouteStatusResponse response) {
     final valid = switch (response.status) {
-      'pending' =>
-        const {'pending', 'submitted', 'executing', 'confirming'}.contains(response.internalStatus),
-      'executing' => const {'executing', 'confirming'}.contains(response.internalStatus),
+      'pending' => response.internalStatus == 'pending',
+      'executing' => const {'submitted', 'executing', 'confirming'}.contains(response.internalStatus),
       'success' => response.internalStatus == 'completed',
       'fail' => const {'failed', 'refunded'}.contains(response.internalStatus),
       _ => false,

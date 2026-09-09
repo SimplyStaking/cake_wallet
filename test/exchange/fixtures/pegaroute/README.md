@@ -22,6 +22,11 @@ Authoritative sources: `src/server/openapi/schemas.ts`,
   currently consumes polling only.
 - `status_refund.json` intentionally has no observed refund details: Instaswap
   can report terminal refund without trustworthy transfer evidence.
+- Configured `input.refundAddress` stays bound to the request; an observed
+  `refund.refundAddress` can differ and is stored separately. Internal
+  `submitted` maps to external `executing` on polling, not `pending`.
+- The canonical catalog removed the wrapped-SOL mint entry. Native `SOL/SOL`
+  remains eligible; Cake rejects the removed identity before quote transport.
 
 Quote expiry is not a universal funding deadline, and quote consumption is not
 idempotent creation. These fixtures establish no recovery or broadcast guarantee.

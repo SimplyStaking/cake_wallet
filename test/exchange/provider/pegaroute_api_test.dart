@@ -11,7 +11,9 @@ import 'package:cake_wallet/exchange/limits.dart';
 import 'package:cake_wallet/exchange/trade.dart';
 import 'package:cake_wallet/exchange/trade_execution.dart';
 import 'package:cake_wallet/exchange/trade_request.dart';
+import 'package:cake_wallet/exchange/trade_refund.dart';
 import 'package:cw_core/crypto_currency.dart';
+import 'package:cw_core/spl_token.dart';
 import 'package:http/http.dart' as very_insecure_http_do_not_use;
 
 String _fixture(String name) => File('test/exchange/fixtures/pegaroute/$name').readAsStringSync();
@@ -384,7 +386,7 @@ void main() {
       expect(uris.last.queryParameters.containsKey('integrationId'), isFalse);
     }
     final count = uris.length;
-    for (final mode in ['true', 'false']) {
+    for (final mode in ['true', 'false', ' true ', ' false ', ' zk ']) {
       await expectLater(
         client.quote(PegarouteQuoteRequest(
           fromChain: 'ETH',
@@ -407,6 +409,48 @@ void main() {
       refundAddress: 'sender',
     );
     expect(intent.refundAddress, isNull);
+  });
+
+  test('does not turn a blank custom refund intent into refund-to-sender', () {
+    for (final refund in ['', '   ']) {
+      expect(
+        () => PegarouteAddressIntent(
+          destinationAddress: 'destination',
+          senderAddress: 'sender',
+          refundAddress: refund,
+        ),
+        throwsA(isA<PegarouteCodecException>()),
+      );
+    }
+  });
+
+  test('rejects the removed wrapped-SOL catalog identity before quote transport', () async {
+    var gets = 0;
+    final provider = PegarouteExchangeProvider(apiClient: PegarouteApiClient(
+      configuration: const PegarouteConfiguration(baseUrl: 'https://example.test'),
+      get: (uri, headers) async {
+        gets++;
+        return very_insecure_http_do_not_use.Response(_fixture('quote.json'), 200);
+      },
+    ));
+    final wrapped = SPLToken(
+      name: 'Wrapped SOL',
+      symbol: 'WSOL',
+      decimal: 9,
+      mint: 'WSOL',
+      mintAddress: 'So11111111111111111111111111111111111111112',
+    );
+    expect(
+      await provider.fetchRate(
+        from: CryptoCurrency.btc,
+        to: wrapped,
+        amount: 1,
+        isFixedRateMode: false,
+        isReceiveAmount: false,
+      ),
+      0,
+    );
+    expect(gets, 0);
   });
 
   test('omits sender-equivalent refunds in direct request constructors', () {
@@ -1216,7 +1260,7 @@ void main() {
     );
   });
 
-  test('rejects a refund address that differs from bound refund intent', () async {
+  test('retains observed refund recipient separately from bound configured intent', () async {
     final value = json.decode(_fixture('status_refund.json')) as Map<String, dynamic>;
     value['refund'] = {
       'status': 'completed',
@@ -1227,16 +1271,52 @@ void main() {
       'feeDescription': 'fixture',
       'refundAddress': '0x0000000000000000000000000000000000000004',
     };
+    final provider = PegarouteExchangeProvider(
+      apiClient: PegarouteApiClient(
+        configuration: const PegarouteConfiguration(baseUrl: 'https://example.test'),
+        get: (uri, headers) async =>
+            very_insecure_http_do_not_use.Response(json.encode(value), 200),
+      ),
+    );
+    final trade = _boundStatusTrade();
+    final result = await provider.findTradeForContext(trade: trade);
+    final refund = TradeRefund.fromJsonString(result.refundJson!);
+    expect(refund.configuredAddress, '0x0000000000000000000000000000000000000003');
+    expect(refund.observedAddress, '0x0000000000000000000000000000000000000004');
+    expect(trade.refundAddress, refund.configuredAddress);
+
+    (value['input'] as Map<String, dynamic>)['refundAddress'] = refund.observedAddress;
     await expectLater(
-      PegarouteExchangeProvider(
-        apiClient: PegarouteApiClient(
-          configuration: const PegarouteConfiguration(baseUrl: 'https://example.test'),
-          get: (uri, headers) async =>
-              very_insecure_http_do_not_use.Response(json.encode(value), 200),
-        ),
-      ).findTradeForContext(trade: _boundStatusTrade()),
+      provider.findTradeForContext(trade: _boundStatusTrade()),
       throwsA(isA<PegarouteBindingException>()),
     );
+  });
+
+  test('requires the canonical external/internal polling status mapping', () {
+    const externalByInternal = {
+      'pending': 'pending',
+      'submitted': 'executing',
+      'executing': 'executing',
+      'confirming': 'executing',
+      'completed': 'success',
+      'failed': 'fail',
+      'refunded': 'fail',
+    };
+    const validator = PegarouteExecutionBindingValidator();
+    final validated = validator.validatePersisted(trade: _boundStatusTrade());
+    final value = json.decode(_fixture('status_refund.json')) as Map<String, dynamic>;
+    for (final entry in externalByInternal.entries) {
+      for (final external in ['pending', 'executing', 'success', 'fail']) {
+        value['internalStatus'] = entry.key;
+        value['status'] = external;
+        final status = PegarouteStatusResponse.fromJson(value);
+        expect(
+          () => validator.validateStatusResponse(validated: validated, response: status),
+          external == entry.value ? returnsNormally : throwsA(isA<PegarouteBindingException>()),
+          reason: '${entry.key} must map to ${entry.value}',
+        );
+      }
+    }
   });
 
   test('rejects a local context mutation while status HTTP is awaited', () async {

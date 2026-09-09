@@ -125,7 +125,7 @@ Map<String, dynamic> _statusResponse(String id, {String internalStatus = 'submit
       ? 'success'
       : internalStatus == 'failed' || internalStatus == 'refunded'
           ? 'fail'
-          : 'pending';
+          : internalStatus == 'pending' ? 'pending' : 'executing';
   return value;
 }
 
@@ -358,10 +358,25 @@ void main() {
     final trade = _boundTrade(id: 'refund-transition', state: 'refund');
     await trade.save();
 
-    await _provider(
-      _statusResponse(trade.id, internalStatus: 'refunded'),
-    ).refreshTradeStatus(trade: trade);
+    final response = _statusResponse(trade.id, internalStatus: 'refunded');
+    response['refund'] = {
+      'status': 'completed',
+      'chain': 'ETH',
+      'amount': '1',
+      'originalAmount': '1',
+      'feeDeducted': '0',
+      'feeDescription': 'fixture',
+      'refundAddress': '0x0000000000000000000000000000000000000004',
+    };
+    await _provider(response).refreshTradeStatus(trade: trade);
 
     expect(trade.state, TradeState.refunded);
+    final rows = await database.query(Trade.tableName,
+        where: '${Trade.selfIdColumn} = ?', whereArgs: [trade.internalId]);
+    final saved = Trade.fromSqliteRow(rows.single);
+    final refund = TradeRefund.fromJsonString(saved.refundJson!);
+    expect(refund.configuredAddress, '0x0000000000000000000000000000000000000003');
+    expect(refund.observedAddress, '0x0000000000000000000000000000000000000004');
+    expect(saved.refundAddress, refund.configuredAddress);
   });
 }

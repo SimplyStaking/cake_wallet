@@ -141,10 +141,11 @@ final class PegaroutePrivateValue {
   Object toJson() => value;
 
   String toQueryValue() {
-    // The API normalizes these query spellings to booleans. Reject string
-    // modes that cannot survive transport with their identity intact.
-    if (value == 'true' || value == 'false') {
-      throw const PegarouteCodecException('private string mode collides with a query boolean');
+    // The API trims query strings, then normalizes boolean spellings. Reject
+    // string modes that cannot survive transport with their identity intact.
+    final mode = value;
+    if (mode is String && (mode != mode.trim() || mode == 'true' || mode == 'false')) {
+      throw const PegarouteCodecException('private string mode is not canonical for query transport');
     }
     return value.toString();
   }
@@ -239,7 +240,10 @@ class PegarouteAddressIntent {
 
   static String? _normalizeRefund(String sender, String? refund) {
     final normalized = refund?.trim();
-    if (normalized == null || normalized.isEmpty || normalized == sender) return null;
+    if (normalized == null || normalized == sender) return null;
+    if (normalized.isEmpty) {
+      throw const PegarouteCodecException('refundAddress must not be blank');
+    }
     return normalized;
   }
 }

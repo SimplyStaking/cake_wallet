@@ -4,6 +4,7 @@
   "internalStatus": "refunded",
   "route": {
     "provider": "instaswap",
+    "private": false,
     "expectedOutput": "0.99",
     "estimatedTimeSeconds": 120,
     "fees": {

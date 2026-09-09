@@ -45,8 +45,8 @@ class PegarouteCurrencyMapper {
     'THOR': 'RUNE',
   };
 
-  // This is the checked-in Phase 1 intersection of Cake assets and the
-  // authoritative Pegasus catalog. Unknown user tokens must not be
+  // Cake asset intersection rechecked against src/catalog/pegaroute.json at
+  // 74e2cd8d9dbb71f0b5cd29bd5193d0182346dd34. Unknown user tokens must not be
   // synthesized into request IDs.
   static const _catalogAssets = <String>{
     'ETH/ETH',
@@ -132,7 +132,6 @@ class PegarouteCurrencyMapper {
     'SOL/BONK-DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263',
     'SOL/RAY-4k3Dyjzvzp8eMZWUXbBCjEvwSkkk59S5iCNLY3QrkX6R',
     'SOL/SOETH-2FPyTwcZLUg1MDrwsyoP4D6s1tM7hAkHYRjkNb5w6Pxk',
-    'SOL/WSOL-So11111111111111111111111111111111111111112',
     'SOL/BTC-9n4nbM75f5Ui33ZbPYXn59EwSgE8CGsHtAeTH5YFeJ9E',
     'SOL/PYTH-HZ1JovNiVvGrGNiiYvEozEVgZ58xaU3RKwX8eACQBCt3',
     'SOL/GMT-7i5KKsX2weiTkry7jA4ZwSuXGhs5eJBEjY8vVxR4pfRx',
