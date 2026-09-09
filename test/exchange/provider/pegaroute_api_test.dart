@@ -533,7 +533,7 @@ void main() {
     );
   });
 
-  test('enables priority native quote discovery without enabling execution', () async {
+  test('enables eligible native quote discovery without enabling execution', () async {
     final requests = <Uri>[];
     final api = PegarouteApiClient(
       configuration: const PegarouteConfiguration(baseUrl: 'https://example.test'),
@@ -656,6 +656,58 @@ void main() {
     expect(postCalls, 0);
   });
 
+  test('quotes every remaining eligible native source through GET only', () async {
+    final requests = <Uri>[];
+    var postCalls = 0;
+    final provider = PegarouteExchangeProvider(
+      apiClient: PegarouteApiClient(
+        configuration: const PegarouteConfiguration(baseUrl: 'https://example.test'),
+        get: (uri, headers) async {
+          requests.add(uri);
+          return very_insecure_http_do_not_use.Response(_fixture('quote.json'), 200);
+        },
+        post: (uri, headers, body) async {
+          postCalls++;
+          return very_insecure_http_do_not_use.Response('{}', 500);
+        },
+      ),
+    );
+    final sources = <CryptoCurrency, List<String>>{
+      CryptoCurrency.bch: ['BCH', 'BCH'],
+      CryptoCurrency.ltc: ['LTC', 'LTC'],
+      CryptoCurrency.doge: ['DOGE', 'DOGE'],
+      CryptoCurrency.zec: ['ZEC', 'ZEC'],
+      CryptoCurrency.bnb: ['BSC', 'BNB'],
+      CryptoCurrency.baseEth: ['BASE', 'ETH'],
+      CryptoCurrency.arbEth: ['ARBITRUM', 'ETH'],
+      CryptoCurrency.maticpoly: ['POLYGON', 'POL'],
+      CryptoCurrency.sol: ['SOL', 'SOL'],
+      CryptoCurrency.trx: ['TRON', 'TRX'],
+    };
+
+    for (final source in sources.entries) {
+      expect(
+        await provider.fetchRate(
+          from: source.key,
+          to: CryptoCurrency.btc,
+          amount: 1,
+          isFixedRateMode: false,
+          isReceiveAmount: false,
+        ),
+        0.99,
+      );
+      expect(requests.last.queryParameters, {
+        'fromChain': source.value.first,
+        'fromToken': source.value.last,
+        'toChain': 'BTC',
+        'toToken': 'BTC',
+        'amount': '1',
+      });
+    }
+    expect(requests, hasLength(sources.length));
+    expect(postCalls, 0);
+  });
+
   test('keeps swap creation closed before POST', () async {
     var postCalls = 0;
     final provider = PegarouteExchangeProvider(
@@ -687,7 +739,7 @@ void main() {
     expect(postCalls, 0);
   });
 
-  test('keeps non-priority, private, and incompatible XMR routes out of quotes', () async {
+  test('keeps ineligible, private, and incompatible XMR routes out of quotes', () async {
     var calls = 0;
     final quote = json.decode(_fixture('quote.json')) as Map<String, dynamic>;
     (quote['routes'] as List).single['memo'] = 'required-memo';
@@ -703,7 +755,7 @@ void main() {
 
     expect(
       await provider.fetchRate(
-        from: CryptoCurrency.bch,
+        from: CryptoCurrency.avaxc,
         to: CryptoCurrency.xmr,
         amount: 1,
         isFixedRateMode: false,

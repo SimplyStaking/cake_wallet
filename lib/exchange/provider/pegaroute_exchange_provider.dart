@@ -80,7 +80,7 @@ class PegarouteExchangeProvider extends ExchangeProvider {
   @override
   String get title => 'Pegaroute';
 
-  // Quote discovery is available for the priority native sources. Swap
+  // Quote discovery is available for eligible native sources. Swap
   // creation and execution remain closed until concrete handlers are ready.
   @override
   bool get isAvailable => _apiClient.configuration.isValid;
@@ -112,7 +112,7 @@ class PegarouteExchangeProvider extends ExchangeProvider {
     required bool isFixedRateMode,
   }) async {
     if (isFixedRateMode) return null;
-    final assets = _priorityQuoteAssets(from, to);
+    final assets = _quoteAssets(from, to);
     if (assets == null) return null;
     try {
       final quote = await _apiClient.quote(
@@ -148,7 +148,7 @@ class PegarouteExchangeProvider extends ExchangeProvider {
     required bool isReceiveAmount,
   }) async {
     if (amount <= 0 || !amount.isFinite || isFixedRateMode || isReceiveAmount) return 0;
-    final assets = _priorityQuoteAssets(from, to);
+    final assets = _quoteAssets(from, to);
     if (assets == null) return 0;
     try {
       final quote = await _apiClient.quote(
@@ -426,11 +426,11 @@ class PegarouteExchangeProvider extends ExchangeProvider {
     throw const PegarouteUnavailableException();
   }
 
-  List<PegarouteAssetId>? _priorityQuoteAssets(CryptoCurrency from, CryptoCurrency to) {
+  List<PegarouteAssetId>? _quoteAssets(CryptoCurrency from, CryptoCurrency to) {
     try {
       final source = _currencyMapper.map(from);
       final destination = _currencyMapper.map(to);
-      if (!_priorityQuoteChains.contains(source.chain) || source.token != source.nativeToken) {
+      if (!_quoteSourceChains.contains(source.chain) || source.token != source.nativeToken) {
         return null;
       }
       return [source, destination];
@@ -585,4 +585,18 @@ class PegarouteExchangeProvider extends ExchangeProvider {
   }
 }
 
-const _priorityQuoteChains = {'BTC', 'ETH', 'XMR'};
+const _quoteSourceChains = {
+  'BTC',
+  'ETH',
+  'XMR',
+  'BCH',
+  'LTC',
+  'DOGE',
+  'ZEC',
+  'BSC',
+  'BASE',
+  'ARBITRUM',
+  'POLYGON',
+  'SOL',
+  'TRON',
+};
