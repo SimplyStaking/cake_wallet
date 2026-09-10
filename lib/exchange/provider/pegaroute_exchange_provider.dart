@@ -17,6 +17,7 @@ import 'package:cw_core/db/sqlite.dart';
 import 'package:cw_core/erc20_token.dart';
 import 'package:cw_core/spl_token.dart';
 import 'package:cw_core/tron_token.dart';
+import 'package:cw_core/utils/print_verbose.dart';
 
 enum _PegarouteTransition { stale, same, advance }
 
@@ -134,7 +135,8 @@ class PegarouteExchangeProvider extends ExchangeProvider {
         min: minimums.isEmpty ? 0 : minimums.reduce((a, b) => a < b ? a : b),
         max: null,
       );
-    } catch (_) {
+    } catch (error) {
+      _logQuoteFailure(error);
       return null;
     }
   }
@@ -167,7 +169,8 @@ class PegarouteExchangeProvider extends ExchangeProvider {
         if (output != null && output.isFinite && output > bestOutput) bestOutput = output;
       }
       return bestOutput == 0 ? 0 : bestOutput / amount;
-    } catch (_) {
+    } catch (error) {
+      _logQuoteFailure(error);
       return 0;
     }
   }
@@ -442,6 +445,16 @@ class PegarouteExchangeProvider extends ExchangeProvider {
   bool _isQuoteRouteEligible(PegarouteRoute route, String sourceChain) {
     if (route.privateValue?.isEnabled ?? false) return false;
     return sourceChain != 'XMR' || route.memo == null;
+  }
+
+  void _logQuoteFailure(Object error) {
+    // Never log response bodies, request headers or credential configuration.
+    final reason = error is PegarouteApiError
+        ? 'HTTP ${error.httpStatus}'
+        : error is PegarouteUnavailableException
+            ? 'configure PEGAROUTE_API_BASE_URL with the Cake proxy origin'
+            : error.runtimeType.toString();
+    printV('Pegaroute quote unavailable: $reason');
   }
 
   String _decimalAmount(double amount) {

@@ -7,8 +7,12 @@ class PegarouteConfiguration {
 
   // This origin is the Cake-operated proxy. Provider authentication remains
   // server-side and must never be generated into the app.
-  factory PegarouteConfiguration.generated() =>
-      const PegarouteConfiguration(baseUrl: secrets.pegarouteApiBaseUrl);
+  factory PegarouteConfiguration.generated() => const PegarouteConfiguration(
+        baseUrl: String.fromEnvironment(
+          'PEGAROUTE_API_BASE_URL',
+          defaultValue: secrets.pegarouteApiBaseUrl,
+        ),
+      );
 
   final String baseUrl;
 
