@@ -10,6 +10,8 @@ import 'package:cw_core/transaction_priority.dart';
 import 'package:cw_core/wallet_base.dart';
 import 'package:cw_core/wallet_type.dart';
 import 'package:web3dart/crypto.dart';
+import 'package:blockchain_utils/blockchain_utils.dart';
+import 'package:on_chain/solana/solana.dart' show SolanaTransaction;
 
 import 'pegaroute_api.dart';
 import 'pegaroute_currency_mapper.dart';
@@ -17,6 +19,7 @@ import 'pegaroute_execution_binding.dart';
 import 'pegaroute_execution_handler_support.dart';
 import 'pegaroute_execution_lifecycle_store.dart';
 import 'pegaroute_native_eth.dart';
+import 'pegaroute_deposit.dart';
 
 const pegarouteEvmChains = {'ETH': 1, 'BSC': 56, 'BASE': 8453, 'ARBITRUM': 42161, 'POLYGON': 137};
 const _evmWalletTypes = {
@@ -38,25 +41,28 @@ bool pegarouteTrustedWallet(WalletBase? wallet) =>
     wallet != null &&
     !wallet.isHardwareWallet &&
     wallet.isSoftwareWallet &&
-    _evmWalletTypes.contains(wallet.type) &&
-    pegarouteEvmChains.containsValue(wallet.chainId);
+    (_evmWalletTypes.contains(wallet.type) && pegarouteEvmChains.containsValue(wallet.chainId) ||
+        pegarouteDepositWallet(wallet));
 
 bool pegarouteTrustedSource(WalletBase? wallet, PegarouteAssetId source) =>
-    pegarouteTrustedWallet(wallet) && pegarouteEvmChains[source.chain] == wallet!.chainId;
+    pegarouteTrustedWallet(wallet) &&
+    (pegarouteEvmChains.containsKey(source.chain)
+        ? _evmWalletTypes.contains(wallet!.type) &&
+            pegarouteEvmChains[source.chain] == wallet.chainId
+        : pegarouteDepositSource(wallet!, source));
 
 /// Selection covers transaction shapes Cake can construct, not provider routing policy.
 bool pegarouteTrustedQuote(PegarouteAssetId source, PegarouteRoute route) {
   if (route.privateValue?.isEnabled ?? false) return false;
-  if (!pegarouteEvmChains.containsKey(source.chain)) return false;
+  if (!pegarouteEvmChains.containsKey(source.chain)) return pegarouteDepositQuote(source, route);
   if (route.provider == 'instaswap') return route.memo == null && route.router == null;
-  return source.token == source.nativeToken &&
-      const {'thorchain', 'maya', 'openocean'}.contains(route.provider);
+  return const {'thorchain', 'maya', 'openocean'}.contains(route.provider);
 }
 
 bool pegarouteTrustedExecution(TradeExecution execution) {
+  if (execution.family != 'evm') return pegarouteDepositExecution(execution);
   if (execution.privateIntent != false ||
       execution.binding.isSendAll ||
-      execution.payload['approval'] != null ||
       execution.family != 'evm' ||
       !pegarouteEvmChains.containsKey(execution.sourceChain) ||
       pegarouteEvmChains[execution.sourceChain] != execution.binding.walletChainId ||
@@ -68,16 +74,18 @@ bool pegarouteTrustedExecution(TradeExecution execution) {
   switch (execution.mode) {
     case 'native-transfer':
       return native &&
+          execution.payload['approval'] == null &&
           execution.payload['data'] == null &&
           execution.payload['memo'] == null &&
           execution.payload['transferAmount'] == null;
     case 'contract-call':
-      return native &&
+      return (!native || execution.payload['approval'] == null) &&
           execution.routeProvider != 'instaswap' &&
           execution.payload['transferAmount'] == null &&
           pegarouteIsHex(execution.payload['data']?.toString() ?? '');
     case 'erc20-transfer':
       return !native &&
+          execution.payload['approval'] == null &&
           execution.routeProvider == 'instaswap' &&
           execution.payload['memo'] == null &&
           execution.payload['data'] == null &&
@@ -96,10 +104,35 @@ class PegarouteTrustedWalletAdapter {
   Future<PegarouteTrustedPending> prepare(WalletBase wallet, TradeExecution execution) async {
     if (!pegarouteTrustedExecution(execution) ||
         !pegarouteTrustedWallet(wallet) ||
-        wallet.chainId != execution.binding.walletChainId ||
-        evm == null) {
+        wallet.chainId != execution.binding.walletChainId) {
       throw const PegarouteBindingException('Unsupported Pegaroute wallet operation');
     }
+    if (execution.family != 'evm') {
+      if (pegarouteDepositWallets[execution.sourceChain] != wallet.type) {
+        throw const PegarouteBindingException('Deposit source does not match the wallet');
+      }
+      final pending = await preparePegarouteDeposit(wallet, execution, priority(wallet));
+      final deferredHash = execution.sourceChain == 'ZEC';
+      var id = pending.id;
+      if (execution.sourceChain == 'SOL') {
+        // Cake's transfer builder returns Base58-encoded signed transactions.
+        final transaction = SolanaTransaction.deserialize(Base58Decoder.decode(pending.hex));
+        final signature = transaction.signatures.first;
+        if (signature.length != 64 || signature.every((byte) => byte == 0)) {
+          throw const PegarouteBindingException('Unsigned Solana deposit');
+        }
+        id = Base58Encoder.encode(signature);
+      } else if (!deferredHash && !RegExp(r'^[0-9a-fA-F]{64}$').hasMatch(id)) {
+        throw const PegarouteBindingException('Single deposit transaction ID is unavailable');
+      }
+      return PegarouteTrustedPending(pending,
+          amount: pending.amount,
+          isEvm: false,
+          transactionId: deferredHash ? null : id,
+          attemptIdentity: deferredHash ? pegarouteFundingIdentity(execution, '') : null);
+    }
+    if (evm == null) throw const PegarouteBindingException('EVM wallet is unavailable');
+    await pegarouteRequireExistingAllowance(wallet, execution);
     final nativeCurrency = _evmNativeCurrencies[execution.sourceChain]!;
     final units = BigInt.parse(execution.binding.sourceAmountBaseUnits);
     if (units <= BigInt.zero || units.bitLength > 256) {
@@ -119,7 +152,7 @@ class PegarouteTrustedWalletAdapter {
         feeRate: 0,
         useBlinkProtection: false,
       ));
-    } else if (execution.mode == 'erc20-transfer') {
+    } else if (execution.sourceToken != execution.nativeToken) {
       final parts = execution.sourceToken.split('-');
       final token = Erc20Token(
           name: parts.first,
@@ -134,13 +167,16 @@ class PegarouteTrustedWalletAdapter {
           });
       amount = Money(units, token);
       // Standard ERC20 transfer constructed by Cake; no approval transaction.
-      final data = '0xa9059cbb${target.substring(2).toLowerCase().padLeft(64, '0')}'
-          '${units.toRadixString(16).padLeft(64, '0')}';
-      signedTarget = parts.last;
+      final transfer = execution.mode == 'erc20-transfer';
+      final data = transfer
+          ? '0xa9059cbb${target.substring(2).toLowerCase().padLeft(64, '0')}'
+              '${units.toRadixString(16).padLeft(64, '0')}'
+          : execution.payload['data'] as String;
+      signedTarget = transfer ? parts.last : target;
       signedData = data;
       signedValue = BigInt.zero;
       pending = await evm!.createRawCallDataTransaction(
-          wallet, parts.last, data, Money.zero(nativeCurrency), priority(wallet),
+          wallet, signedTarget, data, Money.zero(nativeCurrency), priority(wallet),
           useBlinkProtection: false, sourceTokenAddress: parts.last, sourceTokenAmount: units);
     } else {
       // Deliberately pass authenticated calldata through without ABI decoding.
@@ -168,25 +204,43 @@ class PegarouteTrustedWalletAdapter {
 }
 
 class PegarouteTrustedPending with PendingTransaction {
-  PegarouteTrustedPending(this.inner, {required this.amount})
+  PegarouteTrustedPending(this.inner,
+      {required this.amount, this.isEvm = true, String? transactionId, this.attemptIdentity})
       : preparedHex = inner.hex,
-        id = bytesToHex(keccak256(hexToBytes(inner.hex)), include0x: true) {
-    if (preparedHex.isEmpty || id.isEmpty || inner.shouldCommitUR()) {
+        _preparedId =
+            isEvm ? bytesToHex(keccak256(hexToBytes(inner.hex)), include0x: true) : transactionId {
+    if ((attemptIdentity == null && (preparedHex.isEmpty || id.isEmpty)) ||
+        attemptIdentity != null && inner.id.isNotEmpty ||
+        inner.shouldCommitUR()) {
       throw const PegarouteBindingException('Pending transaction identity is unavailable');
     }
   }
   final PendingTransaction inner;
   final String preparedHex;
+  final bool isEvm;
+  final String? _preparedId;
+  final String? attemptIdentity;
+  String get executionIdentity => attemptIdentity ?? id;
   @override
-  final String id;
+  String get id => _preparedId ?? inner.id;
   @override
   final Money amount;
   @override
   String get hex => inner.hex;
   @override
-  String get evmTxHashFromRawHex => id;
+  String? get evmTxHashFromRawHex => isEvm ? id : null;
   @override
   Money get fee => inner.fee;
+  @override
+  Money? get additionalCost => inner.additionalCost;
+  @override
+  PendingChange? get change => inner.change;
+  @override
+  set change(PendingChange? value) => inner.change = value;
+  @override
+  String? get feeRate => inner.feeRate;
+  @override
+  set feeRate(String? value) => inner.feeRate = value;
   @override
   String get amountFormatted => amount.toString();
   @override
@@ -196,15 +250,29 @@ class PegarouteTrustedPending with PendingTransaction {
   @override
   int? get outputCount => inner.outputCount;
   void validate() {
-    if (inner.hex != preparedHex || inner.shouldCommitUR()) {
+    if (inner.hex != preparedHex ||
+        inner.shouldCommitUR() ||
+        !isEvm && _preparedId != null && inner.id.isNotEmpty && inner.id != _preparedId) {
       throw const PegarouteBindingException('Prepared Pegaroute transaction changed');
     }
   }
 
   @override
-  Future<void> commit() {
+  Future<void> commit() async {
     validate();
-    return inner.commit();
+    try {
+      await inner.commit();
+    } catch (_) {
+      // ZEC can finish broadcast then fail refreshing balances/history. Its
+      // returned network ID establishes success; never prompt another payment.
+      if (attemptIdentity == null || !RegExp(r'^[0-9a-fA-F]{64}$').hasMatch(inner.id)) rethrow;
+    }
+    if (attemptIdentity != null && !RegExp(r'^[0-9a-fA-F]{64}$').hasMatch(inner.id)) {
+      throw const PegarouteBindingException('ZEC broadcast result is unknown');
+    }
+    if (!isEvm && _preparedId != null && inner.id != _preparedId) {
+      throw const PegarouteBindingException('Wallet returned a different deposit transaction ID');
+    }
   }
 
   @override
@@ -212,7 +280,7 @@ class PegarouteTrustedPending with PendingTransaction {
 }
 
 final class PegarouteTrustedExecutionHandler
-    implements TradeExecutionHandler, TradeExecutionLifecycleHandler {
+    implements TradeExecutionHandler, TradeExecutionLifecycleHandler, TradeExecutionReceiptHandler {
   const PegarouteTrustedExecutionHandler(
       {required this.walletContext,
       required this.adapter,
@@ -243,7 +311,7 @@ final class PegarouteTrustedExecutionHandler
           pegarouteRequireBoundWalletSnapshot(validated, before);
           return adapter.prepare(wallet, validated.execution);
         },
-        executionHash: (pending) => pending.id,
+        executionHash: (pending) => (pending as PegarouteTrustedPending).executionIdentity,
         validatePrepared: (wallet, validated, pending) {
           final current = walletContext.snapshot(wallet);
           pegarouteRequireBoundWalletSnapshot(validated, current);
@@ -257,6 +325,17 @@ final class PegarouteTrustedExecutionHandler
   Future<void> onCommitted(
           {required ValidatedTradeExecution execution, required CommittedTradeExecution receipt}) =>
       onSourceCommitted(execution, receipt);
+  @override
+  Future<void> onBroadcastedWithReceipt(
+          {required ValidatedTradeExecution execution,
+          required String executionHash,
+          required int tradeInternalId,
+          required CommittedTradeExecution receipt}) =>
+      lifecycle.onBroadcasted(
+          execution: execution,
+          executionHash: executionHash,
+          tradeInternalId: tradeInternalId,
+          transactionId: receipt.transactionId);
   @override
   Future<void> beforeBroadcast(
           {required ValidatedTradeExecution execution,
@@ -285,4 +364,24 @@ final class PegarouteTrustedExecutionHandler
           required int tradeInternalId}) =>
       lifecycle.onBroadcastAborted(
           execution: execution, executionHash: executionHash, tradeInternalId: tradeInternalId);
+}
+
+String pegarouteFundingIdentity(TradeExecution execution, String transactionId) =>
+    execution.sourceChain == 'ZEC'
+        ? 'pegaroute:funding:${execution.binding.tradeId}'
+        : transactionId;
+
+/// Approval broadcasts require a separate staged confirmation flow. Existing
+/// allowance permits a normal single-call swap; no approval is manufactured.
+Future<void> pegarouteRequireExistingAllowance(WalletBase wallet, TradeExecution execution) async {
+  final approval = execution.payload['approval'];
+  if (execution.family != 'evm' || approval == null) return;
+  final value = approval as Map;
+  final allowance = await evm!
+      .getAllowance(wallet, value['tokenAddress'] as String, value['spender'] as String)
+      .timeout(const Duration(seconds: 6));
+  if (allowance == null || allowance < BigInt.parse(execution.binding.sourceAmountBaseUnits)) {
+    throw const PegarouteBindingException(
+        'A token approval is required; staged approvals are not available yet');
+  }
 }

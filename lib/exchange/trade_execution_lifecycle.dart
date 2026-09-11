@@ -5,6 +5,9 @@ import 'dart:convert';
 /// This envelope intentionally contains neither a private key nor signed raw
 /// transaction bytes. A transition to [broadcasting] is the commit boundary:
 /// callers must persist it before attempting network submission.
+/// The persisted `executionHash` identifies this funding attempt. For wallets
+/// that obtain a txid only during commit, it is a local marker; the actual
+/// network hash is stored separately in Trade.txId after successful broadcast.
 enum TradeExecutionLifecycleState {
   prepared,
   broadcasting,

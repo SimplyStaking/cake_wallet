@@ -153,6 +153,14 @@ class _Wallet
 class _Evm implements EVM {
   _Evm(this.original);
   final EVM original;
+  BigInt? allowance = BigInt.zero;
+  @override
+  Future<BigInt?> getAllowance(WalletBase wallet, String tokenContract, String spender) async {
+    expect(tokenContract, _usdc.contractAddress);
+    expect(spender, _deposit);
+    return allowance;
+  }
+
   @override
   Object createEVMTransactionCredentialsRaw(
     List<OutputInfo> outputs, {
@@ -850,8 +858,7 @@ void main() {
     expect(wallet.builds, 0);
   });
 
-  test('token source comparison admits deposits but excludes approval-dependent DEX calls',
-      () async {
+  test('token source comparison includes supported single-call DEX candidates', () async {
     final deposit = quote['routes'][0] as Map<String, dynamic>;
     quote['routes'] = [
       {...deposit, 'provider': 'openocean', 'expectedOutput': '200'},
@@ -865,8 +872,51 @@ void main() {
           isFixedRateMode: false,
           isReceiveAmount: false,
         ),
-        0.99 / 100);
+        200 / 100);
     expect(calls, ['GET /quote']);
+  });
+
+  for (final withApprovalMetadata in [false, true]) {
+    test(
+        'USDC contract swap uses zero native value and ${withApprovalMetadata ? 'existing allowance' : 'no approval'}',
+        () async {
+      wallet.sourceCurrency = _usdc;
+      contractRoute('openocean');
+      receiveCurrency = CryptoCurrency.eth;
+      swap['execution']['value'] = {'display': '0', 'baseUnits': '0'};
+      if (withApprovalMetadata) {
+        swap['execution']['approval'] = {
+          'tokenAddress': _usdc.contractAddress,
+          'spender': _deposit,
+          'amount': {'display': '1', 'baseUnits': '1000000'},
+        };
+        (evm as _Evm).allowance = BigInt.from(1000000);
+      }
+      final trade = await create();
+      final pending = (await dispatcher.prepare(wallet: wallet, trade: trade))!;
+      final evidence = inspectPegarouteEvm(pending.hex, context.snapshot(wallet));
+      expect(evidence.valueBaseUnits, '0');
+      expect(evidence.to, _deposit);
+      expect(evidence.data, _calldata);
+      expect(pending.amount.amount, BigInt.from(1000000));
+      await pending.commit();
+      expect(wallet.builds, 1);
+      expect(wallet.broadcasts, 1);
+    });
+  }
+  test('insufficient approval allowance after creation blocks fallback and signing', () async {
+    wallet.sourceCurrency = _usdc;
+    contractRoute('openocean');
+    receiveCurrency = CryptoCurrency.eth;
+    swap['execution']['value'] = {'display': '0', 'baseUnits': '0'};
+    swap['execution']['approval'] = {
+      'tokenAddress': _usdc.contractAddress,
+      'spender': _deposit,
+      'amount': {'display': '1', 'baseUnits': '1000000'},
+    };
+    await expectLater(create(), throwsA(isA<PegarouteSwapAttemptException>()));
+    expect(calls, ['GET /quote', 'POST /swap']);
+    expect(wallet.builds, 0);
   });
 
   for (final mutation in ['amount', 'address', 'memo', 'approval', 'call']) {

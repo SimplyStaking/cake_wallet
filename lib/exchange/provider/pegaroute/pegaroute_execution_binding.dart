@@ -628,6 +628,7 @@ final class PegarouteExecutionBindingValidator {
     required String sourceChain,
     required String sourceAmount,
   }) {
+    if (_trustedSolanaSerialized(route, execution)) return;
     final details = provider.instaswapSwapLite;
     if (details != null) {
       if (provider.referenceId == null || details.txid != provider.referenceId) {
@@ -666,7 +667,8 @@ final class PegarouteExecutionBindingValidator {
     }
     if (execution.approval != null) {
       final router = route['router'];
-      if (router is! String || !_sameAddress(sourceChain, execution.approval!.spender, router)) {
+      if (!(route['provider'] == 'openocean' && router == null) &&
+          (router is! String || !_sameAddress(sourceChain, execution.approval!.spender, router))) {
         throw const PegarouteBindingException('approval spender is not reviewed');
       }
     }
@@ -681,6 +683,12 @@ final class PegarouteExecutionBindingValidator {
     required String? providerDepositAmountExact,
     required DateTime? providerDepositExpiry,
   }) {
+    if (_trustedSolanaSerialized(route, execution)) {
+      if (providerDepositAddress != null || providerDepositAmountExact != null || providerDepositExpiry != null) {
+        throw const PegarouteBindingException('Serialized Solana order has deposit metadata');
+      }
+      return;
+    }
     if (providerDepositAddress == null &&
         (providerDepositAmountExact != null || providerDepositExpiry != null)) {
       throw const PegarouteBindingException('provider deposit details are incomplete');
@@ -716,7 +724,8 @@ final class PegarouteExecutionBindingValidator {
     }
     if (execution.approval != null) {
       final router = route['router'];
-      if (router is! String || !_sameAddress(sourceChain, execution.approval!.spender, router)) {
+      if (!(route['provider'] == 'openocean' && router == null) &&
+          (router is! String || !_sameAddress(sourceChain, execution.approval!.spender, router))) {
         throw const PegarouteBindingException('persisted approval spender is not reviewed');
       }
     }
@@ -739,6 +748,9 @@ final class PegarouteExecutionBindingValidator {
     if (route['provider'] == 'openocean' && execution.family == 'evm') return execution.to;
     return null;
   }
+
+  static bool _trustedSolanaSerialized(Map<String, dynamic> route, PegarouteExecution execution) =>
+      route['provider'] == 'openocean' && execution.family == 'solana' && execution.mode == 'serialized-tx';
 
   static void _validateExecutionAmount(TradeExecution execution, TradeExecutionBinding binding) {
     final amount = switch (execution.family) {
@@ -800,7 +812,11 @@ final class PegarouteExecutionBindingValidator {
               (execution.value!.display != '0' || execution.value!.baseUnits != '0')) {
             throw const PegarouteBindingException('native call value is not bound');
           }
-          throw const PegarouteBindingException('token call debit is not proven');
+          // Authenticated source identity/amount and exact calldata are bound;
+          // token debit/output effects are trusted to the provider.
+          if (_tokenIdentity(sourceToken) == null) {
+            throw const PegarouteBindingException('token call identity is missing');
+          }
         }
         if (execution.approval != null) {
           final identity = _tokenIdentity(sourceToken);
@@ -814,6 +830,7 @@ final class PegarouteExecutionBindingValidator {
       return;
     }
     if (execution.mode == 'serialized-tx') {
+      if (sourceChain == 'SOL' && execution.family == 'solana') return;
       throw const PegarouteBindingException('opaque serialized execution is unavailable');
     }
     if (execution.family == 'other' && execution.chain != sourceChain) {

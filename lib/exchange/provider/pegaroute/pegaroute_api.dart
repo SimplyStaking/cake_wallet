@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'package:blockchain_utils/blockchain_utils.dart' show Base58Decoder;
 
 import 'package:http/http.dart' as very_insecure_http_do_not_use;
 
@@ -1707,9 +1708,16 @@ class PegarouteApiClient {
     return _decode(response, PegarouteStatusResponse.fromJson, expectedStatus: 200);
   }
 
-  Future<void> notifySourceHash(String id, String hash) async {
+  Future<void> notifySourceHash(String id, String hash, {String chain = 'ETH'}) async {
+    final evm = const {'ETH', 'BSC', 'BASE', 'ARBITRUM', 'POLYGON'}.contains(chain);
+    bool validHash;
+    try {
+      validHash = chain == 'SOL'
+          ? Base58Decoder.decode(hash).length == 64
+          : RegExp(evm ? r'^0x[0-9a-fA-F]{64}$' : r'^[0-9a-fA-F]{64}$').hasMatch(hash);
+    } catch (_) { validHash = false; }
     if (!RegExp(r'^[a-zA-Z0-9_-]+$').hasMatch(id) ||
-        !RegExp(r'^0x[0-9a-fA-F]{64}$').hasMatch(hash)) {
+        !validHash) {
       throw const PegarouteCodecException('Invalid deposit notification identity');
     }
     final response = await _post(_uri('/swap/$id/txhash'),
@@ -1717,7 +1725,7 @@ class PegarouteApiClient {
     _decode(response, (value) {
       final map = _object(value);
       if (map['transactionId'] != id || map['txHash'] is! String ||
-          (map['txHash'] as String).toLowerCase() != hash.toLowerCase() ||
+          (chain == 'SOL' ? map['txHash'] != hash : (map['txHash'] as String).toLowerCase() != hash.toLowerCase()) ||
           !const {'submitted', 'executing', 'confirming', 'completed', 'failed', 'refunded'}
               .contains(map['status'])) {
         throw const PegarouteCodecException('Deposit notification identity changed');

@@ -31,7 +31,7 @@ void main() {
     ));
     await tester.pumpAndSettle();
     expect(find.text('Pegaroute Providers'), findsOneWidget);
-    expect(find.text('EVM · ${S.current.decentralized}'), findsNWidgets(3));
+    expect(find.text(S.current.decentralized), findsNWidgets(3));
     expect(find.byType(ListItemToggleWidget), findsNWidgets(4));
     await tester.tap(find.text('OpenOcean'));
     await tester.pumpAndSettle();
