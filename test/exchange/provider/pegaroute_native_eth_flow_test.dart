@@ -414,6 +414,23 @@ void main() {
     expect(wallet.broadcasts, 1);
   });
 
+  test('an OpenOcean native-transfer envelope is not an Instaswap deposit', () async {
+    final trade = await create();
+    final value = jsonDecode(trade.executionJson!) as Map<String, dynamic>;
+    value['routeProvider'] = 'openocean';
+    final execution = TradeExecution.fromJson(value);
+    final handler = PegarouteEthExecutionHandler(
+      nativeDepositsOnly: true,
+      walletContext: context,
+      adapter: PegarouteNativeEthWalletAdapter(priority: (_) => EVMChainTransactionPriority.medium),
+      lifecycleHandler: PegarouteExecutionLifecycleStore(),
+    );
+    expect(pegarouteNativeEthDeposit(execution), false);
+    expect(handler.supports(execution), false);
+    expect(wallet.builds, 0);
+    expect(wallet.broadcasts, 0);
+  });
+
   for (final failure in ['transport', 'wrong-id', 'wrong-hash', 'ack-without-storage']) {
     test('callback $failure preserves successful one-shot funding', () async {
       final trade = await create();

@@ -22,12 +22,12 @@ credential file:
 
 ```sh
 python3 scripts/pegaroute_quote_proxy.py \
-  --upstream http://127.0.0.1:4000 --port 4002 \
+  --upstream http://127.0.0.1:4000 --port 4003 \
   --key-file /path/to/existing/server-side-key-file --allow-execution
 ```
 
-Use one bridge process on port 4002; this command does not replace an already
-running quote-only process. Cake uses `PEGAROUTE_API_BASE_URL=http://127.0.0.1:4002`.
+Use an available port; ports 4001 and 4002 were Docker-owned at the last check.
+Cake and the bridge must agree on `PEGAROUTE_API_BASE_URL=http://127.0.0.1:4003`.
 Provider credentials never enter the app. The opt-in bridge binds only loopback,
 uses a fixed loopback upstream, rejects redirects, and allows only:
 
@@ -35,6 +35,16 @@ uses a fixed loopback upstream, rejects redirects, and allows only:
 - `POST /swap`
 - `GET /swap/:id`
 - `POST /swap/:id/txhash`
+
+With the configured local development checkout, build using the existing runner:
+
+```sh
+PEGAROUTE_API_BASE_URL=http://127.0.0.1:4003 \
+  bash scripts/macos/run_pegaroute_dev.sh --build-only
+```
+
+The runner uses a disposable snapshot and the existing native stubs. This checks
+app integration; a funded ETH → XMR swap requires separate live validation.
 
 ## Broadcast and notification
 
@@ -76,6 +86,10 @@ Checks with Flutter 3.41.9:
 - `python3 -m unittest discover -s test/tools -p 'test_pegaroute_quote_proxy.py'`:
   **6 passed**, using a mocked loopback upstream only.
 - Protected build/lockfile SHA-256 checks and `git diff --check`: passed.
+
+Final review explicitly restricts the registered deposit handler to Instaswap;
+an OpenOcean empty-calldata envelope does not qualify as a deposit order. The
+focused deposit/handler suites and targeted analysis passed after that check.
 
 Flutter reports existing missing `assets/new-ui/` directories while preparing
 the test bundle; the test suite completes successfully without asset changes.

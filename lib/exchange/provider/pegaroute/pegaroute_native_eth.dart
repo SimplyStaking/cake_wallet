@@ -25,6 +25,7 @@ bool pegarouteNativeEthWallet(WalletBase? wallet) =>
     wallet.isSoftwareWallet;
 
 bool pegarouteNativeEthDeposit(TradeExecution execution) =>
+    execution.routeProvider == 'instaswap' &&
     execution.family == 'evm' &&
     execution.mode == 'native-transfer' &&
     execution.sourceChain == 'ETH' &&

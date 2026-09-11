@@ -87,6 +87,7 @@ final class PegarouteEthExecutionHandler
 
   @override
   bool supports(TradeExecution execution) =>
+      (!nativeDepositsOnly || execution.routeProvider == 'instaswap') &&
       execution.sourceChain == 'ETH' &&
       execution.sourceToken == 'ETH' &&
       execution.nativeToken == 'ETH' &&
@@ -104,8 +105,9 @@ final class PegarouteEthExecutionHandler
   @override
   void validateForExecution({required ValidatedTradeExecution execution, required DateTime now}) {
     final value = execution.execution;
-    if (nativeDepositsOnly && value.mode != 'native-transfer') {
-      throw const PegarouteBindingException('Only native ETH deposits are enabled');
+    if (nativeDepositsOnly &&
+        (value.mode != 'native-transfer' || value.routeProvider != 'instaswap')) {
+      throw const PegarouteBindingException('Only Instaswap native ETH deposits are enabled');
     }
     pegarouteRequirePublicExecution(value);
     pegarouteRequireUnexpiredFunding(execution, now);
