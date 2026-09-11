@@ -1,6 +1,7 @@
 import 'package:cake_wallet/core/utilities.dart';
 import 'package:cake_wallet/entities/new_ui_entities/list_item/list_item_regular_row.dart';
 import 'package:cake_wallet/exchange/exchange_provider_description.dart';
+import 'package:cake_wallet/exchange/trade_execution_dispatcher.dart';
 import 'package:cake_wallet/exchange/provider/pegaroute/pegaroute_provider_label.dart';
 import 'package:cake_wallet/generated/i18n.dart';
 import 'package:cake_wallet/new-ui/widgets/new_primary_button.dart';
@@ -171,6 +172,12 @@ class SwapTransactionDetails extends StatelessWidget {
                 Observer(
                   builder: (_) => NewListSections(showHeader: true, sections: {
                     S.of(context).send: [
+                      if (tradeExecutionPrerequisiteDescription(
+                          exchangeTradeViewModel.sendViewModel.pendingTransaction) case final String approval)
+                        ListItemRegularRow(
+                          showArrow: false, keyValue: 'pegaroute approval',
+                          label: S.of(context).approve_tokens, trailingText: approval,
+                        ),
                       ListItemRegularRow(
                         showArrow: false,
                         keyValue: "send value",

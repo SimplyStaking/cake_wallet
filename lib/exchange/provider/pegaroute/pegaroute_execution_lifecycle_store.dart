@@ -6,6 +6,7 @@ import 'package:cake_wallet/exchange/trade_execution_lifecycle.dart';
 import 'package:cake_wallet/exchange/trade_refund.dart';
 import 'package:cake_wallet/exchange/trade_state.dart';
 import 'package:cw_core/db/sqlite.dart';
+import 'pegaroute_approval_store.dart';
 
 /// SQLite-backed lifecycle bookkeeping for a registered execution
 /// handler. Each transition compares the complete bound execution row so a
@@ -182,7 +183,11 @@ final class PegarouteExecutionLifecycleStore implements TradeExecutionLifecycleH
       const validator = PegarouteExecutionBindingValidator();
       validator.validatePersisted(trade: row, expectedRawExecutionJson: execution.rawExecutionJson);
       if (requireFundingEligible) {
-        _requireFundingEligible(row, isRefundRaw: rows.single['isRefund']);
+        PegarouteExecutionLifecycleStore.requireFundingEligible(row,
+            isRefundRaw: rows.single['isRefund']);
+        if (execution.execution.payload['approval'] != null) {
+          await PegarouteApprovalStore.requireSettled(txn, row.internalId);
+        }
       }
       final oldJson = row.executionLifecycleJson;
       final current = oldJson == null ? null : TradeExecutionLifecycle.fromJsonString(oldJson);
@@ -212,7 +217,7 @@ final class PegarouteExecutionLifecycleStore implements TradeExecutionLifecycleH
     Trade.onChanged.add(null);
   }
 
-  static void _requireFundingEligible(Trade trade, {required Object? isRefundRaw}) {
+  static void requireFundingEligible(Trade trade, {required Object? isRefundRaw}) {
     if (trade.stateRaw != TradeState.created.raw ||
         isRefundRaw != null && isRefundRaw != 0 ||
         trade.txId?.isNotEmpty == true ||

@@ -1,5 +1,6 @@
 import 'package:cake_wallet/core/execution_state.dart';
 import 'package:cake_wallet/generated/i18n.dart';
+import 'package:cake_wallet/exchange/trade_execution_dispatcher.dart';
 import 'package:cake_wallet/new-ui/widgets/confirm_swiper.dart';
 import 'package:cake_wallet/new-ui/widgets/hardware_wallet/proceed_on_device_message.dart';
 import 'package:cake_wallet/new-ui/widgets/new_primary_button.dart';
@@ -43,12 +44,13 @@ class SendConfirmBottomWidget extends StatelessWidget {
   Widget _buildBottomWidget(BuildContext context, Type state) {
     switch (state) {
       case ExecutedSuccessfullyState:
+        final approval = tradeExecutionPrerequisiteDescription(sendViewModel.pendingTransaction);
         return ConfirmSwiper(
             onConfirmed: () {
               sendViewModel.commitTransaction(context);
             },
-            swiperText: "${S.of(context).swipe_to_send}",
-            accessibleNavigationModeButtonText: S.of(context).send);
+            swiperText: approval == null ? S.of(context).swipe_to_send : S.of(context).approve_tokens,
+            accessibleNavigationModeButtonText: approval == null ? S.of(context).send : S.of(context).approve);
       case IsExecutingState:
         return LoadingBottomWidget(
           text: "${S.of(context).generating_transaction}...",

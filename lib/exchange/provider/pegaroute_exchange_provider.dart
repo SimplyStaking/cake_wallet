@@ -347,8 +347,6 @@ class PegarouteExchangeProvider extends ExchangeProvider {
         if (!pegarouteTrustedExecution(execution)) {
           throw const PegarouteBindingException('Unsupported Pegaroute funding instructions');
         }
-        await pegarouteRequireExistingAllowance(wallet, execution);
-        checkWallet();
         trade.executionJson = execution.encode();
         trade.providerId = execution.binding.providerReferenceId;
         trade.inputAddress = execution.payload['to'] as String? ?? before.address;

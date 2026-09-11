@@ -20,6 +20,7 @@ import 'pegaroute_execution_handler_support.dart';
 import 'pegaroute_execution_lifecycle_store.dart';
 import 'pegaroute_native_eth.dart';
 import 'pegaroute_deposit.dart';
+import 'pegaroute_approval.dart';
 
 const pegarouteEvmChains = {'ETH': 1, 'BSC': 56, 'BASE': 8453, 'ARBITRUM': 42161, 'POLYGON': 137};
 const _evmWalletTypes = {
@@ -285,11 +286,13 @@ final class PegarouteTrustedExecutionHandler
       {required this.walletContext,
       required this.adapter,
       required this.lifecycle,
-      required this.onSourceCommitted});
+      required this.onSourceCommitted,
+      this.approvalFlow = const PegarouteApprovalFlow()});
   final PegarouteWalletContext walletContext;
   final PegarouteTrustedWalletAdapter adapter;
   final PegarouteExecutionLifecycleStore lifecycle;
   final Future<void> Function(ValidatedTradeExecution, CommittedTradeExecution) onSourceCommitted;
+  final PegarouteApprovalFlow approvalFlow;
 
   @override
   bool supports(TradeExecution execution) => pegarouteTrustedExecution(execution);
@@ -309,7 +312,19 @@ final class PegarouteTrustedExecutionHandler
         (wallet, validated) async {
           before = walletContext.snapshot(wallet);
           pegarouteRequireBoundWalletSnapshot(validated, before);
-          return adapter.prepare(wallet, validated.execution);
+          void validate() {
+            guard.validate();
+            if (!before.matches(walletContext.snapshot(wallet))) {
+              throw const PegarouteBindingException('Approval wallet changed');
+            }
+          }
+
+          final approval = await approvalFlow.prepare(
+              wallet: wallet,
+              execution: validated,
+              priority: adapter.priority(wallet),
+              validate: validate);
+          return approval ?? await adapter.prepare(wallet, validated.execution);
         },
         executionHash: (pending) => (pending as PegarouteTrustedPending).executionIdentity,
         validatePrepared: (wallet, validated, pending) {
@@ -371,8 +386,8 @@ String pegarouteFundingIdentity(TradeExecution execution, String transactionId) 
         ? 'pegaroute:funding:${execution.binding.tradeId}'
         : transactionId;
 
-/// Approval broadcasts require a separate staged confirmation flow. Existing
-/// allowance permits a normal single-call swap; no approval is manufactured.
+/// Recheck allowance immediately before constructing the final swap. The
+/// prerequisite flow owns approval transactions and their separate confirmations.
 Future<void> pegarouteRequireExistingAllowance(WalletBase wallet, TradeExecution execution) async {
   final approval = execution.payload['approval'];
   if (execution.family != 'evm' || approval == null) return;
@@ -381,7 +396,7 @@ Future<void> pegarouteRequireExistingAllowance(WalletBase wallet, TradeExecution
       .getAllowance(wallet, value['tokenAddress'] as String, value['spender'] as String)
       .timeout(const Duration(seconds: 6));
   if (allowance == null || allowance < BigInt.parse(execution.binding.sourceAmountBaseUnits)) {
-    throw const PegarouteBindingException(
-        'A token approval is required; staged approvals are not available yet');
+    throw const TradeExecutionPrerequisiteException(
+        'Token allowance no longer covers this swap. Reopen the swap to check its approval.');
   }
 }
