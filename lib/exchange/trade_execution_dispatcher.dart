@@ -45,6 +45,17 @@ abstract interface class TradeExecutionLifecycleHandler {
   });
 }
 
+/// Wallets such as Zcash obtain their network transaction ID during commit.
+/// The pre-commit identity can remain a local attempt marker, never a fake txid.
+abstract interface class TradeExecutionReceiptHandler {
+  Future<void> onBroadcastedWithReceipt({
+    required ValidatedTradeExecution execution,
+    required String executionHash,
+    required int tradeInternalId,
+    required CommittedTradeExecution receipt,
+  });
+}
+
 final class TradeExecutionGuard {
   const TradeExecutionGuard._(this._validate, this._wallet);
 
@@ -355,11 +366,23 @@ class _BoundPendingTransaction with PendingTransaction {
       // pre-broadcast binding, but suppress provider callback I/O below.
     }
     try {
-      await lifecycle.onBroadcasted(
-        execution: current ?? before,
-        executionHash: executionHash,
-        tradeInternalId: tradeInternalId,
-      );
+      if (handler case final TradeExecutionReceiptHandler receiptHandler) {
+        await receiptHandler.onBroadcastedWithReceipt(
+          execution: current ?? before,
+          executionHash: executionHash,
+          tradeInternalId: tradeInternalId,
+          receipt: CommittedTradeExecution(
+              transactionId: inner.id,
+              rawTransaction: inner.hex,
+              evmTxHash: inner.evmTxHashFromRawHex),
+        );
+      } else {
+        await lifecycle.onBroadcasted(
+          execution: current ?? before,
+          executionHash: executionHash,
+          tradeInternalId: tradeInternalId,
+        );
+      }
     } on Object {
       // The network broadcast succeeded; lifecycle bookkeeping is best effort.
     }

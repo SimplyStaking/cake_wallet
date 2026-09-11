@@ -347,9 +347,11 @@ class PegarouteExchangeProvider extends ExchangeProvider {
         if (!pegarouteTrustedExecution(execution)) {
           throw const PegarouteBindingException('Unsupported Pegaroute funding instructions');
         }
+        await pegarouteRequireExistingAllowance(wallet, execution);
+        checkWallet();
         trade.executionJson = execution.encode();
         trade.providerId = execution.binding.providerReferenceId;
-        trade.inputAddress = execution.payload['to'] as String;
+        trade.inputAddress = execution.payload['to'] as String? ?? before.address;
         trade.expiredAt = execution.binding.providerDepositExpiry;
         final validated = _bindingValidator.validatePersisted(trade: trade, wallet: wallet);
         pegarouteRequireUnexpiredFunding(validated, DateTime.now().toUtc());
@@ -376,17 +378,19 @@ class PegarouteExchangeProvider extends ExchangeProvider {
     _bindingValidator.validatePersisted(
         trade: trade, expectedRawExecutionJson: execution.rawExecutionJson);
     final lifecycle = TradeExecutionLifecycle.fromJsonString(trade.executionLifecycleJson!);
-    final hash = receipt.evmTxHash;
-    if (hash == null ||
-        lifecycle.executionHash != hash ||
+    final hash = receipt.evmTxHash ?? receipt.transactionId;
+    final fundingIdentity = pegarouteFundingIdentity(execution.execution, hash);
+    if (hash.isEmpty ||
+        lifecycle.executionHash != fundingIdentity ||
         trade.txId != hash ||
         lifecycle.state != TradeExecutionLifecycleState.broadcasted) {
       throw const PegarouteBindingException('Broadcast hash is not bound');
     }
     if (lifecycle.callbackState == TradeExecutionCallbackState.accepted) return;
     await PegarouteExecutionLifecycleStore().markCallbackAttempted(
-        execution: execution, executionHash: hash, tradeInternalId: trade.internalId);
-    await _apiClient.notifySourceHash(execution.execution.binding.providerTransactionId!, hash);
+        execution: execution, executionHash: fundingIdentity, tradeInternalId: trade.internalId);
+    await _apiClient.notifySourceHash(execution.execution.binding.providerTransactionId!, hash,
+        chain: execution.execution.sourceChain);
     await refreshTradeStatus(trade: trade);
   }
 
@@ -446,7 +450,11 @@ class PegarouteExchangeProvider extends ExchangeProvider {
           lifecycleJson != null &&
           observedHash != null) {
         var lifecycle = TradeExecutionLifecycle.fromJsonString(lifecycleJson);
-        if (observedHash.toLowerCase() != lifecycle.executionHash.toLowerCase()) {
+        final expectedHash = validated.execution.sourceChain == 'ZEC' ? latest.txId : lifecycle.executionHash;
+        final matchesHash = validated.execution.sourceChain == 'SOL'
+            ? observedHash == expectedHash
+            : observedHash.toLowerCase() == expectedHash?.toLowerCase();
+        if (!matchesHash) {
           throw const PegarouteBindingException('Status source hash differs from the deposit');
         }
         if (lifecycle.state == TradeExecutionLifecycleState.broadcasted &&

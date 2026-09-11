@@ -49,12 +49,14 @@ final class PegarouteExecutionLifecycleStore implements TradeExecutionLifecycleH
     required ValidatedTradeExecution execution,
     required String executionHash,
     required int tradeInternalId,
+    String? transactionId,
   }) async {
     await _transition(
       execution: execution,
       executionHash: executionHash,
       tradeInternalId: tradeInternalId,
       recordTransactionHash: true,
+      transactionId: transactionId,
       transition: (current, at) => _advance(
         current: current,
         executionHash: executionHash,
@@ -150,6 +152,7 @@ final class PegarouteExecutionLifecycleStore implements TradeExecutionLifecycleH
     required int tradeInternalId,
     bool requireFundingEligible = false,
     bool recordTransactionHash = false,
+    String? transactionId,
     required TradeExecutionLifecycle Function(TradeExecutionLifecycle? current, String at)
         transition,
   }) async {
@@ -197,7 +200,10 @@ final class PegarouteExecutionLifecycleStore implements TradeExecutionLifecycleH
       }
       final changed = await txn.update(
         Trade.tableName,
-        {'executionLifecycleJson': next.encode(), if (recordTransactionHash) 'txId': executionHash},
+        {
+          'executionLifecycleJson': next.encode(),
+          if (recordTransactionHash) 'txId': transactionId ?? executionHash
+        },
         where: predicates.join(' AND '),
         whereArgs: predicateArgs,
       );
