@@ -13,6 +13,7 @@ import 'package:cake_wallet/exchange/trade_execution.dart';
 import 'package:cake_wallet/exchange/trade_request.dart';
 import 'package:cake_wallet/exchange/trade_refund.dart';
 import 'package:cw_core/crypto_currency.dart';
+import 'package:cw_core/erc20_token.dart';
 import 'package:cw_core/spl_token.dart';
 import 'package:http/http.dart' as very_insecure_http_do_not_use;
 
@@ -426,7 +427,8 @@ void main() {
 
   test('rejects the removed wrapped-SOL catalog identity before quote transport', () async {
     var gets = 0;
-    final provider = PegarouteExchangeProvider(apiClient: PegarouteApiClient(
+    final provider = PegarouteExchangeProvider(
+        apiClient: PegarouteApiClient(
       configuration: const PegarouteConfiguration(baseUrl: 'https://example.test'),
       get: (uri, headers) async {
         gets++;
@@ -840,6 +842,130 @@ void main() {
       throwsA(isA<PegarouteUnavailableException>()),
     );
     expect(postCalls, 0);
+  });
+
+  test('quotes catalog token sources with exact chain and contract identities', () async {
+    final requests = <Uri>[];
+    var postCalls = 0;
+    final provider = PegarouteExchangeProvider(
+      apiClient: PegarouteApiClient(
+        configuration: const PegarouteConfiguration(baseUrl: 'https://example.test'),
+        get: (uri, headers) async {
+          requests.add(uri);
+          return very_insecure_http_do_not_use.Response(_fixture('quote.json'), 200);
+        },
+        post: (uri, headers, body) async {
+          postCalls++;
+          return very_insecure_http_do_not_use.Response('{}', 500);
+        },
+      ),
+    );
+    final sources = <CryptoCurrency, List<String>>{
+      Erc20Token(
+        name: 'USD Coin',
+        symbol: 'USDC',
+        contractAddress: '0xA0b86991c6218b36c1d19d4a2e9eb0ce3606eb48',
+        decimal: 6,
+        tag: 'ETH',
+        chainId: 1,
+      ): ['ETH', 'USDC-0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48'],
+      CryptoCurrency.usdcArb: ['ARBITRUM', 'USDC-0xaf88d065e77c8cc2239327c5edb3a432268e5831'],
+      CryptoCurrency.usdtbsc: ['BSC', 'USDT-0x55d398326f99059ff775485246999027b3197955'],
+      CryptoCurrency.usdtPoly: ['POLYGON', 'USDT-0xc2132d05d31c914a87c6611c10748aeb04b58e8f'],
+      CryptoCurrency.usde: ['BASE', 'USDE-0x5d3a1ff2b6bab83b63cd9ad0787074081a52ef34'],
+      SPLToken(
+        name: 'USD Coin',
+        symbol: 'USDC',
+        mintAddress: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
+        decimal: 6,
+        mint: 'usdc',
+      ): ['SOL', 'USDC-EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v'],
+    };
+    for (final source in sources.entries) {
+      expect(
+        await provider.fetchRate(
+          from: source.key,
+          to: CryptoCurrency.xmr,
+          amount: 100,
+          isFixedRateMode: false,
+          isReceiveAmount: false,
+        ),
+        closeTo(0.0099, 1e-12),
+      );
+      expect(requests.last.queryParameters, {
+        'fromChain': source.value.first,
+        'fromToken': source.value.last,
+        'toChain': 'XMR',
+        'toToken': 'XMR',
+        'amount': '100',
+      });
+      expect(
+          await provider.fetchLimits(
+            from: source.key,
+            to: CryptoCurrency.xmr,
+            isFixedRateMode: false,
+          ),
+          isNotNull);
+    }
+    expect(requests, hasLength(sources.length * 2));
+    expect(postCalls, 0);
+  });
+
+  test('rejects unknown and conflicting token sources before transport', () async {
+    var calls = 0;
+    final provider = PegarouteExchangeProvider(
+      apiClient: PegarouteApiClient(
+        configuration: const PegarouteConfiguration(baseUrl: 'https://example.test'),
+        get: (uri, headers) async {
+          calls++;
+          return very_insecure_http_do_not_use.Response(_fixture('quote.json'), 200);
+        },
+      ),
+    );
+    final sources = [
+      Erc20Token(
+        name: 'USD Coin',
+        symbol: 'USDC',
+        contractAddress: '0x0000000000000000000000000000000000000001',
+        decimal: 6,
+        tag: 'ETH',
+        chainId: 1,
+      ),
+      Erc20Token(
+        name: 'USD Coin',
+        symbol: 'USDC',
+        contractAddress: '0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48',
+        decimal: 6,
+        tag: 'BSC',
+        chainId: 1,
+      ),
+      SPLToken(
+        name: 'USD Coin',
+        symbol: 'USDC',
+        mintAddress: 'epjfwdd5aufqssqem2qn1xzybapc8g4weggkzwytdt1v',
+        decimal: 6,
+        mint: 'usdc',
+      ),
+    ];
+    for (final source in sources) {
+      expect(
+          await provider.fetchRate(
+            from: source,
+            to: CryptoCurrency.xmr,
+            amount: 100,
+            isFixedRateMode: false,
+            isReceiveAmount: false,
+          ),
+          0);
+      expect(
+          await provider.fetchLimits(
+            from: source,
+            to: CryptoCurrency.xmr,
+            isFixedRateMode: false,
+          ),
+          isNull);
+    }
+    expect(calls, 0);
   });
 
   test('keeps ineligible, private, and incompatible XMR routes out of quotes', () async {

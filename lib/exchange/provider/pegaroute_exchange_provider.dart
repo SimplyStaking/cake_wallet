@@ -81,7 +81,7 @@ class PegarouteExchangeProvider extends ExchangeProvider {
   @override
   String get title => 'Pegaroute';
 
-  // Quote discovery is available for eligible native sources. Swap
+  // Quote discovery is available for catalog assets on eligible source chains. Swap
   // creation and execution remain closed until concrete handlers are ready.
   @override
   bool get isAvailable => _apiClient.configuration.isValid;
@@ -433,7 +433,7 @@ class PegarouteExchangeProvider extends ExchangeProvider {
     try {
       final source = _currencyMapper.map(from);
       final destination = _currencyMapper.map(to);
-      if (!_quoteSourceChains.contains(source.chain) || source.token != source.nativeToken) {
+      if (!_quoteSourceChains.contains(source.chain)) {
         return null;
       }
       return [source, destination];
