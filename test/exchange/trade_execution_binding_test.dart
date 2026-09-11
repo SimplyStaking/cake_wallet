@@ -290,7 +290,7 @@ void main() {
     expect(validated.execution.binding.tradeId, 'trade-fixture');
   });
 
-  test('rejects qualified token identity after SQLite reload loses its contract', () {
+  test('restores qualified identity and rejects legacy rows with no contract or mint', () {
     for (final solana in [false, true]) {
       final original = _qualifiedTokenTrade(solana: solana);
       expect(
@@ -300,6 +300,14 @@ void main() {
       final reloaded = Trade.fromSqliteRow(original.toSqliteMap()..['tradeId'] = 1);
       expect(
         () => const PegarouteExecutionBindingValidator().validatePersisted(trade: reloaded),
+        returnsNormally,
+      );
+      final legacyRow = original.toSqliteMap()
+        ..['tradeId'] = 1
+        ..remove('fromAssetIdentityJson');
+      final legacy = Trade.fromSqliteRow(legacyRow);
+      expect(
+        () => const PegarouteExecutionBindingValidator().validatePersisted(trade: legacy),
         throwsA(isA<PegarouteBindingException>()),
       );
 
@@ -817,8 +825,8 @@ void main() {
     }
     expect(posts, 0);
     for (final mode in [null, false]) {
-      final quote = await _quote(client,
-          privateValue: mode == null ? null : PegaroutePrivateValue(mode));
+      final quote =
+          await _quote(client, privateValue: mode == null ? null : PegaroutePrivateValue(mode));
       expect(
         () => validator.preflightSwap(
           trade: _swapTrade(),

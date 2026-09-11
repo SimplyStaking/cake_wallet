@@ -1,9 +1,13 @@
+import 'dart:async';
+
 import 'package:cake_wallet/exchange/exchange_provider_description.dart';
 import 'package:cake_wallet/exchange/provider/pegaroute/pegaroute_execution_binding.dart';
 import 'package:cake_wallet/exchange/provider/pegaroute/pegaroute_execution_lifecycle_store.dart';
 import 'package:cake_wallet/exchange/trade.dart';
 import 'package:cake_wallet/exchange/trade_execution.dart';
 import 'package:cake_wallet/exchange/trade_execution_lifecycle.dart';
+import 'package:cake_wallet/exchange/trade_refund.dart';
+import 'package:cake_wallet/exchange/trade_state.dart';
 import 'package:cw_core/crypto_currency.dart';
 import 'package:cw_core/db/sqlite.dart' as sqlite;
 import 'package:flutter_test/flutter_test.dart';
@@ -34,7 +38,8 @@ CREATE TABLE Trade (
   sourceTokenAddress TEXT, sourceTokenDecimals INTEGER, routerData TEXT,
   routerValue TEXT, routerChainId INTEGER, sourceTokenAmountRaw TEXT,
   requiresTokenApproval INTEGER DEFAULT 0, chainId INTEGER, fee REAL,
-  executionJson TEXT, refundJson TEXT, executionLifecycleJson TEXT
+  executionJson TEXT, refundJson TEXT, executionLifecycleJson TEXT,
+  fromAssetIdentityJson TEXT, toAssetIdentityJson TEXT
 )
 ''');
   await database.execute('CREATE UNIQUE INDEX idx_trade_id_unique ON Trade (id)');
@@ -92,6 +97,7 @@ Trade _trade() {
     from: CryptoCurrency.eth,
     to: CryptoCurrency.btc,
     provider: ExchangeProviderDescription.pegaroute,
+    state: TradeState.created,
     senderAddress: sender,
     payoutAddress: 'bc1qfixture',
     walletId: 'wallet-fixture',
@@ -237,5 +243,138 @@ void main() {
       store.beforeBroadcast(execution: execution, executionHash: '0xhash', tradeInternalId: 0),
       throwsA(isA<PegarouteBindingException>()),
     );
+  });
+
+  test('only an explicitly created row without funding/refund evidence can begin', () async {
+    final mutations = <Map<String, Object?>>[
+      for (final state in [
+        '',
+        'pending',
+        'confirming',
+        'exchanging',
+        'sending',
+        'success',
+        'completed',
+        'failed',
+        'expired',
+        'refund',
+        'refunded',
+        'unknown'
+      ])
+        {'stateRaw': state},
+      {'isRefund': 1},
+      {'isRefund': 2},
+      {'txId': 'funded'},
+      {'outputTransaction': 'paid-out'},
+      {'refundJson': TradeRefund(terminalWithoutEvidence: true).encode()},
+      {'refundJson': '{}'},
+      {'refundJson': ''},
+      {
+        'refundJson': TradeRefund(
+          status: 'pending',
+          chain: 'ETH',
+          amount: '1',
+          originalAmount: '1',
+          feeDeducted: '0',
+          feeDescription: 'none',
+          observedAddress: 'refund',
+        ).encode()
+      },
+    ];
+    for (final mutation in mutations) {
+      await database.update(Trade.tableName, {
+        'stateRaw': 'created',
+        'isRefund': 0,
+        'txId': null,
+        'outputTransaction': null,
+        'refundJson': null,
+        ...mutation,
+      });
+      await expectLater(
+        store.beforeBroadcast(
+          execution: execution,
+          executionHash: 'hash',
+          tradeInternalId: trade.internalId,
+        ),
+        throwsA(isA<PegarouteBindingException>()),
+        reason: '$mutation',
+      );
+      expect((await Trade.getByTradeId(trade.id))!.executionLifecycleJson, isNull);
+    }
+    await database.update(Trade.tableName, {
+      'refundJson': TradeRefund(configuredAddress: 'refund').encode(),
+    });
+    await store.beforeBroadcast(
+      execution: execution,
+      executionHash: 'hash',
+      tradeInternalId: trade.internalId,
+    );
+  });
+
+  test('status committed while broadcast is queued wins over the stale caller', () async {
+    final statusWriting = Completer<void>();
+    final releaseStatus = Completer<void>();
+    final statusUpdate = database.transaction((txn) async {
+      await txn.update(Trade.tableName, {'stateRaw': 'confirming'});
+      statusWriting.complete();
+      await releaseStatus.future;
+    });
+    await statusWriting.future;
+    final broadcast = store.beforeBroadcast(
+      execution: execution,
+      executionHash: 'hash',
+      tradeInternalId: trade.internalId,
+    );
+    final rejected = expectLater(broadcast, throwsA(isA<PegarouteBindingException>()));
+    releaseStatus.complete();
+    await statusUpdate;
+    await rejected;
+    expect(trade.state, TradeState.created);
+    final latest = (await Trade.getByTradeId(trade.id))!;
+    expect(latest.state, TradeState.confirming);
+    expect(latest.executionLifecycleJson, isNull);
+  });
+
+  test('post-broadcast facts can advance after provider status changes', () async {
+    await store.beforeBroadcast(
+      execution: execution,
+      executionHash: 'hash',
+      tradeInternalId: trade.internalId,
+    );
+    await database.update(Trade.tableName, {'stateRaw': 'confirming'});
+    await store.onBroadcasted(
+      execution: execution,
+      executionHash: 'hash',
+      tradeInternalId: trade.internalId,
+    );
+    final latest = (await Trade.getByTradeId(trade.id))!;
+    expect(latest.state, TradeState.confirming);
+    expect(TradeExecutionLifecycle.fromJsonString(latest.executionLifecycleJson!).state,
+        TradeExecutionLifecycleState.broadcasted);
+  });
+
+  test('notifies after commit and does not notify for a rejected transition', () async {
+    final observations = <Future<Trade?>>[];
+    final subscription = Trade.onChanged.stream.listen((_) {
+      observations.add(Trade.getByTradeId(trade.id));
+    });
+    addTearDown(subscription.cancel);
+    await store.beforeBroadcast(
+      execution: execution,
+      executionHash: 'hash',
+      tradeInternalId: trade.internalId,
+    );
+    await expectLater(
+      store.beforeBroadcast(
+        execution: execution,
+        executionHash: 'hash',
+        tradeInternalId: trade.internalId,
+      ),
+      throwsStateError,
+    );
+    expect(observations, hasLength(1));
+    final observed = (await observations.single)!;
+    expect(TradeExecutionLifecycle.fromJsonString(observed.executionLifecycleJson!).state,
+        TradeExecutionLifecycleState.broadcasting);
   });
 }

@@ -3,6 +3,8 @@ import 'package:cake_wallet/exchange/exchange_provider_description.dart';
 import 'package:cake_wallet/exchange/trade.dart';
 import 'package:cake_wallet/exchange/trade_execution_dispatcher.dart';
 import 'package:cake_wallet/exchange/trade_execution_lifecycle.dart';
+import 'package:cake_wallet/exchange/trade_refund.dart';
+import 'package:cake_wallet/exchange/trade_state.dart';
 import 'package:cw_core/db/sqlite.dart';
 
 /// SQLite-backed lifecycle bookkeeping for a future registered execution
@@ -25,6 +27,7 @@ final class PegarouteExecutionLifecycleStore implements TradeExecutionLifecycleH
       execution: execution,
       executionHash: executionHash,
       tradeInternalId: tradeInternalId,
+      requireFundingEligible: true,
       transition: (current, at) {
         final prepared = current ??
             TradeExecutionLifecycle(
@@ -144,6 +147,7 @@ final class PegarouteExecutionLifecycleStore implements TradeExecutionLifecycleH
     required ValidatedTradeExecution execution,
     required String executionHash,
     required int tradeInternalId,
+    bool requireFundingEligible = false,
     required TradeExecutionLifecycle Function(TradeExecutionLifecycle? current, String at)
         transition,
   }) async {
@@ -172,10 +176,13 @@ final class PegarouteExecutionLifecycleStore implements TradeExecutionLifecycleH
       }
       const validator = PegarouteExecutionBindingValidator();
       validator.validatePersisted(trade: row, expectedRawExecutionJson: execution.rawExecutionJson);
+      if (requireFundingEligible) {
+        _requireFundingEligible(row, isRefundRaw: rows.single['isRefund']);
+      }
       final oldJson = row.executionLifecycleJson;
       final current = oldJson == null ? null : TradeExecutionLifecycle.fromJsonString(oldJson);
       final next = transition(current, at);
-      final expected = row.toSqliteMap()..remove(Trade.selfIdColumn);
+      final expected = Map<String, Object?>.from(rows.single)..remove(Trade.selfIdColumn);
       final predicates = <String>['${Trade.selfIdColumn} = ?'];
       final predicateArgs = <Object?>[tradeInternalId];
       for (final entry in expected.entries) {
@@ -194,5 +201,24 @@ final class PegarouteExecutionLifecycleStore implements TradeExecutionLifecycleH
       );
       if (changed != 1) throw const PegarouteBindingException('lifecycle row changed concurrently');
     });
+    Trade.onChanged.add(null);
+  }
+
+  static void _requireFundingEligible(Trade trade, {required Object? isRefundRaw}) {
+    if (trade.stateRaw != TradeState.created.raw ||
+        isRefundRaw != null && isRefundRaw != 0 ||
+        trade.txId?.isNotEmpty == true ||
+        trade.outputTransaction?.isNotEmpty == true) {
+      throw const PegarouteBindingException('Pegaroute trade is not awaiting funding');
+    }
+    final rawRefund = trade.refundJson;
+    if (rawRefund == null) return;
+    try {
+      final refund = TradeRefund.fromJsonString(rawRefund);
+      if (refund.status == null && !refund.terminalWithoutEvidence) return;
+    } on FormatException {
+      // Malformed refund evidence is not proof that the trade is unfunded.
+    }
+    throw const PegarouteBindingException('Pegaroute trade has refund evidence');
   }
 }

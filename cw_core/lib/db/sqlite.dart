@@ -63,7 +63,7 @@ Future<void> _initDb({String? pathOverride}) async {
   await db?.close();
   db = await openDatabase(
     dbFile.path,
-    version: 12,
+    version: 13,
     onUpgrade: (Database db, int oldVersion, int newVersion) async {
       printV("migrating: $oldVersion, $newVersion");
       if (oldVersion <= 1) {
@@ -180,6 +180,20 @@ CREATE TABLE IF NOT EXISTS BalanceCardStyleSettings (
           db,
           table: 'Trade',
           column: 'executionLifecycleJson',
+          definition: 'TEXT',
+        );
+      }
+      if (oldVersion <= 12) {
+        await _addColumnIfNotExists(
+          db,
+          table: 'Trade',
+          column: 'fromAssetIdentityJson',
+          definition: 'TEXT',
+        );
+        await _addColumnIfNotExists(
+          db,
+          table: 'Trade',
+          column: 'toAssetIdentityJson',
           definition: 'TEXT',
         );
       }
@@ -344,7 +358,9 @@ CREATE TABLE IF NOT EXISTS Trade (
   fee REAL,
   executionJson TEXT,
   refundJson TEXT,
-  executionLifecycleJson TEXT
+  executionLifecycleJson TEXT,
+  fromAssetIdentityJson TEXT,
+  toAssetIdentityJson TEXT
 );
 ''');
   await db.execute('''

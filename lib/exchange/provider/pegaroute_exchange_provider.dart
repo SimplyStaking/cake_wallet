@@ -233,10 +233,18 @@ class PegarouteExchangeProvider extends ExchangeProvider {
         validated: validated,
         response: observation.response,
       );
-      final expected = latest.toSqliteMap()..remove(Trade.selfIdColumn);
+      final expected = Map<String, Object?>.from(rows.first)..remove(Trade.selfIdColumn);
+      final before = latest.toSqliteMap();
       _mergeStatusEvidence(latest, observation.trade);
 
-      final values = latest.toSqliteMap()..remove(Trade.selfIdColumn);
+      // Write only changed provider evidence. Preserve the exact stored asset,
+      // execution and lifecycle envelopes, including legacy representations.
+      final values = <String, Object?>{
+        'stateRaw': latest.stateRaw,
+        for (final entry in latest.toSqliteMap().entries)
+          if (entry.key != Trade.selfIdColumn && entry.value != before[entry.key])
+            entry.key: entry.value,
+      };
       final predicates = <String>[
         '${Trade.selfIdColumn} = ?',
       ];

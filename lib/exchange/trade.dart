@@ -2,6 +2,9 @@ import 'dart:async';
 
 import 'package:cake_wallet/evm/evm.dart';
 import 'package:cake_wallet/exchange/exchange_provider_description.dart';
+import 'package:cake_wallet/exchange/provider/pegaroute/pegaroute_asset_identity.dart';
+import 'package:cake_wallet/exchange/provider/pegaroute/pegaroute_currency_mapper.dart';
+import 'package:cake_wallet/exchange/provider/pegaroute/pegaroute_execution_binding.dart';
 import 'package:cake_wallet/exchange/trade_state.dart';
 import 'package:cake_wallet/exchange/trade_refund.dart';
 import 'package:cw_core/crypto_currency.dart';
@@ -56,6 +59,8 @@ class Trade {
   }) {
     if (provider != null) providerRaw = provider.raw;
     if (state != null) stateRaw = state.raw;
+    _persistedAsPegaroute =
+        internalId != 0 && providerRaw == ExchangeProviderDescription.pegaroute.raw;
   }
 
   static const tableName = 'Trade';
@@ -122,6 +127,9 @@ class Trade {
   String? refundJson;
   String? executionLifecycleJson;
 
+  // Retain provenance even if a caller changes the public id/provider fields.
+  bool _persistedAsPegaroute = false;
+
   String get chainName {
     if (chainId == null) return '';
 
@@ -131,11 +139,50 @@ class Trade {
   // ── SQLite CRUD ──────────────────────────────────────
 
   Future<int> save() async {
+    final isPegaroute = providerRaw == ExchangeProviderDescription.pegaroute.raw;
+    if (_persistedAsPegaroute || isPegaroute && internalId != 0) {
+      throw StateError('Persisted Pegaroute trades require provider-owned updates');
+    }
     final json = toSqliteMap();
     if (json[selfIdColumn] == 0) {
       json[selfIdColumn] = null;
     }
-    internalId = await db!.insert(tableName, json, conflictAlgorithm: ConflictAlgorithm.replace);
+    internalId = await db!.transaction((txn) async {
+      // A different provider (or a caller changing providerRaw) must not use
+      // INSERT OR REPLACE to delete a protected row through either unique key.
+      final protected = await txn.query(
+        tableName,
+        columns: [selfIdColumn],
+        where:
+            'providerRaw = ? AND (id = ?${json[selfIdColumn] == null ? '' : ' OR $selfIdColumn = ?'})',
+        whereArgs: [
+          ExchangeProviderDescription.pegaroute.raw,
+          json['id'],
+          if (json[selfIdColumn] != null) json[selfIdColumn],
+        ],
+        limit: 1,
+      );
+      if (protected.isNotEmpty) {
+        throw StateError('Generic save cannot replace a Pegaroute trade');
+      }
+      if (isPegaroute) {
+        const validator = PegarouteExecutionBindingValidator();
+        // Validate the serialized snapshot, including restored token identity,
+        // before insertion and the actual SQLite representation before commit.
+        validator.validatePersisted(trade: Trade.fromSqliteRow(json));
+        final insertedId =
+            await txn.insert(tableName, json, conflictAlgorithm: ConflictAlgorithm.abort);
+        final rows =
+            await txn.query(tableName, where: '$selfIdColumn = ?', whereArgs: [insertedId]);
+        validator.validatePersisted(
+          trade: Trade.fromSqliteRow(rows.single),
+          expectedRawExecutionJson: json['executionJson'] as String,
+        );
+        return insertedId;
+      }
+      return txn.insert(tableName, json, conflictAlgorithm: ConflictAlgorithm.replace);
+    });
+    _persistedAsPegaroute = isPegaroute;
     onChanged.add(null);
     return internalId;
   }
@@ -328,6 +375,10 @@ class Trade {
       'executionJson': executionJson,
       'refundJson': refundJson,
       'executionLifecycleJson': executionLifecycleJson,
+      if (providerRaw == ExchangeProviderDescription.pegaroute.raw) ...{
+        'fromAssetIdentityJson': PegarouteAssetIdentity.encode(from),
+        'toAssetIdentityJson': PegarouteAssetIdentity.encode(to),
+      },
     };
   }
 
@@ -378,17 +429,46 @@ class Trade {
     trade.internalId = row[selfIdColumn] as int? ?? 0;
     trade.providerRaw = row['providerRaw'] as int? ?? 0;
     trade.stateRaw = row['stateRaw'] as String? ?? '';
+    trade._persistedAsPegaroute =
+        trade.internalId != 0 && trade.providerRaw == ExchangeProviderDescription.pegaroute.raw;
     return trade;
   }
 
   static CryptoCurrency? _currencyFromRow(Map<String, dynamic> row, String prefix) {
+    if (row['providerRaw'] == ExchangeProviderDescription.pegaroute.raw &&
+        row['${prefix}AssetIdentityJson'] != null) {
+      // A corrupt identity never falls back to a title/tag alias. Keep the row
+      // readable for history while execution/status validation fails closed.
+      try {
+        final raw = row['${prefix}AssetIdentityJson'];
+        if (raw is! String) return null;
+        final currency = PegarouteAssetIdentity.decode(raw);
+        if (currency.title != row['${prefix}Title'] ||
+            currency.name != row['${prefix}Name'] ||
+            currency.tag != row['${prefix}Tag'] ||
+            currency.decimals != row['${prefix}Decimals']) {
+          return null;
+        }
+        return currency;
+      } on FormatException {
+        return null;
+      } on PegarouteCurrencyException {
+        return null;
+      }
+    }
     final title = row['${prefix}Title'] as String?;
     if (title == null || title.isEmpty) return null;
 
     final tag = row['${prefix}Tag'] as String?;
 
     final live = CryptoCurrency.safeParseCurrencyFromString(title, tag: tag);
-    if (live != null) return live;
+    if (live != null) {
+      if (row['providerRaw'] == ExchangeProviderDescription.pegaroute.raw &&
+          (live.title != title || live.tag != tag || live.decimals != row['${prefix}Decimals'])) {
+        return null;
+      }
+      return live;
+    }
 
     return CryptoCurrency(
       title: title,
