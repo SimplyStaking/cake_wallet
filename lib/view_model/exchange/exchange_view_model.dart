@@ -31,6 +31,7 @@ import 'package:cake_wallet/exchange/provider/exchange_provider.dart';
 import 'package:cake_wallet/exchange/provider/exolix_exchange_provider.dart';
 import 'package:cake_wallet/exchange/provider/near_Intents_exchange_provider.dart';
 import 'package:cake_wallet/exchange/provider/pegaroute_exchange_provider.dart';
+import 'package:cake_wallet/exchange/provider/pegaroute/pegaroute_provider_preferences.dart';
 import 'package:cake_wallet/exchange/provider/pegaroute/pegaroute_execution_binding.dart';
 import 'package:cake_wallet/exchange/provider/stealth_ex_exchange_provider.dart';
 import 'package:cake_wallet/exchange/provider/swapsxyz_exchange_provider.dart';
@@ -225,6 +226,25 @@ abstract class ExchangeViewModelBase extends WalletChangeListenerViewModel with 
       }
     }));
 
+    _disposers.add(reaction(
+      (_) => (
+        forceDecentralizedExchanges,
+        PegarouteProviderPreferences.providers.keys
+            .map(pegarouteProviderPreferences.isEnabled)
+            .join(','),
+      ),
+      (_) {
+        _pegaroutePreferencesRevision++;
+        _sortedAvailableProviders
+            .removeWhere((_, provider) => provider is PegarouteExchangeProvider);
+        if (bestRateProvider is PegarouteExchangeProvider) {
+          bestRateProvider = null;
+          bestRate = 0.0;
+        }
+        loadLimits();
+      },
+    ));
+
     if (isElectrumWallet) {
       bitcoin!.updateFeeRates(wallet);
     }
@@ -303,6 +323,9 @@ abstract class ExchangeViewModelBase extends WalletChangeListenerViewModel with 
   final TradesStore tradesStore;
   final SharedPreferences sharedPreferences;
 
+  PegarouteProviderPreferences get pegarouteProviderPreferences =>
+      _settingsStore.pegarouteProviderPreferences;
+
   List<ExchangeProvider> get _allProviders => [
         ChangeNowExchangeProvider(settingsStore: _settingsStore),
         // SideShiftExchangeProvider(),
@@ -315,7 +338,12 @@ abstract class ExchangeViewModelBase extends WalletChangeListenerViewModel with 
         SwapsXyzExchangeProvider(),
         JupiterExchangeProvider(),
         NearIntentsExchangeProvider(),
-        PegarouteExchangeProvider(currentWallet: () => _appStore.wallet),
+        PegarouteExchangeProvider(
+          currentWallet: () => _appStore.wallet,
+          providerPreferences: pegarouteProviderPreferences,
+          decentralizedOnly: () => forceDecentralizedExchanges,
+          executableQuotesOnly: true,
+        ),
         TrocadorExchangeProvider(
             useTorOnly: _useTorOnly, providerStates: _settingsStore.trocadorProviderStates),
       ];
@@ -338,6 +366,7 @@ abstract class ExchangeViewModelBase extends WalletChangeListenerViewModel with 
       SplayTreeMap<double, ExchangeProvider>((double a, double b) => b.compareTo(a));
 
   final List<ExchangeProvider> _tradeAvailableProviders = [];
+  int _pegaroutePreferencesRevision = 0;
 
   Map<ExchangeProvider, Limits?> _providerLimits = {};
 
@@ -917,6 +946,7 @@ abstract class ExchangeViewModelBase extends WalletChangeListenerViewModel with 
       memoLabelTypeFor(receiveCurrency) != null && !provider.supportsMemoOrDestinationTag;
 
   Future<void> calculateBestRate() async {
+    final pegaroutePreferencesRevision = _pegaroutePreferencesRevision;
     if (depositCurrency == receiveCurrency) {
       bestRate = 0.0;
       bestRateProvider = null;
@@ -958,6 +988,7 @@ abstract class ExchangeViewModelBase extends WalletChangeListenerViewModel with 
             ),
       ),
     );
+    if (pegaroutePreferencesRevision != _pegaroutePreferencesRevision) return;
 
     // We'll use a new SplayTreeMap to avoid concurrent modification issues
     final newSortedProviders =
@@ -990,6 +1021,7 @@ abstract class ExchangeViewModelBase extends WalletChangeListenerViewModel with 
 
   @action
   Future<void> loadLimits() async {
+    final pegaroutePreferencesRevision = _pegaroutePreferencesRevision;
     if (depositCurrency == receiveCurrency) {
       limitsState = LimitsLoadedSuccessfully(limits: Limits(min: 0, max: 0));
       return;
@@ -1024,6 +1056,7 @@ abstract class ExchangeViewModelBase extends WalletChangeListenerViewModel with 
       }).toList();
 
       final entries = await Future.wait(futures);
+      if (pegaroutePreferencesRevision != _pegaroutePreferencesRevision) return;
       _providerLimits = Map.fromEntries(entries);
 
       _providerLimits.values.whereType<Limits>().forEach((tempLimits) {

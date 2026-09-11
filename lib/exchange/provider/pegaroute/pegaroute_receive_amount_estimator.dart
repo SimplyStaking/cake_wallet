@@ -123,11 +123,13 @@ final class PegarouteReceiveAmountEstimator {
   PegarouteReceiveAmountEstimator({
     required this.apiClient,
     this.policy = const PegarouteReceiveEstimatePolicy(),
+    this.isRouteAllowed,
     DateTime Function()? clock,
   }) : _clock = clock ?? DateTime.now;
 
   final PegarouteApiClient apiClient;
   final PegarouteReceiveEstimatePolicy policy;
+  final bool Function(PegarouteRoute)? isRouteAllowed;
   final DateTime Function() _clock;
   static const _mapper = PegarouteCurrencyMapper();
 
@@ -215,6 +217,7 @@ final class PegarouteReceiveAmountEstimator {
       if (!now.isBefore(quoteExpiry)) _fail(PegarouteReceiveEstimateFailure.staleQuote);
       final routes = quote.response.routes.where((route) =>
           !(route.privateValue?.isEnabled ?? false) &&
+          (isRouteAllowed?.call(route) ?? true) &&
           (source.chain != 'XMR' || route.memo == null));
       PegarouteRoute? route;
       if (selected != null) {

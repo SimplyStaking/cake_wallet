@@ -12,6 +12,7 @@ import 'package:cake_wallet/exchange/provider/pegaroute/pegaroute_eth_execution_
 import 'package:cake_wallet/exchange/provider/pegaroute/pegaroute_execution_binding.dart';
 import 'package:cake_wallet/exchange/provider/pegaroute/pegaroute_execution_lifecycle_store.dart';
 import 'package:cake_wallet/exchange/provider/pegaroute/pegaroute_native_eth.dart';
+import 'package:cake_wallet/exchange/provider/pegaroute/pegaroute_provider_preferences.dart';
 import 'package:cake_wallet/exchange/provider/pegaroute_exchange_provider.dart';
 import 'package:cake_wallet/exchange/trade.dart';
 import 'package:cake_wallet/exchange/trade_creation_failure.dart';
@@ -36,6 +37,7 @@ import 'package:cw_evm/pending_evm_chain_transaction.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as very_insecure_http_do_not_use;
 import 'package:mobx/mobx.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 import 'package:web3dart/web3dart.dart' as web3;
 
@@ -145,6 +147,8 @@ void main() {
   late Observable<WalletBase?> active;
   late PegarouteActiveWalletContext context;
   late PegarouteExchangeProvider provider;
+  late PegarouteProviderPreferences preferences;
+  bool decentralizedOnly = false;
   late RegistryTradeExecutionDispatcher dispatcher;
   late Map<String, dynamic> quote;
   late Map<String, dynamic> swap;
@@ -178,6 +182,9 @@ void main() {
   }
 
   setUp(() async {
+    SharedPreferences.setMockInitialValues({});
+    preferences = PegarouteProviderPreferences(await SharedPreferences.getInstance());
+    decentralizedOnly = false;
     database = await _database();
     wallet = _Wallet();
     active = Observable<WalletBase?>(wallet);
@@ -197,8 +204,10 @@ void main() {
         expect(headers, isEmpty);
         calls.add('GET ${uri.path}');
         if (uri.path == '/quote') {
-          expect(uri.queryParameters['destinationAddress'], _payout);
-          expect(uri.queryParameters['senderAddress'], _key.address.hex);
+          if (uri.queryParameters.containsKey('destinationAddress')) {
+            expect(uri.queryParameters['destinationAddress'], _payout);
+            expect(uri.queryParameters['senderAddress'], _key.address.hex);
+          }
           afterQuote?.call();
           return very_insecure_http_do_not_use.Response(jsonEncode(quote), 200);
         }
@@ -269,7 +278,13 @@ void main() {
             200);
       },
     );
-    provider = PegarouteExchangeProvider(apiClient: api, currentWallet: () => active.value);
+    provider = PegarouteExchangeProvider(
+      apiClient: api,
+      currentWallet: () => active.value,
+      providerPreferences: preferences,
+      decentralizedOnly: () => decentralizedOnly,
+      executableQuotesOnly: true,
+    );
     dispatcher = RegistryTradeExecutionDispatcher([
       PegarouteEthExecutionHandler(
         nativeDepositsOnly: true,
@@ -473,6 +488,81 @@ void main() {
     (quote['routes'][0] as Map)['memo'] = 'memo';
     await expectLater(create(), throwsA(isA<PegarouteUnavailableException>()));
     expect(calls.where((call) => call.startsWith('POST')), isEmpty);
+  });
+
+  test('exchange comparison uses the executable deposit quote instead of a better DEX quote',
+      () async {
+    final deposit = Map<String, dynamic>.from(quote['routes'][0] as Map)
+      ..['expectedOutput'] = '11.66'
+      ..['minAmount'] = '0.004';
+    quote['routes'] = [
+      {...deposit, 'provider': 'openocean', 'expectedOutput': '12.33', 'minAmount': '0.0001'},
+      deposit,
+    ];
+    expect(
+        await provider.fetchRate(
+          from: CryptoCurrency.eth,
+          to: CryptoCurrency.usdc,
+          amount: 0.005,
+          isFixedRateMode: false,
+          isReceiveAmount: false,
+        ),
+        closeTo(11.66 / 0.005, 0.000001));
+    expect(
+        (await provider.fetchLimits(
+          from: CryptoCurrency.eth,
+          to: CryptoCurrency.usdc,
+          isFixedRateMode: false,
+        ))!
+            .min,
+        0.004);
+    await preferences.setEnabled('instaswap', false);
+    expect(provider.isExecutionAvailable, false);
+    expect(
+        await provider.fetchRate(
+          from: CryptoCurrency.eth,
+          to: CryptoCurrency.usdc,
+          amount: 0.005,
+          isFixedRateMode: false,
+          isReceiveAmount: false,
+        ),
+        0);
+    expect(calls, ['GET /quote', 'GET /quote']);
+    expect(wallet.builds, 0);
+  });
+
+  test('disabled Instaswap cannot create an order, including with decentralized-only', () async {
+    decentralizedOnly = true;
+    await preferences.setEnabled('instaswap', false);
+    await expectLater(create(), throwsA(isA<PegarouteUnavailableException>()));
+    expect(calls, isEmpty);
+    await preferences.setEnabled('instaswap', true);
+    calls.clear();
+    afterQuote = () => preferences.setEnabled('instaswap', false);
+    await expectLater(create(), throwsA(isA<PegarouteUnavailableException>()));
+    expect(calls, ['GET /quote']);
+    expect(wallet.builds, 0);
+  });
+
+  test('decentralized-only allows enabled Instaswap order creation', () async {
+    decentralizedOnly = true;
+    final trade = await create();
+    expect(trade.executionJson, isNotNull);
+    expect(calls, ['GET /quote', 'POST /swap']);
+    expect(wallet.builds, 0);
+  });
+
+  test('a quote-only token source does not enter executable exchange comparison', () async {
+    expect(
+        await provider.fetchRate(
+          from: CryptoCurrency.usdc,
+          to: CryptoCurrency.xmr,
+          amount: 100,
+          isFixedRateMode: false,
+          isReceiveAmount: false,
+        ),
+        0);
+    expect(calls, isEmpty);
   });
 
   for (final mutation in ['amount', 'address', 'memo', 'approval', 'call']) {

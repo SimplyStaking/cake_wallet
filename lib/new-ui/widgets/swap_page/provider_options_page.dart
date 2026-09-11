@@ -3,9 +3,11 @@ import 'package:cake_wallet/di.dart';
 import 'package:cake_wallet/entities/new_ui_entities/list_item/list_Item_checkbox.dart';
 import 'package:cake_wallet/entities/new_ui_entities/list_item/list_item_selector.dart';
 import 'package:cake_wallet/exchange/provider/exchange_provider.dart';
+import 'package:cake_wallet/exchange/provider/pegaroute_exchange_provider.dart';
 import 'package:cake_wallet/generated/i18n.dart';
 import 'package:cake_wallet/new-ui/widgets/receive_page/receive_top_bar.dart';
 import 'package:cake_wallet/new-ui/widgets/swap_page/trocador_providers_settings.dart';
+import 'package:cake_wallet/new-ui/widgets/swap_page/pegaroute_providers_settings.dart';
 import 'package:cake_wallet/src/widgets/alert_with_one_action.dart';
 import 'package:cake_wallet/src/widgets/new_list_row/new_list_section.dart';
 import 'package:cake_wallet/utils/show_pop_up.dart';
@@ -110,8 +112,15 @@ class ProviderOptionsPage extends StatelessWidget {
                                   iconPath: item.description.image,
                                   keyValue: item.title,
                                   label: item.title,
-                                  subtitle:
-                                      unavailable ? S.of(context).buy_provider_unavailable : null,
+                                  showArrow: item is PegarouteExchangeProvider,
+                                  onTap: item is PegarouteExchangeProvider
+                                      ? () => _openPegarouteProvidersPage(context)
+                                      : null,
+                                  subtitle: unavailable
+                                      ? S.of(context).buy_provider_unavailable
+                                      : item is PegarouteExchangeProvider
+                                          ? S.of(context).manage_providers
+                                          : null,
                                   subtitleColor: unavailable
                                       ? Theme.of(context)
                                           .colorScheme
@@ -246,5 +255,16 @@ class ProviderOptionsPage extends StatelessWidget {
                 child: TrocadorProvidersSettings(
               trocadorProvidersViewModel: vm,
             ))));
+  }
+
+  void _openPegarouteProvidersPage(BuildContext context) {
+    Navigator.of(context).push(CupertinoPageRoute(
+      builder: (_) => Material(
+        child: PegarouteProvidersSettings(
+          preferences: exchangeViewModel.pegarouteProviderPreferences,
+          decentralizedOnly: () => exchangeViewModel.forceDecentralizedExchanges,
+        ),
+      ),
+    ));
   }
 }

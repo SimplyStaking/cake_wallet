@@ -9,6 +9,7 @@ import 'package:cake_wallet/exchange/provider/pegaroute/pegaroute_execution_bind
 import 'package:cake_wallet/exchange/provider/pegaroute/pegaroute_execution_handler_support.dart';
 import 'package:cake_wallet/exchange/provider/pegaroute/pegaroute_execution_lifecycle_store.dart';
 import 'package:cake_wallet/exchange/provider/pegaroute/pegaroute_native_eth.dart';
+import 'package:cake_wallet/exchange/provider/pegaroute/pegaroute_provider_preferences.dart';
 import 'package:cake_wallet/exchange/trade_execution_dispatcher.dart';
 import 'package:cake_wallet/exchange/trade_execution_lifecycle.dart';
 import 'package:cake_wallet/exchange/provider/pegaroute/pegaroute_receive_amount_estimator.dart';
@@ -77,6 +78,9 @@ class PegarouteExchangeProvider extends ExchangeProvider {
     PegarouteReceiveEstimatePolicy receiveEstimatePolicy = const PegarouteReceiveEstimatePolicy(),
     DateTime Function()? quoteClock,
     this.currentWallet,
+    this.providerPreferences,
+    this.decentralizedOnly,
+    this.executableQuotesOnly = false,
     Future<CryptoCurrency?> Function(String? chain, String? token)? currencyLookup,
   })  : _apiClient = apiClient ?? PegarouteApiClient(configuration: configuration),
         _receiveEstimatePolicy = receiveEstimatePolicy,
@@ -85,6 +89,12 @@ class PegarouteExchangeProvider extends ExchangeProvider {
 
   final PegarouteApiClient _apiClient;
   final WalletBase? Function()? currentWallet;
+  final PegarouteProviderPreferences? providerPreferences;
+  final bool Function()? decentralizedOnly;
+
+  /// Cake's exchange comparison uses fundable routes. Read-only discovery can
+  /// still query the broader catalog independently of wallet execution support.
+  final bool executableQuotesOnly;
   final PegarouteReceiveEstimatePolicy _receiveEstimatePolicy;
   final DateTime Function()? _quoteClock;
   final Future<CryptoCurrency?> Function(String? chain, String? token)? _currencyLookup;
@@ -99,7 +109,10 @@ class PegarouteExchangeProvider extends ExchangeProvider {
   @override
   bool get isAvailable => _apiClient.configuration.isValid;
 
-  bool get isExecutionAvailable => isAvailable && pegarouteNativeEthWallet(currentWallet?.call());
+  bool get isExecutionAvailable =>
+      isAvailable &&
+      _providerAllowed('instaswap') &&
+      pegarouteNativeEthWallet(currentWallet?.call());
 
   @override
   bool get isEnabled => isAvailable;
@@ -141,8 +154,11 @@ class PegarouteExchangeProvider extends ExchangeProvider {
           amount: '1',
         ),
       );
-      final minimums = quote.response.routes
-          .where((route) => _isQuoteRouteEligible(route, assets.first.chain))
+      final routes = quote.response.routes
+          .where((route) => _isQuoteRouteEligible(route, assets.first))
+          .toList();
+      if (routes.isEmpty || _quoteAssets(from, to) == null) return null;
+      final minimums = routes
           .map((route) => double.tryParse(route.minAmount ?? ''))
           .whereType<double>()
           .where((amount) => amount.isFinite && amount >= 0)
@@ -187,8 +203,9 @@ class PegarouteExchangeProvider extends ExchangeProvider {
         ),
       );
       var bestOutput = 0.0;
+      if (_quoteAssets(from, to) == null) return 0;
       for (final route in quote.response.routes) {
-        if (!_isQuoteRouteEligible(route, assets.first.chain)) continue;
+        if (!_isQuoteRouteEligible(route, assets.first)) continue;
         final output = double.tryParse(route.expectedOutput);
         if (output != null && output.isFinite && output > bestOutput) bestOutput = output;
       }
@@ -210,20 +227,28 @@ class PegarouteExchangeProvider extends ExchangeProvider {
     String? maxSourceAmount,
     PegarouteAddressIntent? intent,
     PegaroutePrivateValue? privateValue,
-  }) =>
-      PegarouteReceiveAmountEstimator(
-        apiClient: _apiClient,
-        policy: _receiveEstimatePolicy,
-        clock: _quoteClock,
-      ).estimate(
-        from: from,
-        to: to,
-        receiveAmount: receiveAmount,
-        initialSourceAmount: initialSourceAmount,
-        maxSourceAmount: maxSourceAmount,
-        intent: intent,
-        privateValue: privateValue,
-      );
+  }) async {
+    // Preserve the estimator API's typed metadata failures before eligibility.
+    _currencyMapper.map(from);
+    _currencyMapper.map(to);
+    final assets = _quoteAssets(from, to);
+    if (assets == null) throw const PegarouteUnavailableException();
+    return PegarouteReceiveAmountEstimator(
+      apiClient: _apiClient,
+      policy: _receiveEstimatePolicy,
+      clock: _quoteClock,
+      isRouteAllowed: (route) =>
+          _quoteAssets(from, to) != null && _isQuoteRouteEligible(route, assets.first),
+    ).estimate(
+      from: from,
+      to: to,
+      receiveAmount: receiveAmount,
+      initialSourceAmount: initialSourceAmount,
+      maxSourceAmount: maxSourceAmount,
+      intent: intent,
+      privateValue: privateValue,
+    );
+  }
 
   @override
   Future<Trade> createTrade({
@@ -271,11 +296,7 @@ class PegarouteExchangeProvider extends ExchangeProvider {
       // This increment supports Instaswap's ordinary deposit instructions.
       // Contract routes remain quote-only.
       final routes = quote.response.routes
-          .where((route) =>
-              route.provider == 'instaswap' &&
-              !(route.privateValue?.isEnabled ?? false) &&
-              route.memo == null &&
-              route.router == null)
+          .where((route) => _providerAllowed(route.provider) && _isNativeEthDepositRoute(route))
           .toList();
       if (routes.isEmpty) throw const PegarouteUnavailableException();
       final route = routes.first;
@@ -314,6 +335,7 @@ class PegarouteExchangeProvider extends ExchangeProvider {
         ),
       );
       checkWallet();
+      if (!_providerAllowed(route.provider)) throw const PegarouteUnavailableException();
       final result = await _apiClient.swap(preflight);
       try {
         checkWallet();
@@ -634,15 +656,31 @@ class PegarouteExchangeProvider extends ExchangeProvider {
       if (!PegarouteCurrencyMapper.quoteSourceChains.contains(source.chain)) {
         return null;
       }
+      if (!PegarouteProviderPreferences.providers.keys.any(_providerAllowed)) return null;
+      if (executableQuotesOnly &&
+          (!isExecutionAvailable || source.chain != 'ETH' || source.token != 'ETH')) {
+        return null;
+      }
       return [source, destination];
     } on PegarouteCurrencyException {
       return null;
     }
   }
 
-  bool _isQuoteRouteEligible(PegarouteRoute route, String sourceChain) {
-    if (route.privateValue?.isEnabled ?? false) return false;
-    return sourceChain != 'XMR' || route.memo == null;
+  bool _providerAllowed(String provider) =>
+      PegarouteProviderPreferences.providers.containsKey(provider) &&
+      (providerPreferences?.isEnabled(provider) ?? true);
+
+  static bool _isNativeEthDepositRoute(PegarouteRoute route) =>
+      route.provider == 'instaswap' &&
+      !(route.privateValue?.isEnabled ?? false) &&
+      route.memo == null &&
+      route.router == null;
+
+  bool _isQuoteRouteEligible(PegarouteRoute route, PegarouteAssetId source) {
+    if (!_providerAllowed(route.provider) || (route.privateValue?.isEnabled ?? false)) return false;
+    if (executableQuotesOnly && !_isNativeEthDepositRoute(route)) return false;
+    return source.chain != 'XMR' || route.memo == null;
   }
 
   void _logQuoteFailure(Object error) {
