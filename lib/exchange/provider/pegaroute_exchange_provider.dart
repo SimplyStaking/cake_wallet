@@ -9,6 +9,7 @@ import 'package:cake_wallet/exchange/provider/pegaroute/pegaroute_execution_bind
 import 'package:cake_wallet/exchange/provider/pegaroute/pegaroute_execution_handler_support.dart';
 import 'package:cake_wallet/exchange/provider/pegaroute/pegaroute_execution_lifecycle_store.dart';
 import 'package:cake_wallet/exchange/provider/pegaroute/pegaroute_native_eth.dart';
+import 'package:cake_wallet/exchange/provider/pegaroute/pegaroute_trusted_execution.dart';
 import 'package:cake_wallet/exchange/provider/pegaroute/pegaroute_provider_preferences.dart';
 import 'package:cake_wallet/exchange/trade_execution_dispatcher.dart';
 import 'package:cake_wallet/exchange/trade_execution_lifecycle.dart';
@@ -105,14 +106,14 @@ class PegarouteExchangeProvider extends ExchangeProvider {
   @override
   String get title => 'Pegaroute';
 
-  // Quote discovery covers catalog assets; funding currently supports native ETH deposits.
+  // Quote discovery covers catalog assets; funding uses supported Cake wallet operations.
   @override
   bool get isAvailable => _apiClient.configuration.isValid;
 
   bool get isExecutionAvailable =>
       isAvailable &&
-      _providerAllowed('instaswap') &&
-      pegarouteNativeEthWallet(currentWallet?.call());
+      PegarouteProviderPreferences.providers.keys.any(_providerAllowed) &&
+      pegarouteTrustedWallet(currentWallet?.call());
 
   @override
   bool get isEnabled => isAvailable;
@@ -261,16 +262,19 @@ class PegarouteExchangeProvider extends ExchangeProvider {
     final wallet = currentWallet?.call();
     if (!isExecutionAvailable ||
         wallet == null ||
-        source.chain != 'ETH' ||
-        source.token != 'ETH' ||
-        request.fromCurrency.decimals != 18 ||
+        !pegarouteTrustedSource(wallet, source) ||
         isFixedRateMode ||
         request.isFixedRate ||
         isSendAll ||
         request.toAddressExtraId.isNotEmpty) {
       throw const PegarouteUnavailableException();
     }
-    final context = PegarouteActiveWalletContext(currentWallet!);
+    // Resolve catalog aliases before POST so token identities survive the
+    // initial Trade save. Restored rows still require their original identity.
+    final fromCurrency = _persistableCurrency(request.fromCurrency, source);
+    final toCurrency = _persistableCurrency(request.toCurrency, destination);
+    final context =
+        PegarouteActiveWalletContext(currentWallet!, supportsWallet: pegarouteTrustedWallet);
     final before = context.snapshot(wallet);
     void checkWallet() {
       if (!before.matches(context.snapshot(wallet))) {
@@ -293,19 +297,19 @@ class PegarouteExchangeProvider extends ExchangeProvider {
         intent: intent,
       ));
       checkWallet();
-      // This increment supports Instaswap's ordinary deposit instructions.
-      // Contract routes remain quote-only.
       final routes = quote.response.routes
-          .where((route) => _providerAllowed(route.provider) && _isNativeEthDepositRoute(route))
-          .toList();
+          .where(
+              (route) => _providerAllowed(route.provider) && pegarouteTrustedQuote(source, route))
+          .toList()
+        ..sort((a, b) => _compareOutput(b.expectedOutput, a.expectedOutput));
       if (routes.isEmpty) throw const PegarouteUnavailableException();
       final route = routes.first;
       final trade = Trade(
         id: 'pegaroute-${const Uuid().v4()}',
         provider: description,
         providerName: route.provider,
-        from: request.fromCurrency,
-        to: request.toCurrency,
+        from: fromCurrency,
+        to: toCurrency,
         amount: request.fromAmount,
         receiveAmount: route.expectedOutput,
         senderAddress: intent.senderAddress,
@@ -340,14 +344,12 @@ class PegarouteExchangeProvider extends ExchangeProvider {
       try {
         checkWallet();
         final execution = _bindingValidator.bindSwapResponse(result: result);
-        if (!pegarouteNativeEthDeposit(execution) ||
-            execution.binding.providerDepositAddress == null ||
-            !RegExp(r'^0x[0-9a-fA-F]{40}$').hasMatch(execution.payload['to'] as String)) {
-          throw const PegarouteBindingException('Unsupported native ETH deposit instructions');
+        if (!pegarouteTrustedExecution(execution)) {
+          throw const PegarouteBindingException('Unsupported Pegaroute funding instructions');
         }
         trade.executionJson = execution.encode();
         trade.providerId = execution.binding.providerReferenceId;
-        trade.inputAddress = execution.binding.providerDepositAddress;
+        trade.inputAddress = execution.payload['to'] as String;
         trade.expiredAt = execution.binding.providerDepositExpiry;
         final validated = _bindingValidator.validatePersisted(trade: trade, wallet: wallet);
         pegarouteRequireUnexpiredFunding(validated, DateTime.now().toUtc());
@@ -355,7 +357,8 @@ class PegarouteExchangeProvider extends ExchangeProvider {
       } catch (error) {
         throw PegarouteSwapAttemptException(
             cause: error,
-            userMessage: 'The Pegaroute order was created, but its deposit could not be verified.');
+            userMessage:
+                'The Pegaroute order was created, but its funding instructions are unavailable.');
       }
     } finally {
       context.dispose();
@@ -439,7 +442,7 @@ class PegarouteExchangeProvider extends ExchangeProvider {
       final before = latest.toSqliteMap();
       final observedHash = observation.response.input.txHash;
       final lifecycleJson = latest.executionLifecycleJson;
-      if (pegarouteNativeEthDeposit(validated.execution) &&
+      if (pegarouteTrustedExecution(validated.execution) &&
           lifecycleJson != null &&
           observedHash != null) {
         var lifecycle = TradeExecutionLifecycle.fromJsonString(lifecycleJson);
@@ -658,7 +661,7 @@ class PegarouteExchangeProvider extends ExchangeProvider {
       }
       if (!PegarouteProviderPreferences.providers.keys.any(_providerAllowed)) return null;
       if (executableQuotesOnly &&
-          (!isExecutionAvailable || source.chain != 'ETH' || source.token != 'ETH')) {
+          (!isExecutionAvailable || !pegarouteTrustedSource(currentWallet?.call(), source))) {
         return null;
       }
       return [source, destination];
@@ -671,15 +674,46 @@ class PegarouteExchangeProvider extends ExchangeProvider {
       PegarouteProviderPreferences.providers.containsKey(provider) &&
       (providerPreferences?.isEnabled(provider) ?? true);
 
-  static bool _isNativeEthDepositRoute(PegarouteRoute route) =>
-      route.provider == 'instaswap' &&
-      !(route.privateValue?.isEnabled ?? false) &&
-      route.memo == null &&
-      route.router == null;
+  CryptoCurrency _persistableCurrency(CryptoCurrency currency, PegarouteAssetId asset) {
+    if (currency.runtimeType != CryptoCurrency || !asset.token.contains('-')) return currency;
+    final parts = asset.token.split('-');
+    final chainId = const {...pegarouteEvmChains, 'AVAX': 43114}[asset.chain];
+    if (chainId != null) {
+      return Erc20Token(
+        name: currency.fullName ?? currency.title,
+        symbol: parts.first,
+        contractAddress: parts.last,
+        decimal: currency.decimals,
+        tag: _reverseChainAlias(asset.chain),
+        chainId: chainId,
+        iconPath: currency.iconPath,
+      );
+    }
+    if (asset.chain == 'SOL') {
+      return SPLToken(
+        name: currency.fullName ?? currency.title,
+        symbol: parts.first,
+        mintAddress: parts.last,
+        mint: parts.last,
+        decimal: currency.decimals,
+        iconPath: currency.iconPath,
+      );
+    }
+    throw const PegarouteUnavailableException();
+  }
+
+  static int _compareOutput(String a, String b) {
+    final first = a.split('.');
+    final second = b.split('.');
+    final aPlaces = first.length == 1 ? 0 : first.last.length;
+    final bPlaces = second.length == 1 ? 0 : second.last.length;
+    return (BigInt.parse(first.join()) * BigInt.from(10).pow(bPlaces))
+        .compareTo(BigInt.parse(second.join()) * BigInt.from(10).pow(aPlaces));
+  }
 
   bool _isQuoteRouteEligible(PegarouteRoute route, PegarouteAssetId source) {
     if (!_providerAllowed(route.provider) || (route.privateValue?.isEnabled ?? false)) return false;
-    if (executableQuotesOnly && !_isNativeEthDepositRoute(route)) return false;
+    if (executableQuotesOnly && !pegarouteTrustedQuote(source, route)) return false;
     return source.chain != 'XMR' || route.memo == null;
   }
 

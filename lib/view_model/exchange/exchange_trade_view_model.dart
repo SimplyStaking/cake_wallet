@@ -14,7 +14,7 @@ import 'package:cake_wallet/exchange/provider/near_Intents_exchange_provider.dar
 import 'package:cake_wallet/exchange/provider/pegaroute_exchange_provider.dart';
 import 'package:cake_wallet/exchange/provider/pegaroute/pegaroute_execution_binding.dart';
 import 'package:cake_wallet/exchange/provider/pegaroute/pegaroute_execution_handler_support.dart';
-import 'package:cake_wallet/exchange/provider/pegaroute/pegaroute_native_eth.dart';
+import 'package:cake_wallet/exchange/provider/pegaroute/pegaroute_trusted_execution.dart';
 import 'package:cake_wallet/exchange/provider/swapsxyz_exchange_provider.dart';
 import 'package:cake_wallet/exchange/provider/swaptrade_exchange_provider.dart';
 import 'package:cake_wallet/exchange/provider/sideshift_exchange_provider.dart';
@@ -382,15 +382,15 @@ abstract class ExchangeTradeViewModelBase with Store {
         final validated = const PegarouteExecutionBindingValidator()
             .validatePersisted(trade: trade, wallet: wallet);
         pegarouteRequireUnexpiredFunding(validated, DateTime.now().toUtc());
-        if (!pegarouteNativeEthWallet(wallet) ||
-            !pegarouteNativeEthDeposit(validated.execution) ||
+        if (!pegarouteTrustedWallet(wallet) ||
+            !pegarouteTrustedExecution(validated.execution) ||
             trade.stateRaw != 'created' ||
             trade.txId?.isNotEmpty == true ||
             trade.executionLifecycleJson != null) {
-          return 'This Pegaroute order is not available for native ETH funding';
+          return 'This Pegaroute order is not available for funding';
         }
       } catch (_) {
-        return 'This Pegaroute order is not bound to the current Ethereum wallet';
+        return 'This Pegaroute order is not bound to the current wallet';
       }
     }
 

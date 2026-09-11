@@ -42,9 +42,7 @@ class PegarouteProvidersSettings extends StatelessWidget {
                             value: preferences.isEnabled(provider.key),
                             onChanged: (value) => preferences.setEnabled(provider.key, value),
                             leadingEndWidget: Text(
-                              provider.key == 'instaswap'
-                                  ? 'ETH · ${S.of(context).decentralized}'
-                                  : S.of(context).coming_soon_tag,
+                              'EVM · ${S.of(context).decentralized}',
                               style: Theme.of(context).textTheme.labelSmall,
                             ),
                           ),

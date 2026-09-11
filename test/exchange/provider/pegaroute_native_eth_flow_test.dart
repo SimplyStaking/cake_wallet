@@ -6,6 +6,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:cake_wallet/evm/evm.dart';
 import 'package:cake_wallet/exchange/provider/pegaroute/pegaroute_api.dart';
 import 'package:cake_wallet/exchange/provider/pegaroute/pegaroute_configuration.dart';
 import 'package:cake_wallet/exchange/provider/pegaroute/pegaroute_eth_execution_handler.dart';
@@ -13,6 +14,8 @@ import 'package:cake_wallet/exchange/provider/pegaroute/pegaroute_execution_bind
 import 'package:cake_wallet/exchange/provider/pegaroute/pegaroute_execution_lifecycle_store.dart';
 import 'package:cake_wallet/exchange/provider/pegaroute/pegaroute_native_eth.dart';
 import 'package:cake_wallet/exchange/provider/pegaroute/pegaroute_provider_preferences.dart';
+import 'package:cake_wallet/exchange/provider/pegaroute/pegaroute_trusted_execution.dart';
+import 'package:cake_wallet/exchange/provider/pegaroute/pegaroute_currency_mapper.dart';
 import 'package:cake_wallet/exchange/provider/pegaroute_exchange_provider.dart';
 import 'package:cake_wallet/exchange/trade.dart';
 import 'package:cake_wallet/exchange/trade_creation_failure.dart';
@@ -24,6 +27,10 @@ import 'package:cw_core/amount/money.dart';
 import 'package:cw_core/balance.dart';
 import 'package:cw_core/crypto_currency.dart';
 import 'package:cw_core/db/sqlite.dart' as sqlite;
+import 'package:cw_core/erc20_token.dart';
+import 'package:cw_core/spl_token.dart';
+import 'package:cw_core/output_info.dart';
+import 'package:cw_core/transaction_priority.dart';
 import 'package:cw_core/pending_transaction.dart';
 import 'package:cw_core/transaction_history.dart';
 import 'package:cw_core/transaction_info.dart';
@@ -40,10 +47,19 @@ import 'package:mobx/mobx.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 import 'package:web3dart/web3dart.dart' as web3;
+import 'package:web3dart/crypto.dart';
 
 // Public synthetic test key; never used with a node or real wallet.
 final _key = web3.EthPrivateKey.fromInt(BigInt.one);
 const _deposit = '0x0000000000000000000000000000000000000001';
+const _calldata = '0x12345678abcdef'; // Opaque synthetic instructions, not a router fixture.
+final _usdc = Erc20Token(
+    name: 'USD Coin',
+    symbol: 'USDC',
+    contractAddress: '0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48',
+    decimal: 6,
+    tag: 'ETH',
+    chainId: 1);
 const _payout =
     '85s6zfxGAkdCN21h566R8EFDSfThxCrFiEkhw3JEtaXN2DDfahABLXTjRj385Ro7om5saGWJG7iuE6EyW5MYcoz93DLvNqh';
 Map<String, dynamic> _fixture(String name) =>
@@ -91,36 +107,71 @@ class _Wallet
   WalletAddresses get walletAddresses => _Addresses();
   @override
   Future<PendingTransaction> createTransaction(Object credentials) async {
-    builds++;
     final value = credentials as EVMChainTransactionCredentials;
     final output = value.outputs.single;
-    expect(value.currency, CryptoCurrency.eth);
+    expect(value.currency, sourceCurrency);
     expect(output.sendAll, false);
     expect(output.memo, isNull);
     expect(output.address, _deposit);
+    return build(output.address, output.cryptoAmount, '0x');
+  }
+
+  CryptoCurrency sourceCurrency = CryptoCurrency.eth;
+  Future<PendingTransaction> build(String to, Money amount, String data) async {
+    builds++;
+    final typed = chainId == 1;
     final transaction = web3.Transaction(
-      to: web3.EthereumAddress.fromHex(mutation == 'to' ? _key.address.hex : output.address),
-      value: web3.EtherAmount.inWei(
-          output.cryptoAmount.amount + (mutation == 'amount' ? BigInt.one : BigInt.zero)),
-      data: Uint8List.fromList(mutation == 'data' ? [1] : []),
+      to: web3.EthereumAddress.fromHex(mutation == 'to' ? _key.address.hex : to),
+      value:
+          web3.EtherAmount.inWei(amount.amount + (mutation == 'amount' ? BigInt.one : BigInt.zero)),
+      data: Uint8List.fromList(mutation == 'data' ? [1] : hexToBytes(data)),
       nonce: 7,
       maxGas: 21000,
-      maxPriorityFeePerGas: web3.EtherAmount.inWei(BigInt.one),
-      maxFeePerGas: web3.EtherAmount.inWei(BigInt.from(2)),
+      gasPrice: typed ? null : web3.EtherAmount.inWei(BigInt.two),
+      maxPriorityFeePerGas: typed ? web3.EtherAmount.inWei(BigInt.one) : null,
+      maxFeePerGas: typed ? web3.EtherAmount.inWei(BigInt.from(2)) : null,
     );
     final signed = await web3.signTransactionRaw(
         transaction, mutation == 'signer' ? web3.EthPrivateKey.fromInt(BigInt.two) : _key,
-        chainId: mutation == 'chain' ? 56 : 1);
+        chainId: mutation == 'chain' ? 100 : chainId);
     await duringBuild?.call();
     pending = PendingEVMChainTransaction(
-      signedTransaction: web3.prependTransactionType(2, signed),
-      amount: output.cryptoAmount,
-      fee: Money(BigInt.from(42000), CryptoCurrency.eth),
+      signedTransaction: typed ? web3.prependTransactionType(2, signed) : signed,
+      amount: amount,
+      fee: Money(BigInt.from(42000), sourceCurrency),
       sendTransaction: () async {
         broadcasts++;
       },
     );
     return pending;
+  }
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => throw UnimplementedError();
+}
+
+class _Evm implements EVM {
+  _Evm(this.original);
+  final EVM original;
+  @override
+  Object createEVMTransactionCredentialsRaw(
+    List<OutputInfo> outputs, {
+    TransactionPriority? priority,
+    required CryptoCurrency currency,
+    required int feeRate,
+    bool useBlinkProtection = true,
+  }) =>
+      original.createEVMTransactionCredentialsRaw(outputs,
+          priority: priority,
+          currency: currency,
+          feeRate: feeRate,
+          useBlinkProtection: useBlinkProtection);
+  @override
+  Future<PendingTransaction> createRawCallDataTransaction(
+      WalletBase wallet, String to, String dataHex, Money valueWei, TransactionPriority? priority,
+      {bool useBlinkProtection = true, String? sourceTokenAddress, BigInt? sourceTokenAmount}) {
+    expect(useBlinkProtection, false);
+    return (wallet as _Wallet).build(to, valueWei, dataHex);
   }
 
   @override
@@ -153,6 +204,13 @@ void main() {
   late Map<String, dynamic> quote;
   late Map<String, dynamic> swap;
   late List<String> calls;
+  late EVM originalEvm;
+  CryptoCurrency receiveCurrency = CryptoCurrency.xmr;
+  String payoutAddress() => receiveCurrency == CryptoCurrency.xmr
+      ? _payout
+      : receiveCurrency == CryptoCurrency.usdcsol
+          ? '11111111111111111111111111111111'
+          : _key.address.hex;
   String? sourceHash;
   String? ackHash;
   String? ackId;
@@ -163,16 +221,14 @@ void main() {
   void Function()? afterQuote;
   void Function()? afterPost;
 
-  TradeRequest request(
-          {CryptoCurrency from = CryptoCurrency.eth, String? sender, String extra = ''}) =>
-      TradeRequest(
-          fromCurrency: from,
-          toCurrency: CryptoCurrency.xmr,
-          fromAmount: '1',
-          toAddress: _payout,
-          senderAddress: sender ?? _key.address.hex,
-          refundAddress: _key.address.hex,
-          toAddressExtraId: extra);
+  TradeRequest request({CryptoCurrency? from, String? sender, String extra = ''}) => TradeRequest(
+      fromCurrency: from ?? wallet.sourceCurrency,
+      toCurrency: receiveCurrency,
+      fromAmount: '1',
+      toAddress: payoutAddress(),
+      senderAddress: sender ?? _key.address.hex,
+      refundAddress: _key.address.hex,
+      toAddressExtraId: extra);
 
   Future<Trade> create() async {
     final trade =
@@ -185,10 +241,14 @@ void main() {
     SharedPreferences.setMockInitialValues({});
     preferences = PegarouteProviderPreferences(await SharedPreferences.getInstance());
     decentralizedOnly = false;
+    receiveCurrency = CryptoCurrency.xmr;
     database = await _database();
     wallet = _Wallet();
+    originalEvm = evm!;
+    evm = _Evm(originalEvm);
     active = Observable<WalletBase?>(wallet);
-    context = PegarouteActiveWalletContext(() => active.value);
+    context =
+        PegarouteActiveWalletContext(() => active.value, supportsWallet: pegarouteTrustedWallet);
     quote = _fixture('quote')..['expiresAt'] = '2099-01-01T00:00:00.000Z';
     swap = _fixture('swap');
     (swap['execution'] as Map)['value'] = {'display': '1', 'baseUnits': '1000000000000000000'};
@@ -205,7 +265,7 @@ void main() {
         calls.add('GET ${uri.path}');
         if (uri.path == '/quote') {
           if (uri.queryParameters.containsKey('destinationAddress')) {
-            expect(uri.queryParameters['destinationAddress'], _payout);
+            expect(uri.queryParameters['destinationAddress'], payoutAddress());
             expect(uri.queryParameters['senderAddress'], _key.address.hex);
           }
           afterQuote?.call();
@@ -229,17 +289,17 @@ void main() {
               'execution': swap['execution'],
               'provider': swap['provider'],
               'input': {
-                'chain': 'ETH',
-                'token': 'ETH',
+                'chain': const PegarouteCurrencyMapper().map(wallet.sourceCurrency).chain,
+                'token': const PegarouteCurrencyMapper().map(wallet.sourceCurrency).token,
                 'amount': '1',
                 'address': _key.address.hex,
                 'refundAddress': _key.address.hex,
                 if (sourceHash != null) 'txHash': sourceHash
               },
               'output': {
-                'chain': 'XMR',
-                'token': 'XMR',
-                'address': _payout,
+                'chain': const PegarouteCurrencyMapper().map(receiveCurrency).chain,
+                'token': const PegarouteCurrencyMapper().map(receiveCurrency).token,
+                'address': payoutAddress(),
                 if (completed) 'amount': '0.99',
                 if (completed) 'txHash': 'xmr-output-fixture'
               },
@@ -257,9 +317,9 @@ void main() {
         final value = jsonDecode(body);
         if (uri.path == '/swap') {
           expect(value['quoteId'], 'quote-fixture');
-          expect(value['routeProvider'], 'instaswap');
+          expect(value['routeProvider'], swap['route']['provider']);
           expect(value['senderAddress'], _key.address.hex);
-          expect(value['destinationAddress'], _payout);
+          expect(value['destinationAddress'], payoutAddress());
           expect(value.containsKey('private'), false);
           if (failCreation) throw const SocketException('Lost creation response');
           afterPost?.call();
@@ -284,23 +344,268 @@ void main() {
       providerPreferences: preferences,
       decentralizedOnly: () => decentralizedOnly,
       executableQuotesOnly: true,
+      currencyLookup: (chain, token) async =>
+          token == const PegarouteCurrencyMapper().map(wallet.sourceCurrency).token
+              ? wallet.sourceCurrency
+              : receiveCurrency,
     );
     dispatcher = RegistryTradeExecutionDispatcher([
-      PegarouteEthExecutionHandler(
-        nativeDepositsOnly: true,
+      PegarouteTrustedExecutionHandler(
         walletContext: context,
-        adapter:
-            PegarouteNativeEthWalletAdapter(priority: (_) => EVMChainTransactionPriority.medium),
-        lifecycleHandler: PegarouteExecutionLifecycleStore(),
-        onDepositCommitted: provider.notifyCommitted,
+        adapter: PegarouteTrustedWalletAdapter(priority: (_) => EVMChainTransactionPriority.medium),
+        lifecycle: PegarouteExecutionLifecycleStore(),
+        onSourceCommitted: provider.notifyCommitted,
       ),
     ]);
   });
 
   tearDown(() async {
     context.dispose();
+    evm = originalEvm;
     await database.close();
     sqlite.db = null;
+  });
+
+  void contractRoute(String routeProvider) {
+    receiveCurrency = _usdc;
+    final route = Map<String, dynamic>.from(quote['routes'][0] as Map)
+      ..['provider'] = routeProvider;
+    if (routeProvider != 'openocean') {
+      route['router'] = _deposit;
+      route['memo'] = '=:BTC:trusted-payout:123';
+      route['expiry'] = 4070908800;
+    }
+    quote['routes'] = [route];
+    swap['route'] = {for (final key in (swap['route'] as Map).keys) key: route[key]};
+    swap['provider'] = {'name': routeProvider, 'referenceId': null, 'details': {}};
+    swap['execution'] = {
+      'family': 'evm',
+      'mode': 'contract-call',
+      'chainId': wallet.chainId,
+      'to': _deposit,
+      'data': _calldata,
+      'memo': route['memo'],
+      'value': {'display': '1', 'baseUnits': '1000000000000000000'},
+      'gasLimit': null,
+      'approval': null,
+      'transferAmount': null,
+    };
+  }
+
+  for (final chain in {
+    1: CryptoCurrency.eth,
+    56: CryptoCurrency.bnb,
+    8453: CryptoCurrency.baseEth,
+    42161: CryptoCurrency.arbEth,
+    137: CryptoCurrency.maticpoly,
+  }.entries) {
+    for (final routeProvider in ['instaswap', 'thorchain', 'maya', 'openocean']) {
+      test('$routeProvider single native transaction on chain ${chain.key}, restored and committed',
+          () async {
+        runInAction(() => wallet.selectedChain.value = chain.key);
+        wallet.sourceCurrency = chain.value;
+        swap['execution']['chainId'] = chain.key;
+        if (routeProvider != 'instaswap') contractRoute(routeProvider);
+        final trade = await create();
+        final restored = (await Trade.getByTradeId(trade.id))!;
+        final pending = (await dispatcher.prepare(wallet: wallet, trade: restored))!;
+        final evidence = inspectPegarouteEvm(pending.hex, context.snapshot(wallet));
+        expect(evidence.chainId, chain.key);
+        expect(evidence.data, routeProvider == 'instaswap' ? isNull : _calldata);
+        expect(evidence.valueBaseUnits, '1000000000000000000');
+        await pending.commit();
+        final stored = (await Trade.getByTradeId(trade.id))!;
+        expect(stored.txId, pending.id);
+        expect(TradeExecutionLifecycle.fromJsonString(stored.executionLifecycleJson!).callbackState,
+            TradeExecutionCallbackState.accepted);
+        await expectLater(pending.commit(), throwsA(isA<PegarouteBindingException>()));
+        expect(wallet.broadcasts, 1);
+      });
+    }
+  }
+
+  for (final chain in [1, 56]) {
+    for (final mutation in ['amount', 'to', 'data', 'chain', 'signer']) {
+      test(
+          'contract $mutation mismatch in ${chain == 1 ? 'type-2' : 'legacy'} signed bytes rejects',
+          () async {
+        runInAction(() => wallet.selectedChain.value = chain);
+        wallet.sourceCurrency = chain == 1 ? CryptoCurrency.eth : CryptoCurrency.bnb;
+        contractRoute('openocean');
+        final trade = await create();
+        wallet.mutation = mutation;
+        expect(await dispatcher.prepare(wallet: wallet, trade: trade), isNull);
+        expect(wallet.broadcasts, 0);
+      });
+    }
+  }
+
+  for (final token in [
+    _usdc,
+    Erc20Token(
+        name: 'USD Coin',
+        symbol: 'USDC',
+        decimal: 18,
+        chainId: 56,
+        tag: 'BSC',
+        contractAddress: '0x8ac76a51cc950d9822d68b83fe1ad97b32cd580d'),
+    Erc20Token(
+        name: 'USD Coin',
+        symbol: 'USDC',
+        decimal: 6,
+        chainId: 8453,
+        tag: 'BASE',
+        contractAddress: '0x833589fcd6edb6e08f4c7c32d4f71b54bda02913'),
+    Erc20Token(
+        name: 'USD Coin',
+        symbol: 'USDC',
+        decimal: 6,
+        chainId: 42161,
+        tag: 'ARB',
+        contractAddress: '0xaf88d065e77c8cc2239327c5edb3a432268e5831'),
+    Erc20Token(
+        name: 'USD Coin',
+        symbol: 'USDC',
+        decimal: 6,
+        chainId: 137,
+        tag: 'POL',
+        contractAddress: '0x3c499c542cef5e3811e1192ce70d8cc03d5c3359'),
+  ]) {
+    test('USDC deposit on ${token.chainId} builds one exact ERC20 transfer with zero native value',
+        () async {
+      wallet.sourceCurrency = token;
+      runInAction(() => wallet.selectedChain.value = token.chainId!);
+      final units = BigInt.from(10).pow(token.decimals);
+      swap['execution'] = {
+        'family': 'evm',
+        'mode': 'erc20-transfer',
+        'chainId': token.chainId,
+        'to': _deposit,
+        'value': null,
+        'transferAmount': {'display': '1', 'baseUnits': units.toString()},
+        'data': null,
+        'gasLimit': null,
+        'memo': null,
+        'approval': null,
+      };
+      final trade = await create();
+      final restored = (await Trade.getByTradeId(trade.id))!;
+      expect(restored.from, isA<Erc20Token>());
+      final pending = (await dispatcher.prepare(wallet: wallet, trade: restored))!;
+      final evidence = inspectPegarouteEvm(pending.hex, context.snapshot(wallet));
+      expect(evidence.to, token.contractAddress);
+      expect(evidence.valueBaseUnits, '0');
+      expect(
+          evidence.data,
+          '0xa9059cbb${_deposit.substring(2).padLeft(64, '0')}'
+          '${units.toRadixString(16).padLeft(64, '0')}');
+      expect(pending.amount.amount, units);
+      expect(pending.amount.currency.decimals, token.decimals);
+      expect(pending.amount.currency.tag, token.tag);
+      await pending.commit();
+      expect(wallet.builds, 1);
+      expect(wallet.broadcasts, 1);
+    });
+  }
+
+  test('trusted handler enforces supplied contract expiry at the funding boundary', () async {
+    contractRoute('thorchain');
+    final trade = await create();
+    final validated =
+        const PegarouteExecutionBindingValidator().validatePersisted(trade: trade, wallet: wallet);
+    expect(
+        () => dispatcher.handlers.single
+            .validateForExecution(execution: validated, now: DateTime.utc(2100)),
+        throwsA(isA<PegarouteBindingException>()));
+    expect(wallet.builds, 0);
+  });
+
+  for (final destination in [CryptoCurrency.usdc, CryptoCurrency.usdcsol]) {
+    test(
+        'catalog ${destination.name} destination alias retains identity through creation and restore',
+        () async {
+      if (destination == CryptoCurrency.usdc) contractRoute('openocean');
+      receiveCurrency = destination;
+      final trade = await create();
+      final restored = (await Trade.getByTradeId(trade.id))!;
+      expect(restored.to, destination == CryptoCurrency.usdc ? isA<Erc20Token>() : isA<SPLToken>());
+      final pending = (await dispatcher.prepare(wallet: wallet, trade: restored))!;
+      await pending.commit();
+      expect(wallet.broadcasts, 1);
+    });
+  }
+
+  test('catalog USDC source alias is resolved before persisting its deposit order', () async {
+    wallet.sourceCurrency = CryptoCurrency.usdc;
+    swap['execution']['mode'] = 'erc20-transfer';
+    swap['execution']['value'] = null;
+    swap['execution']['transferAmount'] = {'display': '1', 'baseUnits': '1000000'};
+    final trade = await create();
+    expect(trade.from, isA<Erc20Token>());
+    final restored = (await Trade.getByTradeId(trade.id))!;
+    expect((restored.from as Erc20Token).contractAddress, _usdc.contractAddress);
+    final pending = (await dispatcher.prepare(wallet: wallet, trade: restored))!;
+    await pending.commit();
+    expect(wallet.broadcasts, 1);
+  });
+
+  test('restored native orders cannot acquire extra transfer or approval instructions', () async {
+    contractRoute('openocean');
+    final trade = await create();
+    for (final extra in ['approval', 'transferAmount']) {
+      final value = jsonDecode(trade.executionJson!) as Map<String, dynamic>;
+      if (extra == 'approval') {
+        value['payload'][extra] = {
+          'spender': _deposit,
+          'tokenAddress': _usdc.contractAddress,
+          'amount': {'display': '1', 'baseUnits': '1000000'},
+        };
+        expect(dispatcher.supports(TradeExecution.fromJson(value)), false);
+      } else {
+        value['payload'][extra] = {'display': '1', 'baseUnits': '1'};
+        expect(() => TradeExecution.fromJson(value), throwsFormatException);
+      }
+    }
+    expect(wallet.builds, 0);
+  });
+
+  test('creation chooses the highest enabled executable quote, independent of response order',
+      () async {
+    final deposit = quote['routes'][0];
+    contractRoute('openocean');
+    final dex = {...(quote['routes'][0] as Map<String, dynamic>), 'expectedOutput': '1.01'};
+    swap['route']['expectedOutput'] = '1.01';
+    quote['routes'] = [deposit, dex];
+    final trade = await create();
+    expect(trade.providerName, 'openocean');
+    expect(trade.receiveAmount, '1.01');
+  });
+
+  test('DEX disabled during the quote never reaches POST', () async {
+    contractRoute('openocean');
+    afterQuote = () => preferences.setEnabled('openocean', false);
+    await expectLater(create(), throwsA(isA<PegarouteUnavailableException>()));
+    expect(calls, ['GET /quote']);
+  });
+
+  test('approval instructions after creation block fallback without signing', () async {
+    contractRoute('openocean');
+    swap['execution']['approval'] = {
+      'spender': _deposit,
+      'tokenAddress': _usdc.contractAddress,
+      'amount': {'display': '1', 'baseUnits': '1000000'},
+    };
+    await expectLater(create(), throwsA(isA<PegarouteSwapAttemptException>()));
+    expect(calls, ['GET /quote', 'POST /swap']);
+    expect(wallet.builds, 0);
+  });
+
+  test('expired contract quote blocks POST and wallet use', () async {
+    contractRoute('thorchain');
+    quote['routes'][0]['expiry'] = 1;
+    await expectLater(create(), throwsA(isA<PegarouteBindingException>()));
+    expect(calls, ['GET /quote']);
+    expect(wallet.builds, 0);
   });
 
   test('fresh ETH -> XMR quote, nullable-expiry order, persisted deposit, callback and status',
@@ -490,8 +795,7 @@ void main() {
     expect(calls.where((call) => call.startsWith('POST')), isEmpty);
   });
 
-  test('exchange comparison uses the executable deposit quote instead of a better DEX quote',
-      () async {
+  test('exchange comparison includes enabled executable DEX calls', () async {
     final deposit = Map<String, dynamic>.from(quote['routes'][0] as Map)
       ..['expectedOutput'] = '11.66'
       ..['minAmount'] = '0.004';
@@ -507,7 +811,7 @@ void main() {
           isFixedRateMode: false,
           isReceiveAmount: false,
         ),
-        closeTo(11.66 / 0.005, 0.000001));
+        closeTo(12.33 / 0.005, 0.000001));
     expect(
         (await provider.fetchLimits(
           from: CryptoCurrency.eth,
@@ -515,9 +819,9 @@ void main() {
           isFixedRateMode: false,
         ))!
             .min,
-        0.004);
+        0.0001);
     await preferences.setEnabled('instaswap', false);
-    expect(provider.isExecutionAvailable, false);
+    expect(provider.isExecutionAvailable, true);
     expect(
         await provider.fetchRate(
           from: CryptoCurrency.eth,
@@ -526,8 +830,8 @@ void main() {
           isFixedRateMode: false,
           isReceiveAmount: false,
         ),
-        0);
-    expect(calls, ['GET /quote', 'GET /quote']);
+        closeTo(12.33 / 0.005, 0.000001));
+    expect(calls, ['GET /quote', 'GET /quote', 'GET /quote']);
     expect(wallet.builds, 0);
   });
 
@@ -535,7 +839,7 @@ void main() {
     decentralizedOnly = true;
     await preferences.setEnabled('instaswap', false);
     await expectLater(create(), throwsA(isA<PegarouteUnavailableException>()));
-    expect(calls, isEmpty);
+    expect(calls, ['GET /quote']);
     await preferences.setEnabled('instaswap', true);
     calls.clear();
     afterQuote = () => preferences.setEnabled('instaswap', false);
@@ -552,17 +856,23 @@ void main() {
     expect(wallet.builds, 0);
   });
 
-  test('a quote-only token source does not enter executable exchange comparison', () async {
+  test('token source comparison admits deposits but excludes approval-dependent DEX calls',
+      () async {
+    final deposit = quote['routes'][0] as Map<String, dynamic>;
+    quote['routes'] = [
+      {...deposit, 'provider': 'openocean', 'expectedOutput': '200'},
+      deposit
+    ];
     expect(
         await provider.fetchRate(
-          from: CryptoCurrency.usdc,
+          from: _usdc,
           to: CryptoCurrency.xmr,
           amount: 100,
           isFixedRateMode: false,
           isReceiveAmount: false,
         ),
-        0);
-    expect(calls, isEmpty);
+        0.99 / 100);
+    expect(calls, ['GET /quote']);
   });
 
   for (final mutation in ['amount', 'address', 'memo', 'approval', 'call']) {

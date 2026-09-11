@@ -734,6 +734,9 @@ final class PegarouteExecutionBindingValidator {
     if (inbound is String && inbound.isNotEmpty) return inbound;
     if (providerDeposit != null && providerDeposit.isNotEmpty) return providerDeposit;
     if (router is String && router.isNotEmpty) return router;
+    // OpenOcean supplies its concrete target at creation. Under the approved
+    // trusted-provider model, bind that authenticated target with its calldata.
+    if (route['provider'] == 'openocean' && execution.family == 'evm') return execution.to;
     return null;
   }
 
