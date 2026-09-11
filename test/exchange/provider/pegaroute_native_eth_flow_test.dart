@@ -45,6 +45,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as very_insecure_http_do_not_use;
 import 'package:mobx/mobx.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:cake_wallet/exchange/provider/pegaroute/pegaroute_approval.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 import 'package:web3dart/web3dart.dart' as web3;
 import 'package:web3dart/crypto.dart';
@@ -53,10 +54,24 @@ import 'package:web3dart/crypto.dart';
 final _key = web3.EthPrivateKey.fromInt(BigInt.one);
 const _deposit = '0x0000000000000000000000000000000000000001';
 const _calldata = '0x12345678abcdef'; // Opaque synthetic instructions, not a router fixture.
+const _nativeCurrency = {
+  1: CryptoCurrency.eth,
+  56: CryptoCurrency.bnb,
+  8453: CryptoCurrency.baseEth,
+  42161: CryptoCurrency.arbEth,
+  137: CryptoCurrency.maticpoly
+};
 final _usdc = Erc20Token(
     name: 'USD Coin',
     symbol: 'USDC',
     contractAddress: '0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48',
+    decimal: 6,
+    tag: 'ETH',
+    chainId: 1);
+final _usdt = Erc20Token(
+    name: 'Tether',
+    symbol: 'USDT',
+    contractAddress: '0xdac17f958d2ee523a2206206994597c13d831ec7',
     decimal: 6,
     tag: 'ETH',
     chainId: 1);
@@ -93,9 +108,11 @@ class _Wallet
   final selectedChain = Observable(1);
   int builds = 0;
   int broadcasts = 0;
+  final signedNonces = <int>[];
   String? mutation;
   bool hardware = false;
   Future<void> Function()? duringBuild;
+  Future<void> Function()? duringBroadcast;
   late PendingEVMChainTransaction pending;
   @override
   int get chainId => selectedChain.value;
@@ -120,12 +137,13 @@ class _Wallet
   Future<PendingTransaction> build(String to, Money amount, String data) async {
     builds++;
     final typed = chainId == 1;
+    signedNonces.add(7 + broadcasts);
     final transaction = web3.Transaction(
       to: web3.EthereumAddress.fromHex(mutation == 'to' ? _key.address.hex : to),
       value:
           web3.EtherAmount.inWei(amount.amount + (mutation == 'amount' ? BigInt.one : BigInt.zero)),
       data: Uint8List.fromList(mutation == 'data' ? [1] : hexToBytes(data)),
-      nonce: 7,
+      nonce: 7 + broadcasts,
       maxGas: 21000,
       gasPrice: typed ? null : web3.EtherAmount.inWei(BigInt.two),
       maxPriorityFeePerGas: typed ? web3.EtherAmount.inWei(BigInt.one) : null,
@@ -138,9 +156,10 @@ class _Wallet
     pending = PendingEVMChainTransaction(
       signedTransaction: typed ? web3.prependTransactionType(2, signed) : signed,
       amount: amount,
-      fee: Money(BigInt.from(42000), sourceCurrency),
+      fee: Money(BigInt.from(42000), _nativeCurrency[chainId]!),
       sendTransaction: () async {
         broadcasts++;
+        await duringBroadcast?.call();
       },
     );
     return pending;
@@ -154,11 +173,41 @@ class _Evm implements EVM {
   _Evm(this.original);
   final EVM original;
   BigInt? allowance = BigInt.zero;
+  bool? receipt = true;
+  final approvalAmounts = <BigInt>[];
+  void Function()? duringReceipt;
   @override
   Future<BigInt?> getAllowance(WalletBase wallet, String tokenContract, String spender) async {
-    expect(tokenContract, _usdc.contractAddress);
+    expect(
+        tokenContract,
+        (wallet as _Wallet).sourceCurrency is Erc20Token
+            ? (wallet.sourceCurrency as Erc20Token).contractAddress
+            : _usdc.contractAddress);
     expect(spender, _deposit);
     return allowance;
+  }
+
+  @override
+  Future<bool?> getTransactionReceipt(WalletBase wallet, String txHash) async {
+    duringReceipt?.call();
+    return receipt;
+  }
+
+  @override
+  Future<PendingTransaction> createTokenApproval(
+      WalletBase wallet, Money amount, String spender, TransactionPriority? priority,
+      {bool useBlinkProtection = true}) async {
+    expect(useBlinkProtection, false);
+    approvalAmounts.add(amount.amount);
+    final current = wallet as _Wallet;
+    final data = '0x095ea7b3${spender.substring(2).padLeft(64, '0')}'
+        '${amount.amount.toRadixString(16).padLeft(64, '0')}';
+    final pending = await current.build(
+        (amount.currency as Erc20Token).contractAddress, Money.zero(CryptoCurrency.eth), data);
+    current.duringBroadcast = () async {
+      allowance = amount.amount;
+    };
+    return pending;
   }
 
   @override
@@ -363,6 +412,7 @@ void main() {
         adapter: PegarouteTrustedWalletAdapter(priority: (_) => EVMChainTransactionPriority.medium),
         lifecycle: PegarouteExecutionLifecycleStore(),
         onSourceCommitted: provider.notifyCommitted,
+        approvalFlow: const PegarouteApprovalFlow(pollAttempts: 1),
       ),
     ]);
   });
@@ -397,6 +447,20 @@ void main() {
       'gasLimit': null,
       'approval': null,
       'transferAmount': null,
+    };
+  }
+
+  void approvalRoute({Erc20Token? token}) {
+    final source = token ?? _usdc;
+    runInAction(() => wallet.selectedChain.value = source.chainId!);
+    wallet.sourceCurrency = source;
+    contractRoute('openocean');
+    receiveCurrency = _nativeCurrency[source.chainId]!;
+    swap['execution']['value'] = {'display': '0', 'baseUnits': '0'};
+    swap['execution']['approval'] = {
+      'tokenAddress': source.contractAddress,
+      'spender': _deposit,
+      'amount': {'display': '1', 'baseUnits': BigInt.from(10).pow(source.decimals).toString()}
     };
   }
 
@@ -513,6 +577,23 @@ void main() {
       await pending.commit();
       expect(wallet.builds, 1);
       expect(wallet.broadcasts, 1);
+    });
+    test('USDC approval and final swap on ${token.chainId} use exact units and native gas',
+        () async {
+      approvalRoute(token: token);
+      final trade = await create();
+      final approval = (await dispatcher.prepare(wallet: wallet, trade: trade))!;
+      expect(tradeExecutionPrerequisiteDescription(approval), startsWith('Approve'));
+      expect(approval.amount.amount, BigInt.from(10).pow(token.decimals));
+      expect(approval.fee.currency, _nativeCurrency[token.chainId]);
+      await approval.commit();
+      final payment =
+          (await dispatcher.prepare(wallet: wallet, trade: (await Trade.getByTradeId(trade.id))!))!;
+      expect(tradeExecutionPrerequisiteDescription(payment), isNull);
+      await payment.commit();
+      expect(wallet.signedNonces, [7, 8]);
+      expect(wallet.broadcasts, 2);
+      expect((await Trade.getByTradeId(trade.id))!.txId, payment.id);
     });
   }
 
@@ -910,7 +991,8 @@ void main() {
       expect(wallet.broadcasts, 1);
     });
   }
-  test('insufficient approval allowance after creation blocks fallback and signing', () async {
+  test('approval-required order is saved before preparing a separately confirmed approval',
+      () async {
     wallet.sourceCurrency = _usdc;
     contractRoute('openocean');
     receiveCurrency = CryptoCurrency.eth;
@@ -920,9 +1002,170 @@ void main() {
       'spender': _deposit,
       'amount': {'display': '1', 'baseUnits': '1000000'},
     };
-    await expectLater(create(), throwsA(isA<PegarouteSwapAttemptException>()));
+    final trade = await create();
     expect(calls, ['GET /quote', 'POST /swap']);
     expect(wallet.builds, 0);
+    final approval = (await dispatcher.prepare(wallet: wallet, trade: trade))!;
+    expect(tradeExecutionPrerequisiteDescription(approval), contains('Approve'));
+    expect(wallet.broadcasts, 0);
+    await approval.commit();
+    final row = (await Trade.getByTradeId(trade.id))!;
+    expect(row.txId, isNull);
+    expect(row.executionLifecycleJson, isNull);
+    expect(calls, ['GET /quote', 'POST /swap']);
+    final swapPending = (await dispatcher.prepare(wallet: wallet, trade: row))!;
+    expect(tradeExecutionPrerequisiteDescription(swapPending), isNull);
+    expect(swapPending.id, isNot(approval.id));
+    await swapPending.commit();
+    expect((await Trade.getByTradeId(trade.id))!.txId, swapPending.id);
+    expect(wallet.broadcasts, 2);
+    expect(
+        calls.where((call) => call.startsWith('POST') && call.endsWith('/txhash')), hasLength(1));
+  });
+
+  test('USDT reset, approval and final swap each confirm separately across SQLite restoration',
+      () async {
+    approvalRoute(token: _usdt);
+    final api = evm as _Evm;
+    api.allowance = BigInt.from(10);
+    final trade = await create();
+    final reset = (await dispatcher.prepare(wallet: wallet, trade: trade))!;
+    expect(tradeExecutionPrerequisiteDescription(reset), contains('Reset USDT'));
+    await reset.commit();
+    expect(api.allowance, BigInt.zero);
+    final afterReset = (await Trade.getByTradeId(trade.id))!;
+    expect(afterReset.txId, isNull);
+    final approval = (await dispatcher.prepare(wallet: wallet, trade: afterReset))!;
+    expect(tradeExecutionPrerequisiteDescription(approval), contains('Approve'));
+    expect(wallet.broadcasts, 1);
+    await approval.commit();
+    final afterApproval = (await Trade.getByTradeId(trade.id))!;
+    expect(afterApproval.txId, isNull);
+    final payment = (await dispatcher.prepare(wallet: wallet, trade: afterApproval))!;
+    expect(tradeExecutionPrerequisiteDescription(payment), isNull);
+    await payment.commit();
+    expect(api.approvalAmounts, [BigInt.zero, BigInt.from(1000000)]);
+    expect(wallet.signedNonces, [7, 8, 9]);
+    expect(wallet.broadcasts, 3);
+    final progress = await database.query('PegarouteApproval');
+    expect(progress.map((row) => row['state']), everyElement('confirmed'));
+    expect(progress.map((row) => row['transactionHash']), containsAll([reset.id, approval.id]));
+    expect((await Trade.getByTradeId(trade.id))!.txId, payment.id);
+  });
+
+  test('USDT with zero allowance skips the reset', () async {
+    approvalRoute(token: _usdt);
+    final trade = await create();
+    final approval = (await dispatcher.prepare(wallet: wallet, trade: trade))!;
+    expect(tradeExecutionPrerequisiteDescription(approval), startsWith('Approve'));
+    expect((evm as _Evm).approvalAmounts, [BigInt.from(1000000)]);
+    expect(wallet.broadcasts, 0);
+  });
+
+  test('pending approval survives timeout and cannot be duplicated, even with sufficient allowance',
+      () async {
+    approvalRoute();
+    final api = evm as _Evm;
+    api.receipt = null;
+    final trade = await create();
+    final first = (await dispatcher.prepare(wallet: wallet, trade: trade))!;
+    final duplicate = (await dispatcher.prepare(wallet: wallet, trade: trade))!;
+    await expectLater(first.commit(), throwsA(isA<TradeExecutionPrerequisiteException>()));
+    await expectLater(duplicate.commit(), throwsA(isA<TradeExecutionPrerequisiteException>()));
+    final restored = (await Trade.getByTradeId(trade.id))!;
+    await expectLater(dispatcher.prepare(wallet: wallet, trade: restored),
+        throwsA(isA<TradeExecutionPrerequisiteException>()));
+    expect(wallet.broadcasts, 1);
+    expect(restored.txId, isNull);
+    expect(restored.executionLifecycleJson, isNull);
+    api.receipt = true;
+    final payment = (await dispatcher.prepare(wallet: wallet, trade: restored))!;
+    expect(tradeExecutionPrerequisiteDescription(payment), isNull);
+    expect(wallet.broadcasts, 1);
+    await payment.commit();
+    expect(wallet.broadcasts, 2);
+    expect(api.approvalAmounts, hasLength(2)); // Two prepared, only one broadcast.
+  });
+
+  test('lost approval broadcast response is reconciled from its saved hash', () async {
+    approvalRoute();
+    final trade = await create();
+    final approval = (await dispatcher.prepare(wallet: wallet, trade: trade))!;
+    wallet.duringBroadcast = () async {
+      (evm as _Evm).allowance = BigInt.from(1000000);
+      throw const SocketException('Lost broadcast response');
+    };
+    await expectLater(approval.commit(), throwsA(isA<TradeExecutionPrerequisiteException>()));
+    expect((await database.query('PegarouteApproval')).single['transactionHash'], approval.id);
+    wallet.duringBroadcast = null;
+    final payment =
+        (await dispatcher.prepare(wallet: wallet, trade: (await Trade.getByTradeId(trade.id))!))!;
+    expect(tradeExecutionPrerequisiteDescription(payment), isNull);
+    expect(wallet.broadcasts, 1);
+    await payment.commit();
+    expect(wallet.broadcasts, 2);
+  });
+
+  test('failed approval receipt never funds the swap or automatically repeats approval', () async {
+    approvalRoute();
+    (evm as _Evm).receipt = false;
+    final trade = await create();
+    final approval = (await dispatcher.prepare(wallet: wallet, trade: trade))!;
+    await expectLater(approval.commit(), throwsA(isA<TradeExecutionPrerequisiteException>()));
+    final restored = (await Trade.getByTradeId(trade.id))!;
+    await expectLater(dispatcher.prepare(wallet: wallet, trade: restored),
+        throwsA(isA<TradeExecutionPrerequisiteException>()));
+    expect(restored.txId, isNull);
+    expect(wallet.broadcasts, 1);
+    expect((await database.query('PegarouteApproval')).single['state'], 'failed');
+    expect(calls, ['GET /quote', 'POST /swap']);
+  });
+
+  test('approval persistence failure prevents broadcast', () async {
+    approvalRoute();
+    final trade = await create();
+    final approval = (await dispatcher.prepare(wallet: wallet, trade: trade))!;
+    await database.execute("CREATE TRIGGER reject_approval BEFORE INSERT ON PegarouteApproval "
+        "BEGIN SELECT RAISE(ABORT, 'fixture unavailable'); END");
+    await expectLater(approval.commit(), throwsA(anything));
+    expect(wallet.broadcasts, 0);
+  });
+
+  for (final mutation in ['to', 'data', 'amount', 'signer', 'chain']) {
+    test('signed approval $mutation mismatch rejects before broadcasting', () async {
+      approvalRoute();
+      final trade = await create();
+      wallet.mutation = mutation;
+      expect(await dispatcher.prepare(wallet: wallet, trade: trade), isNull);
+      expect(wallet.broadcasts, 0);
+      expect(await database.query('PegarouteApproval'), isEmpty);
+    });
+  }
+
+  test('wallet switch while waiting for approval stops progression to swap', () async {
+    approvalRoute();
+    final trade = await create();
+    final approval = (await dispatcher.prepare(wallet: wallet, trade: trade))!;
+    (evm as _Evm).duringReceipt = () => runInAction(() => active.value = _Wallet());
+    await expectLater(approval.commit(), throwsA(isA<PegarouteBindingException>()));
+    expect(wallet.builds, 1);
+    expect(wallet.broadcasts, 1);
+    expect((await Trade.getByTradeId(trade.id))!.txId, isNull);
+  });
+
+  test('an older prepared swap cannot race a pending approval', () async {
+    approvalRoute();
+    final api = evm as _Evm;
+    api.allowance = BigInt.from(1000000);
+    final trade = await create();
+    final payment = (await dispatcher.prepare(wallet: wallet, trade: trade))!;
+    api.allowance = BigInt.zero;
+    final approval = (await dispatcher.prepare(wallet: wallet, trade: trade))!;
+    api.receipt = null;
+    await expectLater(approval.commit(), throwsA(isA<TradeExecutionPrerequisiteException>()));
+    await expectLater(payment.commit(), throwsA(isA<TradeExecutionPrerequisiteException>()));
+    expect(wallet.broadcasts, 1);
+    expect((await Trade.getByTradeId(trade.id))!.txId, isNull);
   });
 
   for (final mutation in ['amount', 'address', 'memo', 'approval', 'call']) {

@@ -8,7 +8,7 @@ confirmation screen, dispatcher and SQLite lifecycle. Supported execution shapes
 | Native asset on Ethereum, BSC, Base, Arbitrum or Polygon | Native transfer | Instaswap; compatible authenticated OpenOcean instructions |
 | Native asset on those networks | Single contract call | THORChain, Maya, OpenOcean |
 | Mapped ERC20 on those networks | One standard token transfer, zero native value | Instaswap |
-| Mapped ERC20 on those networks | Single contract call, zero native value, no new approval needed | THORChain, Maya, OpenOcean |
+| Mapped ERC20 on those networks | Single contract call, zero native value; separately confirmed approval/reset when required | THORChain, Maya, OpenOcean |
 | BTC, BCH, LTC, DOGE | Exact deposit with optional UTF-8 OP_RETURN memo; ordinary non-MWEB path | Compatible Instaswap, THORChain, Maya instructions |
 | XMR | One memo-free deposit with one transaction ID | Compatible deposit instructions |
 | Native SOL and mapped SPL | Memo-free deposit; SPL destination is an owner address | Compatible deposit instructions; SPL via Instaswap |
@@ -58,11 +58,11 @@ OpenOcean toggles are saved locally; automatic selection respects them.
 All four settings retain the saved provider toggles and centralized/decentralized
 labels. Exchange comparison and fresh creation use the same preferences and
 execution-shape eligibility. Native and token inputs can use enabled DEX routes
-when Instaswap is disabled. Token calls with approval metadata require an already
-sufficient allowance for the exact token/spender; the check runs after receiving
-execution instructions and again during preparation. If insufficient or unknown,
-creation stops without fallback or signing. Quotes cannot guarantee allowance
-readiness when the spender is supplied only at creation.
+when Instaswap is disabled. Token calls with approval metadata are saved as bound
+orders before allowance checks. Preparation checks the exact token/spender and
+either prepares an approval or proceeds directly to the swap when allowance is
+sufficient. Unknown allowance stops preparation without broadcasting. Quotes
+cannot guarantee allowance readiness when the spender first arrives at creation.
 The fresh creation quote may change the estimate; its chosen provider and output
 are carried through the Trade and normal confirmation UI.
 
@@ -110,6 +110,28 @@ require separate live validation.
 
 ## Broadcast and notification
 
+### ERC20 approval stages
+
+`PegarouteApprovalFlow` ports Swaps.xyz's allowance/reset/approve ordering using
+Cake's existing EVM methods. Ethereum USDT with a nonzero insufficient allowance
+first requires a reset to zero. Each reset, approval and final swap has its own
+normal confirmation and fee display; transaction preparation never broadcasts.
+Signed approval bytes must match the bound chain, signer, token, spender and exact
+units. This also detects a wrong token selected by Cake's symbol-based builder.
+
+The additive SQLite `PegarouteApproval` table is created on first approval use for
+both new and existing installations. Its trade/step key records the actual hash
+before submission. Successful transaction receipts advance the stage; allowance
+is checked again before constructing the swap with a fresh nonce. Receipt polling
+is bounded to roughly 30 seconds. Reopening the same trade reconciles a pending
+hash and retains completed stages. Failed/aborted stages stop that order, and
+ambiguous submissions are never automatically resubmitted. Replacement/cancel
+transactions and automatic retry of failed approvals are outside this increment.
+
+Approval hashes stay out of `Trade.txId`, the funding lifecycle and Pegaroute's
+source-hash endpoint. Approval starts and final funding check one another inside
+SQLite transactions, preventing separately prepared screens from racing stages.
+
 The lifecycle persists a funding-started identity before commit and prevents a
 second funding commit, including from separately prepared instances. ZEC's local
 trade-keyed attempt marker is distinct from the network transaction ID: only the
@@ -135,30 +157,30 @@ fallback after that ambiguous POST.
 
 Existing token catalogs, receive-amount estimator, binding envelopes, migrations,
 BTC/XMR/THOR/Maya handler seams, and lifecycle/store tests are retained. Funding
-rejects approval sequences, token calls with extra native value, unsupported
+rejects token calls with extra native value, unsupported
 memos, private routes, hardware/UR, send-all and external funding.
 THOR/Maya contract memo metadata and calldata are trusted and bound together.
 Fixed-rate execution, independent contract-effect validation, creation recovery,
 callback outbox/retry UI are deferred.
 
-Approval-required swaps are the substantial blocker from this bounded expansion:
-Cake exposes the primitives but has no reusable staged pending coordinator.
-Approval/reset transactions need separate confirmations, persisted hashes,
-receipt checks and fresh nonces before final funding. Approval hashes must not
-be mistaken for swap source hashes. Failed/unknown creation or submission is
-never automatically retried as a fresh payment.
+The approval/reset blocker is now implemented through the existing Cake flow.
+Provider-specific permit or other multi-transaction instructions beyond standard
+ERC20 approval and the existing USDT reset case remain unsupported.
 
 Validation is offline: mocked HTTP, in-memory SQLite and synthetic test keys.
 No real order creation, real-wallet signing, funding, broadcasting or native
 backend build was performed for this increment.
 
-Expanded verification with Flutter 3.41.9: **364 tests passed** across `test/exchange`,
+Expanded verification with Flutter 3.41.9: **384 tests passed** across `test/exchange`,
 `test/view_model/send_view_model_commit_test.dart` and
 `test/new-ui/widgets/swap_page/pegaroute_providers_settings_test.dart`.
 Coverage includes synthetic native transfers/calls on all five EVM networks,
 ETH → USDC contract instructions, ERC20 deposits with 6/18 decimals, SQLite
 restoration/callbacks, altered signed instructions, wallet/network switches,
-supplied expiry, blocked approval-required calls, sufficient-allowance token calls,
+supplied expiry, approvals across all five EVM networks, USDT reset/approval/swap
+restoration, pending/failed receipts, lost broadcast response, persistence failure,
+approval/funding races, signed-approval mismatches, wallet switches and separate
+confirmation state transitions, sufficient-allowance token calls,
 all eight deposit wallet types, SPL mint/decimal persistence, ZEC post-ID/refresh
 failures, truthful callback/status identities, supplied Solana legacy/v0 messages,
 preference changes, route ranking and duplicate-commit prevention. Synthetic provider/network combinations exercise

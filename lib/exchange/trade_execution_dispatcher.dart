@@ -56,6 +56,28 @@ abstract interface class TradeExecutionReceiptHandler {
   });
 }
 
+/// A separately confirmed prerequisite (e.g. ERC20 approval), never swap funding.
+abstract interface class TradeExecutionPrerequisite {
+  String get description;
+  Future<void> commitPrerequisite(void Function() validate);
+}
+
+abstract interface class TradeExecutionStage {
+  String? get prerequisiteDescription;
+}
+
+String? tradeExecutionPrerequisiteDescription(PendingTransaction? pending) =>
+    pending is TradeExecutionStage
+        ? (pending as TradeExecutionStage).prerequisiteDescription
+        : null;
+
+class TradeExecutionPrerequisiteException implements Exception {
+  const TradeExecutionPrerequisiteException(this.message);
+  final String message;
+  @override
+  String toString() => message;
+}
+
 final class TradeExecutionGuard {
   const TradeExecutionGuard._(this._validate, this._wallet);
 
@@ -226,6 +248,8 @@ class RegistryTradeExecutionDispatcher implements TradeExecutionDispatcher {
     late final GuardedPendingTransaction? guarded;
     try {
       guarded = await handler.prepare(guard: guard);
+    } on TradeExecutionPrerequisiteException {
+      rethrow;
     } catch (_) {
       return null;
     }
@@ -247,7 +271,7 @@ class RegistryTradeExecutionDispatcher implements TradeExecutionDispatcher {
   }
 }
 
-class _BoundPendingTransaction with PendingTransaction {
+class _BoundPendingTransaction with PendingTransaction implements TradeExecutionStage {
   _BoundPendingTransaction({
     required this.guarded,
     required this.handler,
@@ -264,6 +288,11 @@ class _BoundPendingTransaction with PendingTransaction {
   bool _commitStarted = false;
 
   PendingTransaction get inner => guarded._inner;
+
+  @override
+  String? get prerequisiteDescription => inner is TradeExecutionPrerequisite
+      ? (inner as TradeExecutionPrerequisite).description
+      : null;
 
   ValidatedTradeExecution _validate() {
     final current = guard.validate();
@@ -325,6 +354,12 @@ class _BoundPendingTransaction with PendingTransaction {
     }
     _commitStarted = true;
     final before = _validate();
+    if (inner case final TradeExecutionPrerequisite prerequisite) {
+      await prerequisite.commitPrerequisite(() {
+        _validate();
+      });
+      return;
+    }
     final executionHash = guarded.executionHash;
     final lifecycle = handler as TradeExecutionLifecycleHandler;
     await lifecycle.beforeBroadcast(

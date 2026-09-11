@@ -1,4 +1,5 @@
 import 'package:cake_wallet/exchange/exchange_provider_description.dart';
+import 'package:cake_wallet/exchange/trade_execution_dispatcher.dart';
 import 'package:cake_wallet/reactions/wallet_connect.dart';
 import 'package:cake_wallet/routes.dart';
 import 'package:cake_wallet/src/screens/connect_device/connect_device_page.dart';
@@ -322,7 +323,8 @@ class ExchangeTradeState extends State<ExchangeTradeForm> {
                     footerType: FooterType.slideActionButton,
                     isSlideActionEnabled: sendVM.isReadyForSend,
                     walletType: sendVM.walletType,
-                    titleText: S.of(bottomSheetContext).confirm_transaction,
+                    titleText: tradeExecutionPrerequisiteDescription(sendVM.pendingTransaction) ??
+                        S.of(bottomSheetContext).confirm_transaction,
                     titleIconPath: sendVM.selectedCryptoCurrency.iconPath,
                     currency: widget.exchangeTradeViewModel.sendViewModel.selectedCryptoCurrency,
                     amount: S.of(bottomSheetContext).send_amount,

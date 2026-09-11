@@ -8,6 +8,8 @@ import 'package:cake_wallet/entities/transaction_description.dart';
 import 'package:cake_wallet/entities/fiat_currency.dart';
 import 'package:cake_wallet/exchange/exchange_provider_description.dart';
 import 'package:cake_wallet/exchange/trade.dart';
+import 'package:cake_wallet/exchange/trade_execution.dart';
+import 'package:cake_wallet/exchange/trade_execution_dispatcher.dart';
 import 'package:cake_wallet/store/app_store.dart';
 import 'package:cake_wallet/store/settings_store.dart';
 import 'package:cake_wallet/view_model/contact_list/contact_list_view_model.dart';
@@ -116,10 +118,72 @@ class _PendingTransaction with PendingTransaction {
   }
 }
 
+class _ApprovalTransaction extends _PendingTransaction implements TradeExecutionStage {
+  _ApprovalTransaction({super.commitError});
+  @override
+  String get prerequisiteDescription => 'Approve 1 USDC';
+}
+
+class _NextStepDispatcher extends EmptyTradeExecutionDispatcher {
+  _NextStepDispatcher(this.next);
+  final PendingTransaction next;
+  int preparations = 0;
+  @override
+  bool supports(TradeExecution execution) => true;
+  @override
+  Future<PendingTransaction?> prepare({required WalletBase wallet, required Trade trade}) async {
+    preparations++;
+    return next;
+  }
+}
+
+// The mocked dispatcher isolates UI stage transitions; bound approval/SQLite
+// execution is covered by pegaroute_native_eth_flow_test.dart.
+Trade _stageTrade() => Trade(
+    id: 'trade-id',
+    amount: '1',
+    provider: ExchangeProviderDescription.pegaroute,
+    executionJson: TradeExecution(
+      family: 'other',
+      mode: 'deposit-transfer',
+      sourceChain: 'XMR',
+      sourceToken: 'XMR',
+      nativeToken: 'XMR',
+      destinationChain: 'BTC',
+      destinationToken: 'BTC',
+      routeProvider: 'instaswap',
+      payload: const {
+        'chain': 'XMR',
+        'to': 'deposit',
+        'memo': null,
+        'amount': {'display': '1', 'baseUnits': '1000000000000'}
+      },
+      binding: TradeExecutionBinding(
+          tradeId: 'trade-id',
+          providerRaw: 17,
+          quoteId: 'quote',
+          quoteExpiresAt: DateTime.utc(2099),
+          routeExpiry: null,
+          sourceAmount: '1',
+          sourceAmountBaseUnits: '1000000000000',
+          sourceDecimals: 12,
+          destinationDecimals: 8,
+          senderAddress: 'sender',
+          refundAddress: null,
+          destinationAddress: 'destination',
+          isSendAll: false,
+          walletId: 'wallet',
+          walletChainId: null,
+          walletAddress: 'sender',
+          reviewedRouteJson: '{}',
+          providerReferenceId: null),
+    ).encode());
+
 SendViewModel _viewModel({
   required _DescriptionBox descriptionBox,
   required _PendingTransaction pending,
   bool saveRecipient = false,
+  TradeExecutionDispatcher dispatcher = const EmptyTradeExecutionDispatcher(),
 }) {
   final appStore = _AppStore();
   final settingsStore = _SettingsStore();
@@ -158,6 +222,7 @@ SendViewModel _viewModel({
     null,
     unspentCoins,
     _FeesViewModel(),
+    tradeExecutionDispatcher: dispatcher,
   )..pendingTransaction = pending;
 }
 
@@ -166,8 +231,8 @@ SendViewModel _pegarouteViewModel({
   required _PendingTransaction pending,
   bool saveRecipient = false,
 }) {
-  final viewModel = _viewModel(
-      descriptionBox: descriptionBox, pending: pending, saveRecipient: saveRecipient);
+  final viewModel =
+      _viewModel(descriptionBox: descriptionBox, pending: pending, saveRecipient: saveRecipient);
   viewModel.setPendingTransactionContextForTesting(
     transaction: pending,
     trade: Trade(
@@ -199,11 +264,50 @@ void main() {
     expect(viewModel.state, isA<FailureState>());
   });
 
+  test('approval confirmation prepares the next step without reporting a successful swap',
+      () async {
+    final approval = _ApprovalTransaction();
+    final payment = _PendingTransaction();
+    final dispatcher = _NextStepDispatcher(payment);
+    final box = _DescriptionBox();
+    final viewModel = _viewModel(descriptionBox: box, pending: approval, dispatcher: dispatcher);
+    viewModel.setPendingTransactionContextForTesting(transaction: approval, trade: _stageTrade());
+    await viewModel.commitTransaction(_Context());
+    expect(approval.commits, 1);
+    expect(payment.commits, 0);
+    expect(dispatcher.preparations, 1);
+    expect(viewModel.pendingTransaction, same(payment));
+    expect(viewModel.state, isA<ExecutedSuccessfullyState>());
+    verifyNever(() => box.add(any()));
+    await viewModel.commitTransaction(_Context());
+    expect(payment.commits, 1);
+    expect(viewModel.state, isA<TransactionCommitted>());
+  });
+
+  test('pending approval keeps the confirmation error and does not prepare funding', () async {
+    final approval = _ApprovalTransaction(
+        commitError:
+            const TradeExecutionPrerequisiteException('Approval confirmation is still pending'));
+    final dispatcher = _NextStepDispatcher(_PendingTransaction());
+    final box = _DescriptionBox();
+    final viewModel = _viewModel(descriptionBox: box, pending: approval, dispatcher: dispatcher);
+    viewModel.setPendingTransactionContextForTesting(transaction: approval, trade: _stageTrade());
+    await viewModel.commitTransaction(_Context());
+    expect(viewModel.state, isA<FailureState>());
+    expect((viewModel.state as FailureState).error,
+        contains('Approval confirmation is still pending'));
+    expect(dispatcher.preparations, 0);
+    verifyNever(() => box.add(any()));
+  });
+
   test('Pegaroute missing or malformed execution never falls through to ordinary send', () async {
     final viewModel = _viewModel(descriptionBox: _DescriptionBox(), pending: _PendingTransaction());
     for (final raw in [null, '', '{}']) {
-      final trade = Trade(id: 'unsupported-order', amount: '1',
-          provider: ExchangeProviderDescription.pegaroute, executionJson: raw);
+      final trade = Trade(
+          id: 'unsupported-order',
+          amount: '1',
+          provider: ExchangeProviderDescription.pegaroute,
+          executionJson: raw);
       expect(await viewModel.createTransaction(trade: trade), isNull);
       expect(viewModel.state, isA<FailureState>());
     }
@@ -270,8 +374,8 @@ void main() {
       viewModel.outputs.first.note = 'changed-note';
       when(() => viewModel.wallet.walletAddresses.primaryAddress).thenReturn('changed-wallet');
     });
-    viewModel = _pegarouteViewModel(
-        descriptionBox: descriptionBox, pending: pending, saveRecipient: true);
+    viewModel =
+        _pegarouteViewModel(descriptionBox: descriptionBox, pending: pending, saveRecipient: true);
     viewModel.outputs.first.note = 'reviewed-note';
     await viewModel.commitTransaction(_Context());
     expect(viewModel.state, isA<TransactionCommitted>());

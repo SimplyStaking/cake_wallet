@@ -1087,6 +1087,8 @@ abstract class SendViewModelBase extends WalletChangeListenerViewModel with Stor
     final commitChainId = commitWallet?.chainId;
     final commitWalletAddress = commitWallet?.walletAddresses.primaryAddress;
     final commitWalletName = commitWallet?.name;
+    final commitTrade = _currentTrade;
+    final commitProvider = _currentProvider;
     final depositAddress = isPegaroute ? _currentTrade?.inputAddress : null;
     final depositNote = isPegaroute ? outputs.map((output) => output.note).join('\n').trim() : null;
     final pendingForCommit =
@@ -1102,6 +1104,21 @@ abstract class SendViewModelBase extends WalletChangeListenerViewModel with Stor
       state = wallet.isHardwareWallet && walletType == WalletType.monero
           ? IsAwaitingDeviceResponseState()
           : TransactionCommitting();
+
+      if (isPegaroute && tradeExecutionPrerequisiteDescription(capturedPendingTransaction) != null) {
+        try {
+          await capturedPendingTransaction.commit();
+          if (!identical(wallet, commitWallet) || !identical(_currentTrade, commitTrade)) {
+            throw StateError('The active swap changed after approval');
+          }
+          // Approval is not swap funding. Prepare the next step with a fresh
+          // nonce and leave it on the normal confirmation screen.
+          await createTransaction(provider: commitProvider, trade: commitTrade);
+        } finally {
+          _pegarouteCommitInFlight = false;
+        }
+        return;
+      }
 
       if (ocpRequest != null) {
         if (OpenCryptoPayService.requiresClientCommit(selectedCryptoCurrency)) {
