@@ -23,6 +23,22 @@ class PegarouteAssetId {
 class PegarouteCurrencyMapper {
   const PegarouteCurrencyMapper();
 
+  static const quoteSourceChains = {
+    'BTC',
+    'ETH',
+    'XMR',
+    'BCH',
+    'LTC',
+    'DOGE',
+    'ZEC',
+    'BSC',
+    'BASE',
+    'ARBITRUM',
+    'POLYGON',
+    'SOL',
+    'TRON',
+  };
+
   static const nativeTokenByChain = <String, String>{
     'ETH': 'ETH',
     'BSC': 'BNB',

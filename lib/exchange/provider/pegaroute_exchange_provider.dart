@@ -6,6 +6,7 @@ import 'package:cake_wallet/exchange/provider/pegaroute/pegaroute_capability_gat
 import 'package:cake_wallet/exchange/provider/pegaroute/pegaroute_configuration.dart';
 import 'package:cake_wallet/exchange/provider/pegaroute/pegaroute_currency_mapper.dart';
 import 'package:cake_wallet/exchange/provider/pegaroute/pegaroute_execution_binding.dart';
+import 'package:cake_wallet/exchange/provider/pegaroute/pegaroute_receive_amount_estimator.dart';
 import 'package:cake_wallet/exchange/trade.dart';
 import 'package:cake_wallet/exchange/trade_not_found_exception.dart';
 import 'package:cake_wallet/exchange/trade_refund.dart';
@@ -66,13 +67,19 @@ class PegarouteExchangeProvider extends ExchangeProvider {
     PegarouteApiClient? apiClient,
     PegarouteConfiguration? configuration,
     PegarouteCapabilityGate? capabilityGate,
+    PegarouteReceiveEstimatePolicy receiveEstimatePolicy = const PegarouteReceiveEstimatePolicy(),
+    DateTime Function()? quoteClock,
     Future<CryptoCurrency?> Function(String? chain, String? token)? currencyLookup,
   })  : _apiClient = apiClient ?? PegarouteApiClient(configuration: configuration),
         _capabilityGate = capabilityGate ?? const PegarouteCapabilityGate(),
+        _receiveEstimatePolicy = receiveEstimatePolicy,
+        _quoteClock = quoteClock,
         _currencyLookup = currencyLookup;
 
   final PegarouteApiClient _apiClient;
   final PegarouteCapabilityGate _capabilityGate;
+  final PegarouteReceiveEstimatePolicy _receiveEstimatePolicy;
+  final DateTime Function()? _quoteClock;
   final Future<CryptoCurrency?> Function(String? chain, String? token)? _currencyLookup;
   final PegarouteCurrencyMapper _currencyMapper = const PegarouteCurrencyMapper();
   final PegarouteExecutionBindingValidator _bindingValidator =
@@ -93,6 +100,9 @@ class PegarouteExchangeProvider extends ExchangeProvider {
 
   @override
   bool get supportsFixedRate => false;
+
+  @override
+  bool get supportsReceiveAmountEstimate => true;
 
   @override
   bool get supportsMemoOrDestinationTag => false;
@@ -149,10 +159,18 @@ class PegarouteExchangeProvider extends ExchangeProvider {
     required bool isFixedRateMode,
     required bool isReceiveAmount,
   }) async {
-    if (amount <= 0 || !amount.isFinite || isFixedRateMode || isReceiveAmount) return 0;
+    if (amount <= 0 || !amount.isFinite || isFixedRateMode) return 0;
     final assets = _quoteAssets(from, to);
     if (assets == null) return 0;
     try {
+      if (isReceiveAmount) {
+        return (await estimateReceiveAmount(
+          from: from,
+          to: to,
+          receiveAmount: _receiveDecimalAmount(amount),
+        ))
+            .rate;
+      }
       final quote = await _apiClient.quote(
         PegarouteQuoteRequest(
           fromChain: assets.first.chain,
@@ -174,6 +192,32 @@ class PegarouteExchangeProvider extends ExchangeProvider {
       return 0;
     }
   }
+
+  /// Read-only estimate retaining the final forward quote and exact candidate.
+  /// Callers supply trusted wallet token metadata and decimal strings here;
+  /// [fetchRate] is only a lossy, legacy presentation adapter.
+  Future<PegarouteReceiveAmountEstimate> estimateReceiveAmount({
+    required CryptoCurrency from,
+    required CryptoCurrency to,
+    required String receiveAmount,
+    String? initialSourceAmount,
+    String? maxSourceAmount,
+    PegarouteAddressIntent? intent,
+    PegaroutePrivateValue? privateValue,
+  }) =>
+      PegarouteReceiveAmountEstimator(
+        apiClient: _apiClient,
+        policy: _receiveEstimatePolicy,
+        clock: _quoteClock,
+      ).estimate(
+        from: from,
+        to: to,
+        receiveAmount: receiveAmount,
+        initialSourceAmount: initialSourceAmount,
+        maxSourceAmount: maxSourceAmount,
+        intent: intent,
+        privateValue: privateValue,
+      );
 
   @override
   Future<Trade> createTrade({
@@ -441,7 +485,7 @@ class PegarouteExchangeProvider extends ExchangeProvider {
     try {
       final source = _currencyMapper.map(from);
       final destination = _currencyMapper.map(to);
-      if (!_quoteSourceChains.contains(source.chain)) {
+      if (!PegarouteCurrencyMapper.quoteSourceChains.contains(source.chain)) {
         return null;
       }
       return [source, destination];
@@ -468,6 +512,20 @@ class PegarouteExchangeProvider extends ExchangeProvider {
   String _decimalAmount(double amount) {
     final fixed = amount.toStringAsFixed(18);
     return fixed.replaceFirst(RegExp(r'\.?0+$'), '');
+  }
+
+  String _receiveDecimalAmount(double amount) {
+    // Expand only the shortest decimal representation of the legacy double;
+    // toStringAsFixed would introduce binary floating-point fractional noise.
+    final text = amount.toString().toLowerCase();
+    if (!text.contains('e')) return text;
+    final parts = text.split('e');
+    final mantissa = parts.first.split('.');
+    final digits = mantissa.join();
+    final point = mantissa.first.length + int.parse(parts.last);
+    if (point <= 0) return '0.${'0' * -point}$digits';
+    if (point >= digits.length) return digits.padRight(point, '0');
+    return '${digits.substring(0, point)}.${digits.substring(point)}';
   }
 
   Future<CryptoCurrency?> _parseCurrency(String? chain, String? token) async {
@@ -604,19 +662,3 @@ class PegarouteExchangeProvider extends ExchangeProvider {
     }
   }
 }
-
-const _quoteSourceChains = {
-  'BTC',
-  'ETH',
-  'XMR',
-  'BCH',
-  'LTC',
-  'DOGE',
-  'ZEC',
-  'BSC',
-  'BASE',
-  'ARBITRUM',
-  'POLYGON',
-  'SOL',
-  'TRON',
-};
