@@ -1198,9 +1198,8 @@ final class PegarouteExecutionBindingValidator {
         throw const PegarouteBindingException('status provider details changed');
       }
       if (details.presentFields.contains('expiresAt') &&
-          (binding.providerDepositExpiry == null ||
-              _parseOptionalDateTime(details.expiresAt, 'provider deposit expiry') !=
-                  binding.providerDepositExpiry)) {
+          _parseOptionalDateTime(details.expiresAt, 'provider deposit expiry') !=
+              binding.providerDepositExpiry) {
         throw const PegarouteBindingException('status provider details changed');
       }
     }

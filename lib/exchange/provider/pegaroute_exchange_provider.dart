@@ -6,6 +6,11 @@ import 'package:cake_wallet/exchange/provider/pegaroute/pegaroute_capability_gat
 import 'package:cake_wallet/exchange/provider/pegaroute/pegaroute_configuration.dart';
 import 'package:cake_wallet/exchange/provider/pegaroute/pegaroute_currency_mapper.dart';
 import 'package:cake_wallet/exchange/provider/pegaroute/pegaroute_execution_binding.dart';
+import 'package:cake_wallet/exchange/provider/pegaroute/pegaroute_execution_handler_support.dart';
+import 'package:cake_wallet/exchange/provider/pegaroute/pegaroute_execution_lifecycle_store.dart';
+import 'package:cake_wallet/exchange/provider/pegaroute/pegaroute_native_eth.dart';
+import 'package:cake_wallet/exchange/trade_execution_dispatcher.dart';
+import 'package:cake_wallet/exchange/trade_execution_lifecycle.dart';
 import 'package:cake_wallet/exchange/provider/pegaroute/pegaroute_receive_amount_estimator.dart';
 import 'package:cake_wallet/exchange/trade.dart';
 import 'package:cake_wallet/exchange/trade_not_found_exception.dart';
@@ -19,6 +24,8 @@ import 'package:cw_core/erc20_token.dart';
 import 'package:cw_core/spl_token.dart';
 import 'package:cw_core/tron_token.dart';
 import 'package:cw_core/utils/print_verbose.dart';
+import 'package:cw_core/wallet_base.dart';
+import 'package:uuid/uuid.dart';
 
 enum _PegarouteTransition { stale, same, advance }
 
@@ -69,15 +76,15 @@ class PegarouteExchangeProvider extends ExchangeProvider {
     PegarouteCapabilityGate? capabilityGate,
     PegarouteReceiveEstimatePolicy receiveEstimatePolicy = const PegarouteReceiveEstimatePolicy(),
     DateTime Function()? quoteClock,
+    this.currentWallet,
     Future<CryptoCurrency?> Function(String? chain, String? token)? currencyLookup,
   })  : _apiClient = apiClient ?? PegarouteApiClient(configuration: configuration),
-        _capabilityGate = capabilityGate ?? const PegarouteCapabilityGate(),
         _receiveEstimatePolicy = receiveEstimatePolicy,
         _quoteClock = quoteClock,
         _currencyLookup = currencyLookup;
 
   final PegarouteApiClient _apiClient;
-  final PegarouteCapabilityGate _capabilityGate;
+  final WalletBase? Function()? currentWallet;
   final PegarouteReceiveEstimatePolicy _receiveEstimatePolicy;
   final DateTime Function()? _quoteClock;
   final Future<CryptoCurrency?> Function(String? chain, String? token)? _currencyLookup;
@@ -88,12 +95,11 @@ class PegarouteExchangeProvider extends ExchangeProvider {
   @override
   String get title => 'Pegaroute';
 
-  // Quote discovery is available for catalog assets on eligible source chains. Swap
-  // creation and execution remain closed until concrete handlers are ready.
+  // Quote discovery covers catalog assets; funding currently supports native ETH deposits.
   @override
   bool get isAvailable => _apiClient.configuration.isValid;
 
-  bool get isExecutionAvailable => isAvailable && _capabilityGate.hasExecutionHandlers;
+  bool get isExecutionAvailable => isAvailable && pegarouteNativeEthWallet(currentWallet?.call());
 
   @override
   bool get isEnabled => isAvailable;
@@ -225,8 +231,138 @@ class PegarouteExchangeProvider extends ExchangeProvider {
     required bool isFixedRateMode,
     required bool isSendAll,
   }) async {
-    _ensureUnavailable(request.fromCurrency, request.toCurrency);
-    throw const PegarouteUnavailableException();
+    final source = _currencyMapper.map(request.fromCurrency);
+    final destination = _currencyMapper.map(request.toCurrency);
+    final wallet = currentWallet?.call();
+    if (!isExecutionAvailable ||
+        wallet == null ||
+        source.chain != 'ETH' ||
+        source.token != 'ETH' ||
+        request.fromCurrency.decimals != 18 ||
+        isFixedRateMode ||
+        request.isFixedRate ||
+        isSendAll ||
+        request.toAddressExtraId.isNotEmpty) {
+      throw const PegarouteUnavailableException();
+    }
+    final context = PegarouteActiveWalletContext(currentWallet!);
+    final before = context.snapshot(wallet);
+    void checkWallet() {
+      if (!before.matches(context.snapshot(wallet))) {
+        throw const PegarouteBindingException('The funding wallet changed during order creation');
+      }
+    }
+
+    try {
+      final intent = PegarouteAddressIntent(
+        destinationAddress: request.toAddress,
+        senderAddress: request.senderAddress,
+        refundAddress: request.refundAddress,
+      );
+      final quote = await _apiClient.quote(PegarouteQuoteRequest.fromIntent(
+        fromChain: source.chain,
+        fromToken: source.token,
+        toChain: destination.chain,
+        toToken: destination.token,
+        amount: request.fromAmount,
+        intent: intent,
+      ));
+      checkWallet();
+      // This increment supports Instaswap's ordinary deposit instructions.
+      // Contract routes remain quote-only.
+      final routes = quote.response.routes
+          .where((route) =>
+              route.provider == 'instaswap' &&
+              !(route.privateValue?.isEnabled ?? false) &&
+              route.memo == null &&
+              route.router == null)
+          .toList();
+      if (routes.isEmpty) throw const PegarouteUnavailableException();
+      final route = routes.first;
+      final trade = Trade(
+        id: 'pegaroute-${const Uuid().v4()}',
+        provider: description,
+        providerName: route.provider,
+        from: request.fromCurrency,
+        to: request.toCurrency,
+        amount: request.fromAmount,
+        receiveAmount: route.expectedOutput,
+        senderAddress: intent.senderAddress,
+        refundAddress: intent.refundAddress,
+        payoutAddress: intent.destinationAddress,
+        walletId: wallet.id,
+        chainId: wallet.chainId,
+        fromWalletAddress: before.address,
+        isSendAll: false,
+        state: TradeState.created,
+        createdAt: DateTime.now().toUtc(),
+      );
+      final preflight = _bindingValidator.preflightSwap(
+        trade: trade,
+        wallet: wallet,
+        quote: quote,
+        route: route,
+        request: PegarouteSwapRequest.fromIntent(
+          fromChain: source.chain,
+          fromToken: source.token,
+          toChain: destination.chain,
+          toToken: destination.token,
+          amount: request.fromAmount,
+          intent: intent,
+          quoteId: quote.response.quoteId,
+          routeProvider: route.provider,
+        ),
+      );
+      checkWallet();
+      final result = await _apiClient.swap(preflight);
+      try {
+        checkWallet();
+        final execution = _bindingValidator.bindSwapResponse(result: result);
+        if (!pegarouteNativeEthDeposit(execution) ||
+            execution.binding.providerDepositAddress == null ||
+            !RegExp(r'^0x[0-9a-fA-F]{40}$').hasMatch(execution.payload['to'] as String)) {
+          throw const PegarouteBindingException('Unsupported native ETH deposit instructions');
+        }
+        trade.executionJson = execution.encode();
+        trade.providerId = execution.binding.providerReferenceId;
+        trade.inputAddress = execution.binding.providerDepositAddress;
+        trade.expiredAt = execution.binding.providerDepositExpiry;
+        final validated = _bindingValidator.validatePersisted(trade: trade, wallet: wallet);
+        pegarouteRequireUnexpiredFunding(validated, DateTime.now().toUtc());
+        return trade;
+      } catch (error) {
+        throw PegarouteSwapAttemptException(
+            cause: error,
+            userMessage: 'The Pegaroute order was created, but its deposit could not be verified.');
+      }
+    } finally {
+      context.dispose();
+    }
+  }
+
+  /// Broadcast has already succeeded. Notification failure must never request a
+  /// second payment. A subsequent status poll confirms the stored source hash.
+  Future<void> notifyCommitted(
+    ValidatedTradeExecution execution,
+    CommittedTradeExecution receipt,
+  ) async {
+    final trade = await Trade.getByTradeId(execution.execution.binding.tradeId);
+    if (trade == null) throw const PegarouteBindingException('Bound trade is missing');
+    _bindingValidator.validatePersisted(
+        trade: trade, expectedRawExecutionJson: execution.rawExecutionJson);
+    final lifecycle = TradeExecutionLifecycle.fromJsonString(trade.executionLifecycleJson!);
+    final hash = receipt.evmTxHash;
+    if (hash == null ||
+        lifecycle.executionHash != hash ||
+        trade.txId != hash ||
+        lifecycle.state != TradeExecutionLifecycleState.broadcasted) {
+      throw const PegarouteBindingException('Broadcast hash is not bound');
+    }
+    if (lifecycle.callbackState == TradeExecutionCallbackState.accepted) return;
+    await PegarouteExecutionLifecycleStore().markCallbackAttempted(
+        execution: execution, executionHash: hash, tradeInternalId: trade.internalId);
+    await _apiClient.notifySourceHash(execution.execution.binding.providerTransactionId!, hash);
+    await refreshTradeStatus(trade: trade);
   }
 
   @override
@@ -279,10 +415,26 @@ class PegarouteExchangeProvider extends ExchangeProvider {
       );
       final expected = Map<String, Object?>.from(rows.first)..remove(Trade.selfIdColumn);
       final before = latest.toSqliteMap();
+      final observedHash = observation.response.input.txHash;
+      final lifecycleJson = latest.executionLifecycleJson;
+      if (pegarouteNativeEthDeposit(validated.execution) &&
+          lifecycleJson != null &&
+          observedHash != null) {
+        var lifecycle = TradeExecutionLifecycle.fromJsonString(lifecycleJson);
+        if (observedHash.toLowerCase() != lifecycle.executionHash.toLowerCase()) {
+          throw const PegarouteBindingException('Status source hash differs from the deposit');
+        }
+        if (lifecycle.state == TradeExecutionLifecycleState.broadcasted &&
+            lifecycle.callbackState != TradeExecutionCallbackState.accepted) {
+          final at = DateTime.now().toUtc().toIso8601String();
+          lifecycle = lifecycle.markCallbackAttempted(at).markCallbackAccepted(at);
+          latest.executionLifecycleJson = lifecycle.encode();
+        }
+      }
       _mergeStatusEvidence(latest, observation.trade);
 
-      // Write only changed provider evidence. Preserve the exact stored asset,
-      // execution and lifecycle envelopes, including legacy representations.
+      // Write changed provider evidence and any confirmed callback transition.
+      // Preserve the exact stored asset and execution envelopes.
       final values = <String, Object?>{
         'stateRaw': latest.stateRaw,
         for (final entry in latest.toSqliteMap().entries)
@@ -389,6 +541,7 @@ class PegarouteExchangeProvider extends ExchangeProvider {
         amount: input.amount,
         state: _tradeState(response.internalStatus, refund?.status),
         outputTransaction: output.txHash,
+        txId: input.txHash,
         receiveAmount: output.amount,
         payoutAddress: output.address,
         providerName: current.execution.routeProvider,
@@ -472,13 +625,6 @@ class PegarouteExchangeProvider extends ExchangeProvider {
               : TradeRefund(configuredAddress: current.refundAddress).encode();
       current.refundJson = TradeRefund.mergeJson(currentRefundJson, updated.refundJson!);
     }
-  }
-
-  void _ensureUnavailable(CryptoCurrency from, CryptoCurrency to) {
-    // Mapping is intentionally performed before the gate so unsupported assets never reach I/O.
-    _currencyMapper.map(from);
-    _currencyMapper.map(to);
-    throw const PegarouteUnavailableException();
   }
 
   List<PegarouteAssetId>? _quoteAssets(CryptoCurrency from, CryptoCurrency to) {

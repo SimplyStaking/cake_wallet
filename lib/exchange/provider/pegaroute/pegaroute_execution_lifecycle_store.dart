@@ -7,7 +7,7 @@ import 'package:cake_wallet/exchange/trade_refund.dart';
 import 'package:cake_wallet/exchange/trade_state.dart';
 import 'package:cw_core/db/sqlite.dart';
 
-/// SQLite-backed lifecycle bookkeeping for a future registered execution
+/// SQLite-backed lifecycle bookkeeping for a registered execution
 /// handler. Each transition compares the complete bound execution row so a
 /// stale UI or wallet context cannot advance another attempt.
 final class PegarouteExecutionLifecycleStore implements TradeExecutionLifecycleHandler {
@@ -54,6 +54,7 @@ final class PegarouteExecutionLifecycleStore implements TradeExecutionLifecycleH
       execution: execution,
       executionHash: executionHash,
       tradeInternalId: tradeInternalId,
+      recordTransactionHash: true,
       transition: (current, at) => _advance(
         current: current,
         executionHash: executionHash,
@@ -148,6 +149,7 @@ final class PegarouteExecutionLifecycleStore implements TradeExecutionLifecycleH
     required String executionHash,
     required int tradeInternalId,
     bool requireFundingEligible = false,
+    bool recordTransactionHash = false,
     required TradeExecutionLifecycle Function(TradeExecutionLifecycle? current, String at)
         transition,
   }) async {
@@ -195,7 +197,7 @@ final class PegarouteExecutionLifecycleStore implements TradeExecutionLifecycleH
       }
       final changed = await txn.update(
         Trade.tableName,
-        {'executionLifecycleJson': next.encode()},
+        {'executionLifecycleJson': next.encode(), if (recordTransactionHash) 'txId': executionHash},
         where: predicates.join(' AND '),
         whereArgs: predicateArgs,
       );

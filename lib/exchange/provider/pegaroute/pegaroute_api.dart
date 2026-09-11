@@ -1707,6 +1707,26 @@ class PegarouteApiClient {
     return _decode(response, PegarouteStatusResponse.fromJson, expectedStatus: 200);
   }
 
+  Future<void> notifySourceHash(String id, String hash) async {
+    if (!RegExp(r'^[a-zA-Z0-9_-]+$').hasMatch(id) ||
+        !RegExp(r'^0x[0-9a-fA-F]{64}$').hasMatch(hash)) {
+      throw const PegarouteCodecException('Invalid deposit notification identity');
+    }
+    final response = await _post(_uri('/swap/$id/txhash'),
+        {..._headers, 'Content-Type': 'application/json'}, json.encode({'txHash': hash}));
+    _decode(response, (value) {
+      final map = _object(value);
+      if (map['transactionId'] != id || map['txHash'] is! String ||
+          (map['txHash'] as String).toLowerCase() != hash.toLowerCase() ||
+          !const {'submitted', 'executing', 'confirming', 'completed', 'failed', 'refunded'}
+              .contains(map['status'])) {
+        throw const PegarouteCodecException('Deposit notification identity changed');
+      }
+      return true;
+    }, expectedStatus: 200);
+    // The legacy submitted acknowledgement is not persistence evidence.
+  }
+
   Future<PegarouteValidatedSwapResult> swap(PegarouteValidatedSwapPreflight preflight) async {
     final current = (_clock ?? DateTime.now)().toUtc();
     // Only public intent can acquire a preflight. Canonical main accepts

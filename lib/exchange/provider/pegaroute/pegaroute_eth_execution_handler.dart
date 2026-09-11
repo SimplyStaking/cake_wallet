@@ -75,11 +75,15 @@ final class PegarouteEthExecutionHandler
     required this.walletContext,
     required this.adapter,
     this.lifecycleHandler,
+    this.nativeDepositsOnly = false,
+    this.onDepositCommitted,
   });
 
   final PegarouteWalletContext walletContext;
   final PegarouteEthWalletAdapter adapter;
   final TradeExecutionLifecycleHandler? lifecycleHandler;
+  final bool nativeDepositsOnly;
+  final Future<void> Function(ValidatedTradeExecution, CommittedTradeExecution)? onDepositCommitted;
 
   @override
   bool supports(TradeExecution execution) =>
@@ -90,7 +94,8 @@ final class PegarouteEthExecutionHandler
       execution.binding.walletChainId == 1 &&
       execution.family == 'evm' &&
       (execution.mode == 'native-transfer' ||
-          execution.mode == 'contract-call' &&
+          !nativeDepositsOnly &&
+              execution.mode == 'contract-call' &&
               (execution.routeProvider == 'thorchain' || execution.routeProvider == 'maya'));
 
   @override
@@ -99,6 +104,9 @@ final class PegarouteEthExecutionHandler
   @override
   void validateForExecution({required ValidatedTradeExecution execution, required DateTime now}) {
     final value = execution.execution;
+    if (nativeDepositsOnly && value.mode != 'native-transfer') {
+      throw const PegarouteBindingException('Only native ETH deposits are enabled');
+    }
     pegarouteRequirePublicExecution(value);
     pegarouteRequireUnexpiredFunding(execution, now);
     final payload = pegaroutePayload(execution);
@@ -195,7 +203,7 @@ final class PegarouteEthExecutionHandler
         evidence.valueBaseUnits != expectedValue ||
         evidence.approvalPresent ||
         !_sameHex(evidence.data, payload['data']) ||
-        evidence.gasLimit != payload['gasLimit']) {
+        payload['gasLimit'] != null && evidence.gasLimit != payload['gasLimit']) {
       throw const PegarouteBindingException('decoded ETH transaction evidence is not exact');
     }
 
@@ -261,7 +269,9 @@ final class PegarouteEthExecutionHandler
   Future<void> onCommitted({
     required ValidatedTradeExecution execution,
     required CommittedTradeExecution receipt,
-  }) async {}
+  }) async {
+    await onDepositCommitted?.call(execution, receipt);
+  }
 
   @override
   Future<void> beforeBroadcast({

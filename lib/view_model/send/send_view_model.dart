@@ -711,9 +711,12 @@ abstract class SendViewModelBase extends WalletChangeListenerViewModel with Stor
     try {
       if (!(state is IsExecutingState)) state = IsExecutingState();
 
-      // Pegaroute remains disabled until a provider-specific signing handler
-      // is deliberately registered in a later phase.
-      if (trade?.provider == ExchangeProviderDescription.pegaroute) {
+      // A Pegaroute order must never fall through to an unbound ordinary send.
+      if (trade?.provider == ExchangeProviderDescription.pegaroute &&
+          (trade?.executionJson?.isNotEmpty != true ||
+              wallet.isHardwareWallet ||
+              ocpRequest != null ||
+              outputs.any((output) => output.sendAll))) {
         state = FailureState('Pegaroute execution is unavailable');
         return null;
       }
@@ -1080,6 +1083,12 @@ abstract class SendViewModelBase extends WalletChangeListenerViewModel with Stor
     if (isPegaroute && _pegarouteCommitInFlight) return;
 
     final capturedPendingTransaction = pendingTransaction!;
+    final commitWallet = isPegaroute ? wallet : null;
+    final commitChainId = commitWallet?.chainId;
+    final commitWalletAddress = commitWallet?.walletAddresses.primaryAddress;
+    final commitWalletName = commitWallet?.name;
+    final depositAddress = isPegaroute ? _currentTrade?.inputAddress : null;
+    final depositNote = isPegaroute ? outputs.map((output) => output.note).join('\n').trim() : null;
     final pendingForCommit =
         isPegaroute ? () => capturedPendingTransaction : () => pendingTransaction!;
 
@@ -1087,6 +1096,9 @@ abstract class SendViewModelBase extends WalletChangeListenerViewModel with Stor
 
     var commitBoundaryEstablished = false;
     try {
+      if (isPegaroute && ocpRequest != null) {
+        throw Exception('Pegaroute external payment execution is unavailable');
+      }
       state = wallet.isHardwareWallet && walletType == WalletType.monero
           ? IsAwaitingDeviceResponseState()
           : TransactionCommitting();
@@ -1140,6 +1152,45 @@ abstract class SendViewModelBase extends WalletChangeListenerViewModel with Stor
     }
 
     try {
+      if (isPegaroute) {
+        if (identical(wallet, commitWallet) && commitWallet!.chainId == commitChainId) {
+          if (isEVMWallet) {
+            commitWallet.transactionHistory.addOne(evm!.getTransactionInfo(
+              id: capturedPendingTransaction.evmTxHashFromRawHex!,
+              height: 0,
+              amount: capturedPendingTransaction.amount,
+              fee: capturedPendingTransaction.fee,
+              tokenSymbol: 'ETH',
+              direction: TransactionDirection.outgoing,
+              isPending: true,
+              date: DateTime.now(),
+              confirmations: 0,
+              chainId: commitChainId!,
+            ));
+            Future.delayed(const Duration(seconds: 4), () async {
+              if (!identical(wallet, commitWallet) || commitWallet.chainId != commitChainId) return;
+              try {
+                await Future.wait([
+                  commitWallet.updateTransactionsHistory(),
+                  commitWallet.updateBalance() as Future<void>,
+                ]);
+              } catch (error) {
+                _logPostCommitError(error);
+              }
+            });
+          }
+        }
+        await transactionDescriptionBox.add(TransactionDescription(
+          id: '${capturedPendingTransaction.id}_$commitWalletAddress',
+          recipientAddress: _settingsStore.shouldSaveRecipientAddress ? depositAddress ?? '' : null,
+          transactionNote: depositNote ?? '',
+        ));
+        final sharedPreferences = await SharedPreferences.getInstance();
+        await sharedPreferences.setString(
+            PreferencesKey.backgroundSyncLastTrigger(commitWalletName!),
+            DateTime.now().add(const Duration(minutes: 1)).toIso8601String());
+        return;
+      }
       if (_currentTrade != null) {
         final provider = _currentTrade!.provider;
         if (provider == ExchangeProviderDescription.swapsXyz) {

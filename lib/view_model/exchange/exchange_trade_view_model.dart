@@ -12,6 +12,9 @@ import 'package:cake_wallet/exchange/provider/exolix_exchange_provider.dart';
 import 'package:cake_wallet/exchange/provider/jupiter_exchange_provider.dart';
 import 'package:cake_wallet/exchange/provider/near_Intents_exchange_provider.dart';
 import 'package:cake_wallet/exchange/provider/pegaroute_exchange_provider.dart';
+import 'package:cake_wallet/exchange/provider/pegaroute/pegaroute_execution_binding.dart';
+import 'package:cake_wallet/exchange/provider/pegaroute/pegaroute_execution_handler_support.dart';
+import 'package:cake_wallet/exchange/provider/pegaroute/pegaroute_native_eth.dart';
 import 'package:cake_wallet/exchange/provider/swapsxyz_exchange_provider.dart';
 import 'package:cake_wallet/exchange/provider/swaptrade_exchange_provider.dart';
 import 'package:cake_wallet/exchange/provider/sideshift_exchange_provider.dart';
@@ -124,9 +127,7 @@ abstract class ExchangeTradeViewModelBase with Store {
 
   bool isSwapsXYZCanSendFromExternal;
 
-  bool get isSendable =>
-      trade.provider != ExchangeProviderDescription.pegaroute &&
-      checkIfCanSend(trade, wallet) == null;
+  bool get isSendable => checkIfCanSend(trade, wallet) == null;
 
   /// Providers that should hide the "send from external" button
   static const List<Type> _providersThatHideExternalSend = [
@@ -141,7 +142,7 @@ abstract class ExchangeTradeViewModelBase with Store {
 
     if (!isSwapsXYZCanSendFromExternal) return true;
 
-    // Pegaroute is intentionally disabled until a signing handler exists.
+    // Pegaroute deposits require the bound in-wallet funding path.
     // Never expose a QR that can lead users into an unsupported execution path.
     if (_provider is PegarouteExchangeProvider) return true;
 
@@ -376,6 +377,22 @@ abstract class ExchangeTradeViewModelBase with Store {
 
   String? checkIfCanSend(Trade? trade, WalletBase wallet) {
     if (trade == null) return 'Trade is null';
+    if (trade.provider == ExchangeProviderDescription.pegaroute) {
+      try {
+        final validated = const PegarouteExecutionBindingValidator()
+            .validatePersisted(trade: trade, wallet: wallet);
+        pegarouteRequireUnexpiredFunding(validated, DateTime.now().toUtc());
+        if (!pegarouteNativeEthWallet(wallet) ||
+            !pegarouteNativeEthDeposit(validated.execution) ||
+            trade.stateRaw != 'created' ||
+            trade.txId?.isNotEmpty == true ||
+            trade.executionLifecycleJson != null) {
+          return 'This Pegaroute order is not available for native ETH funding';
+        }
+      } catch (_) {
+        return 'This Pegaroute order is not bound to the current Ethereum wallet';
+      }
+    }
 
     final tradeFrom = trade.from;
     if (tradeFrom == null) return 'Trade from currency is null';

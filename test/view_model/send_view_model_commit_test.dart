@@ -119,6 +119,7 @@ class _PendingTransaction with PendingTransaction {
 SendViewModel _viewModel({
   required _DescriptionBox descriptionBox,
   required _PendingTransaction pending,
+  bool saveRecipient = false,
 }) {
   final appStore = _AppStore();
   final settingsStore = _SettingsStore();
@@ -131,7 +132,7 @@ SendViewModel _viewModel({
   when(() => appStore.amountParsingProxy)
       .thenReturn(const AmountParsingProxy(BitcoinAmountDisplayMode.bitcoin));
   when(() => settingsStore.fiatCurrency).thenReturn(FiatCurrency.usd);
-  when(() => settingsStore.shouldSaveRecipientAddress).thenReturn(false);
+  when(() => settingsStore.shouldSaveRecipientAddress).thenReturn(saveRecipient);
 
   when(() => wallet.type).thenReturn(WalletType.zcash);
   when(() => wallet.currency).thenReturn(CryptoCurrency.zec);
@@ -163,13 +164,16 @@ SendViewModel _viewModel({
 SendViewModel _pegarouteViewModel({
   required _DescriptionBox descriptionBox,
   required _PendingTransaction pending,
+  bool saveRecipient = false,
 }) {
-  final viewModel = _viewModel(descriptionBox: descriptionBox, pending: pending);
+  final viewModel = _viewModel(
+      descriptionBox: descriptionBox, pending: pending, saveRecipient: saveRecipient);
   viewModel.setPendingTransactionContextForTesting(
     transaction: pending,
     trade: Trade(
       id: 'trade-id',
       amount: '1',
+      inputAddress: 'reviewed-deposit',
       provider: ExchangeProviderDescription.pegaroute,
     ),
   );
@@ -193,6 +197,17 @@ void main() {
 
     expect(pending.commits, 1);
     expect(viewModel.state, isA<FailureState>());
+  });
+
+  test('Pegaroute missing or malformed execution never falls through to ordinary send', () async {
+    final viewModel = _viewModel(descriptionBox: _DescriptionBox(), pending: _PendingTransaction());
+    for (final raw in [null, '', '{}']) {
+      final trade = Trade(id: 'unsupported-order', amount: '1',
+          provider: ExchangeProviderDescription.pegaroute, executionJson: raw);
+      expect(await viewModel.createTransaction(trade: trade), isNull);
+      expect(viewModel.state, isA<FailureState>());
+    }
+    verifyNever(() => viewModel.wallet.createTransaction(any()));
   });
 
   test('keeps the existing UR path for non-Pegaroute transactions', () async {
@@ -240,6 +255,29 @@ void main() {
 
     expect(pending.commits, 1);
     expect(viewModel.state, isA<TransactionCommitted>());
+  });
+
+  test('Pegaroute description keeps the bound deposit and captured wallet context', () async {
+    final descriptionBox = _DescriptionBox();
+    final descriptions = <TransactionDescription>[];
+    when(() => descriptionBox.add(any<TransactionDescription>())).thenAnswer((invocation) async {
+      descriptions.add(invocation.positionalArguments.single as TransactionDescription);
+      return 0;
+    });
+    late final SendViewModel viewModel;
+    final pending = _PendingTransaction(onCommit: () {
+      viewModel.outputs.first.address = 'changed-deposit';
+      viewModel.outputs.first.note = 'changed-note';
+      when(() => viewModel.wallet.walletAddresses.primaryAddress).thenReturn('changed-wallet');
+    });
+    viewModel = _pegarouteViewModel(
+        descriptionBox: descriptionBox, pending: pending, saveRecipient: true);
+    viewModel.outputs.first.note = 'reviewed-note';
+    await viewModel.commitTransaction(_Context());
+    expect(viewModel.state, isA<TransactionCommitted>());
+    expect(descriptions.single.id, '${pending.id}_primary-address');
+    expect(descriptions.single.recipientAddress, 'reviewed-deposit');
+    expect(descriptions.single.transactionNote, 'reviewed-note');
   });
 
   test('Pegaroute reports pre-boundary failure without failure bookkeeping', () async {

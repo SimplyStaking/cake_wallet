@@ -55,9 +55,12 @@ class NoRedirects(HTTPRedirectHandler):
 class QuoteProxy(ThreadingHTTPServer):
     daemon_threads = True
 
-    def __init__(self, address, upstream, key_file):
+    def __init__(self, address, upstream, key_file, *, allow_execution=False):
+        if address[0] != '127.0.0.1':
+            raise ValueError('The local bridge must bind to 127.0.0.1')
         self.upstream = local_origin(upstream)
         self.key_file = key_file
+        self.allow_execution = allow_execution
         read_api_key(key_file)
         super().__init__(address, QuoteHandler)
 
@@ -87,14 +90,22 @@ class QuoteHandler(BaseHTTPRequestHandler):
         port = self.server.server_port
         if self.headers.get("Host") not in (f"127.0.0.1:{port}", f"localhost:{port}"):
             return self.reject(403, "Invalid local proxy host")
-        if (uri.scheme or uri.netloc or uri.path != "/quote"
+        status_path = (self.server.allow_execution and not uri.query
+                       and re.fullmatch(r'/swap/[a-zA-Z0-9_-]+', uri.path))
+        if (uri.scheme or uri.netloc or uri.fragment
+                or (uri.path != "/quote" and not status_path)
                 or len(self.path) > 8192 or len(names) != len(set(names))
                 or any(name not in QUOTE_FIELDS for name in names)):
             return self.reject(400, "Only GET /quote with quote parameters is supported")
+        self.forward()
+
+    def forward(self, body=None):
         try:
             request = Request(
                 self.server.upstream + self.path,
-                headers={"X-API-Key": read_api_key(self.server.key_file)},
+                data=body,
+                headers={"X-API-Key": read_api_key(self.server.key_file),
+                         **({"Content-Type": "application/json"} if body is not None else {})},
             )
             opener = build_opener(ProxyHandler({}), NoRedirects())
             try:
@@ -112,7 +123,34 @@ class QuoteHandler(BaseHTTPRequestHandler):
         self.reply(status, body)
 
     def do_POST(self):
-        self.reject(405, "This local proxy supports quotes only")
+        if not self.server.allow_execution or self.command != 'POST':
+            return self.reject(405, "This local proxy supports quotes only")
+        port = self.server.server_port
+        if (self.headers.get('Host') not in (f'127.0.0.1:{port}', f'localhost:{port}')
+                or self.headers.get('Origin') is not None):
+            return self.reject(403, 'Invalid local execution origin')
+        uri = urlsplit(self.path)
+        notification = re.fullmatch(r'/swap/[a-zA-Z0-9_-]+/txhash', uri.path)
+        if (uri.scheme or uri.netloc or uri.query or uri.fragment
+                or (uri.path != '/swap' and not notification)):
+            return self.reject(400, 'Unsupported execution path')
+        if (self.headers.get('Content-Type') != 'application/json'
+                or self.headers.get('Transfer-Encoding') is not None):
+            return self.reject(400, 'A JSON request is required')
+        try:
+            length = int(self.headers.get('Content-Length', '0'))
+            if length <= 0 or length > 16384:
+                raise ValueError('Invalid request size')
+            body = self.rfile.read(length)
+            value = json.loads(body)
+            allowed = ({'txHash'} if notification else
+                       (QUOTE_FIELDS - {'private'}) | {'quoteId', 'routeProvider',
+                                                       'slippageTolerance', 'streaming'})
+            if not isinstance(value, dict) or not value or set(value) - allowed:
+                raise ValueError('Invalid request fields')
+        except (ValueError, OSError):
+            return self.reject(400, 'Invalid execution request')
+        self.forward(body)
 
     do_PUT = do_POST
     do_PATCH = do_POST
@@ -124,9 +162,12 @@ def main():
     parser.add_argument("--key-file", required=True)
     parser.add_argument("--upstream", default="http://127.0.0.1:4000")
     parser.add_argument("--port", type=int, default=4001)
+    parser.add_argument('--allow-execution', action='store_true',
+                        help='Opt in to POST /swap, POST /swap/:id/txhash and GET /swap/:id')
     args = parser.parse_args()
     try:
-        server = QuoteProxy(("127.0.0.1", args.port), args.upstream, args.key_file)
+        server = QuoteProxy(("127.0.0.1", args.port), args.upstream, args.key_file,
+                            allow_execution=args.allow_execution)
     except (OSError, ValueError):
         parser.exit(1, "Unable to start: check the upstream, key file, and local port.\n")
     print(f"Cake quote proxy: http://127.0.0.1:{server.server_port}", flush=True)

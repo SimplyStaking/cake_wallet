@@ -31,6 +31,7 @@ import 'package:cake_wallet/exchange/provider/exchange_provider.dart';
 import 'package:cake_wallet/exchange/provider/exolix_exchange_provider.dart';
 import 'package:cake_wallet/exchange/provider/near_Intents_exchange_provider.dart';
 import 'package:cake_wallet/exchange/provider/pegaroute_exchange_provider.dart';
+import 'package:cake_wallet/exchange/provider/pegaroute/pegaroute_execution_binding.dart';
 import 'package:cake_wallet/exchange/provider/stealth_ex_exchange_provider.dart';
 import 'package:cake_wallet/exchange/provider/swapsxyz_exchange_provider.dart';
 import 'package:cake_wallet/exchange/provider/swaptrade_exchange_provider.dart';
@@ -314,7 +315,7 @@ abstract class ExchangeViewModelBase extends WalletChangeListenerViewModel with 
         SwapsXyzExchangeProvider(),
         JupiterExchangeProvider(),
         NearIntentsExchangeProvider(),
-        PegarouteExchangeProvider(),
+        PegarouteExchangeProvider(currentWallet: () => _appStore.wallet),
         TrocadorExchangeProvider(
             useTorOnly: _useTorOnly, providerStates: _settingsStore.trocadorProviderStates),
       ];
@@ -1231,7 +1232,8 @@ abstract class ExchangeViewModelBase extends WalletChangeListenerViewModel with 
           continue;
         }
 
-        // Skip Swaps.xyz when sending from external
+        // These providers require in-wallet funding.
+        if (isSendFromExternal && provider is PegarouteExchangeProvider) continue;
         if (isSendFromExternal && provider.description == ExchangeProviderDescription.swapsXyz) {
           printV('Skipping Swaps.xyz for external send');
           continue;
@@ -1283,9 +1285,14 @@ abstract class ExchangeViewModelBase extends WalletChangeListenerViewModel with 
                 isSendAll: isSendAllEnabled,
               );
               providerOrderCreated = provider.createsOrderBeforeReturning;
-              trade.walletId = wallet.id;
-              trade.chainId = wallet.chainId;
-              trade.fromWalletAddress = wallet.walletAddresses.address;
+              if (provider is PegarouteExchangeProvider) {
+                const PegarouteExecutionBindingValidator()
+                    .validatePersisted(trade: trade, wallet: wallet);
+              } else {
+                trade.walletId = wallet.id;
+                trade.chainId = wallet.chainId;
+                trade.fromWalletAddress = wallet.walletAddresses.address;
+              }
               if (trade.from == null) {
                 trade.from = depositCurrency;
               }
@@ -1318,6 +1325,10 @@ abstract class ExchangeViewModelBase extends WalletChangeListenerViewModel with 
               }
 
               tradesStore.setTrade(trade);
+              if (provider is PegarouteExchangeProvider) {
+                const PegarouteExecutionBindingValidator()
+                    .validatePersisted(trade: trade, wallet: wallet);
+              }
               if (trade.provider != ExchangeProviderDescription.thorChain) await trade.save();
               tradeState = TradeIsCreatedSuccessfully(trade: trade);
 
