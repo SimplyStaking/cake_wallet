@@ -14,6 +14,28 @@ come from the authenticated order. Missing expiry is permitted. The source
 transaction verifies the deposit payment; it does not prove provider payout or
 refund behavior. Those remain bound order terms and polled provider evidence.
 
+## Provider configuration
+
+In the new swap UI, open **Swap providers → Pegaroute → Manage providers**.
+Pegaroute remains one exchange entry. The Instaswap, THORChain, Maya and
+OpenOcean toggles are saved locally; automatic selection respects them.
+
+Only native ETH Instaswap deposits are currently executable. The other three
+settings are marked **Coming Soon** and do not activate contract execution.
+Cake's exchange comparison now uses only enabled executable routes, so a better
+OpenOcean quote cannot be shown as the price of an Instaswap order. If Instaswap
+is disabled, no Pegaroute execution quote is available in this increment.
+
+**Decentralized-only** excludes Instaswap without erasing its saved preference.
+Changing settings refreshes limits/rates and discards results from older settings.
+The read-only provider API retains broader native/token quote discovery and uses
+the same preferences when supplied, including for receive-amount estimates.
+
+OpenOcean execution was assessed and deferred: Cake can construct EVM calls, but
+the deposit adapter cannot validate OpenOcean router/calldata semantics. This is
+larger than a provider-configuration change. THORChain/Maya execution is also
+deferred under the configuration-first scope.
+
 ## Local execution bridge
 
 The existing Python bridge remains quote-only by default. To opt in to creation,
@@ -90,6 +112,12 @@ Checks with Flutter 3.41.9:
 Final review explicitly restricts the registered deposit handler to Instaswap;
 an OpenOcean empty-calldata envelope does not qualify as a deposit order. The
 focused deposit/handler suites and targeted analysis passed after that check.
+
+Provider-configuration verification: **290 tests passed** across `test/exchange`,
+`test/view_model/send_view_model_commit_test.dart` and
+`test/new-ui/widgets/swap_page/pegaroute_providers_settings_test.dart`.
+Targeted analysis reported no errors; the existing unused `hive` import in
+`lib/store/settings_store.dart` is the only warning (reported twice by the analyzer).
 
 Flutter reports existing missing `assets/new-ui/` directories while preparing
 the test bundle; the test suite completes successfully without asset changes.
