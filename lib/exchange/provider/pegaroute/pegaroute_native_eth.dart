@@ -42,7 +42,8 @@ bool pegarouteNativeEthDeposit(TradeExecution execution) =>
 /// Observes Cake's existing wallet/network observables, including ABA switches.
 /// The provider uses a short-lived instance; the dispatcher owns an app-lifetime one.
 final class PegarouteActiveWalletContext implements PegarouteWalletContext {
-  PegarouteActiveWalletContext(this.currentWallet) {
+  PegarouteActiveWalletContext(this.currentWallet,
+      {this.supportsWallet = pegarouteNativeEthWallet}) {
     dispose = reaction(
       (_) {
         final wallet = currentWallet();
@@ -53,13 +54,14 @@ final class PegarouteActiveWalletContext implements PegarouteWalletContext {
   }
 
   final WalletBase? Function() currentWallet;
+  final bool Function(WalletBase?) supportsWallet;
   late final ReactionDisposer dispose;
   int _generation = 0;
 
   @override
   PegarouteWalletSnapshot snapshot(WalletBase wallet) {
-    if (!identical(currentWallet(), wallet) || !pegarouteNativeEthWallet(wallet)) {
-      throw const PegarouteBindingException('The active software Ethereum wallet changed');
+    if (!identical(currentWallet(), wallet) || !supportsWallet(wallet)) {
+      throw const PegarouteBindingException('The active software funding wallet changed');
     }
     return PegarouteWalletSnapshot(
       walletId: wallet.id,
@@ -120,11 +122,27 @@ PegarouteEthTransactionEvidence inspectPegarouteNativeEth(
   String rawHex,
   PegarouteWalletSnapshot snapshot,
 ) {
+  final evidence = inspectPegarouteEvm(rawHex, snapshot);
+  if (!rawHex.toLowerCase().startsWith('0x02') || evidence.chainId != 1 || evidence.data != null) {
+    throw const PegarouteBindingException('Signed native ETH deposit could not be verified');
+  }
+  return evidence;
+}
+
+/// Structural transaction inspection only: signer, network, target, value and
+/// exact calldata. Contract effects are deliberately not decoded here.
+PegarouteEthTransactionEvidence inspectPegarouteEvm(
+  String rawHex,
+  PegarouteWalletSnapshot snapshot,
+) {
   try {
     final bytes = hexToBytes(rawHex);
-    if (bytes.isEmpty || bytes.first != 2) throw const FormatException('Expected type 2');
-    final fields = _nativeTransactionFields(bytes.sublist(1));
-    if (fields.length != 12 || bytesToHex(web3.encode(fields)) != bytesToHex(bytes.sublist(1))) {
+    if (bytes.isEmpty) throw const FormatException('Empty transaction');
+    final typed = bytes.first == 2;
+    final encoded = typed ? bytes.sublist(1) : bytes;
+    final fields = _nativeTransactionFields(encoded);
+    if (fields.length != (typed ? 12 : 9) ||
+        bytesToHex(web3.encode(fields)) != bytesToHex(encoded)) {
       throw const FormatException('Noncanonical transaction');
     }
     Uint8List field(int i) => fields[i] as Uint8List;
@@ -136,22 +154,25 @@ PegarouteEthTransactionEvidence inspectPegarouteNativeEth(
       return value.isEmpty ? BigInt.zero : bytesToUnsignedInt(value);
     }
 
-    final chain = number(0);
-    number(1); // nonce is also required to be canonical
-    final tip = number(2);
-    final maxFee = number(3);
-    final gas = number(4);
-    final amount = number(6);
-    final parity = number(9);
-    final r = number(10);
-    final s = number(11);
+    final v = number(typed ? 9 : 6);
+    final chain = typed ? number(0) : (v - BigInt.from(35)) ~/ BigInt.two;
+    final parity = typed ? v : (v - BigInt.from(35)) % BigInt.two;
+    number(typed ? 1 : 0); // nonce
+    final tip = typed ? number(2) : BigInt.zero;
+    final maxFee = number(typed ? 3 : 1);
+    final gas = number(typed ? 4 : 2);
+    final amount = number(typed ? 6 : 4);
+    final to = field(typed ? 5 : 3);
+    final data = field(typed ? 7 : 5);
+    final r = number(typed ? 10 : 7);
+    final s = number(typed ? 11 : 8);
     final order =
         BigInt.parse('fffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141', radix: 16);
-    if (chain != BigInt.one ||
-        field(5).length != 20 ||
-        field(7).isNotEmpty ||
-        fields[8] is! List ||
-        (fields[8] as List).isNotEmpty ||
+    if (snapshot.chainId == null ||
+        chain != BigInt.from(snapshot.chainId!) ||
+        !typed && v < BigInt.from(35) ||
+        to.length != 20 ||
+        typed && (fields[8] is! List || (fields[8] as List).isNotEmpty) ||
         gas < BigInt.from(21000) ||
         maxFee <= BigInt.zero ||
         tip > maxFee ||
@@ -160,9 +181,12 @@ PegarouteEthTransactionEvidence inspectPegarouteNativeEth(
         r >= order ||
         s <= BigInt.zero ||
         s > order ~/ BigInt.two) {
-      throw const FormatException('Unsupported native ETH transaction');
+      throw const FormatException('Unsupported EVM transaction');
     }
-    final digest = keccak256(Uint8List.fromList([2, ...web3.encode(fields.sublist(0, 9))]));
+    final digest = keccak256(Uint8List.fromList(typed
+        ? [2, ...web3.encode(fields.sublist(0, 9))]
+        : web3.encode(
+            [...fields.sublist(0, 6), unsignedIntToBytes(chain), Uint8List(0), Uint8List(0)])));
     final recovered = ecRecover(digest, MsgSignature(r, s, parity.toInt() + 27));
     final publicKey = Uint8List(64);
     if (recovered.length > 64) throw const FormatException('Invalid public key');
@@ -173,24 +197,24 @@ PegarouteEthTransactionEvidence inspectPegarouteNativeEth(
     }
     return PegarouteEthTransactionEvidence(
       rawHex: rawHex,
-      chainId: 1,
-      to: bytesToHex(field(5), include0x: true),
+      chainId: chain.toInt(),
+      to: bytesToHex(to, include0x: true),
       valueBaseUnits: amount.toString(),
-      data: null,
+      data: data.isEmpty ? null : bytesToHex(data, include0x: true),
       gasLimit: gas.toString(),
       approvalPresent: false,
       transactionHash: bytesToHex(keccak256(bytes), include0x: true),
       snapshot: snapshot,
     );
   } catch (_) {
-    throw const PegarouteBindingException('Signed native ETH deposit could not be verified');
+    throw const PegarouteBindingException('Signed EVM instructions could not be verified');
   }
 }
 
 // Narrow RLP reader: one transaction list with byte fields and an empty access
 // list. Round-trip encoding above additionally rejects noncanonical lengths.
 List<Object> _nativeTransactionFields(Uint8List bytes) {
-  if (bytes.length > 1024) throw const FormatException('Oversized native transaction');
+  if (bytes.length > 65535) throw const FormatException('Oversized EVM transaction');
   var cursor = 0;
   Object read({bool root = false}) {
     final prefix = bytes[cursor++];

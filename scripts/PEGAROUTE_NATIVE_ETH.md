@@ -1,18 +1,38 @@
-# Native ETH deposit execution
+# Pegaroute EVM execution
 
-This increment enables public **native ETH on Ethereum mainnet → Instaswap
-deposit orders**, using Cake's existing fee calculation, software-wallet signing,
-confirmation screen, dispatcher and SQLite execution lifecycle. ETH → XMR is
-covered end-to-end with mocked API responses and synthetic signed transactions.
-Other catalog destinations may use the same deposit model when Instaswap returns
-compatible instructions; they have not been live-validated.
+Pegaroute uses Cake's existing fee calculation, software-wallet signing,
+confirmation screen, dispatcher and SQLite lifecycle. Supported execution shapes:
 
-The creation flow obtains a fresh address-bound quote, selects the Instaswap
-deposit route, consumes the existing one-shot preflight, and returns a bound Trade
-for Cake's ordinary initial save. Deposit address/amount and any supplied expiry
-come from the authenticated order. Missing expiry is permitted. The source
-transaction verifies the deposit payment; it does not prove provider payout or
-refund behavior. Those remain bound order terms and polled provider evidence.
+| Source | Funding operation | Providers |
+| --- | --- | --- |
+| Native asset on Ethereum, BSC, Base, Arbitrum or Polygon | Native transfer | Instaswap; compatible authenticated OpenOcean instructions |
+| Native asset on those networks | Single contract call | THORChain, Maya, OpenOcean |
+| Mapped ERC20 on those networks | One standard token transfer, zero native value | Instaswap |
+
+These are wallet capabilities, **not a claim that every provider serves every
+network or pair**. Pegasus supplies available routes. Destination assets are not
+hardcoded: any mapped destination can be used when the selected provider returns
+compatible instructions. OpenOcean routes are same-chain.
+
+Creation obtains a fresh address-bound quote, selects the highest-output enabled
+executable route, consumes the one-shot preflight and returns a bound Trade for
+Cake's ordinary save. The authenticated execution snapshot, canonical assets,
+exact source amount, sender, payout/refund intent, provider and wallet/network
+are persisted together. Built-in token aliases are resolved to canonical typed
+contract/mint identities before order creation. Supplied funding expiries are enforced; absent expiry
+is permitted. Wallet preparation inspects actual signed type-2 or EIP-155 legacy
+bytes to bind signer, chain, target, native value and exact calldata, and derives
+the real network hash. Prepared bytes cannot change before commit.
+
+## Trusted-provider model
+
+**Cake trusts authenticated Pegaroute instructions for contract effects.**
+Independent decoding of output asset, recipient, minimum return, nested calls,
+fees, refunds and authority effects is explicitly deferred, with no work scheduled
+for this increment. Incorrect or compromised upstream instructions could have
+unintended effects even when their accompanying metadata matches the request.
+The byte checks establish which transaction Cake signs, not what that contract
+will ultimately do. Existing strict verifier seams are retained separately.
 
 ## Provider configuration
 
@@ -20,21 +40,17 @@ In the new swap UI, open **Swap providers → Pegaroute → Manage providers**.
 Pegaroute remains one exchange entry. The Instaswap, THORChain, Maya and
 OpenOcean toggles are saved locally; automatic selection respects them.
 
-Only native ETH Instaswap deposits are currently executable. The other three
-settings are marked **Coming Soon** and do not activate contract execution.
-Cake's exchange comparison now uses only enabled executable routes, so a better
-OpenOcean quote cannot be shown as the price of an Instaswap order. If Instaswap
-is disabled, no Pegaroute execution quote is available in this increment.
+All four settings now show EVM execution support. Exchange comparison and fresh
+creation use the same preference and execution-shape eligibility rules. Native
+inputs can use enabled DEX routes when Instaswap is disabled; token-source DEX
+routes remain excluded because approval/contract debit support is not activated.
+The fresh creation quote may change the estimate; its chosen provider and output
+are carried through the Trade and normal confirmation UI.
 
 **Decentralized-only** excludes Instaswap without erasing its saved preference.
 Changing settings refreshes limits/rates and discards results from older settings.
 The read-only provider API retains broader native/token quote discovery and uses
 the same preferences when supplied, including for receive-amount estimates.
-
-OpenOcean execution was assessed and deferred: Cake can construct EVM calls, but
-the deposit adapter cannot validate OpenOcean router/calldata semantics. This is
-larger than a provider-configuration change. THORChain/Maya execution is also
-deferred under the configuration-first scope.
 
 ## Local execution bridge
 
@@ -65,8 +81,10 @@ PEGAROUTE_API_BASE_URL=http://127.0.0.1:4003 \
   bash scripts/macos/run_pegaroute_dev.sh --build-only
 ```
 
-The runner uses a disposable snapshot and the existing native stubs. This checks
-app integration; a funded ETH → XMR swap requires separate live validation.
+The runner uses a disposable snapshot and the existing native stubs. The last
+built app, snapshot `pegaroute-macos-build.S59BDZ` at `28177af6c`, predates provider
+settings and trusted EVM execution. Rebuild to use these additions. Funded swaps
+require separate live validation.
 
 ## Broadcast and notification
 
@@ -90,34 +108,28 @@ fallback after that ambiguous POST.
 
 Existing token catalogs, receive-amount estimator, binding envelopes, migrations,
 BTC/XMR/THOR/Maya handler seams, and lifecycle/store tests are retained. Funding
-still rejects contract calls, approvals, token sources, other source chains,
-memos, private routes, hardware/UR, send-all and external funding. Fixed-rate
-execution, OpenOcean semantics, approval sequencing, creation recovery, callback
-outbox/retry UI and other source adapters are deferred.
+rejects approval sequences, token-source contract swaps, serialized transactions,
+non-EVM sources, private routes, hardware/UR, send-all and external funding.
+THOR/Maya contract memo metadata and calldata are trusted and bound together.
+Fixed-rate execution, independent contract-effect validation, creation recovery,
+callback outbox/retry UI and other source adapters are deferred.
 
 Validation is offline: mocked HTTP, in-memory SQLite and synthetic test keys.
 No real order creation, real-wallet signing, funding, broadcasting or native
 backend build was performed for this increment.
 
-Checks with Flutter 3.41.9:
-
-- `flutter test --no-pub test/exchange test/view_model/send_view_model_commit_test.dart`:
-  **279 passed**.
-- Targeted `flutter analyze --no-pub --no-fatal-infos` across the changed Dart
-  source and tests: **no errors or warnings**; informational style lints remain.
-- `python3 -m unittest discover -s test/tools -p 'test_pegaroute_quote_proxy.py'`:
-  **6 passed**, using a mocked loopback upstream only.
-- Protected build/lockfile SHA-256 checks and `git diff --check`: passed.
-
-Final review explicitly restricts the registered deposit handler to Instaswap;
-an OpenOcean empty-calldata envelope does not qualify as a deposit order. The
-focused deposit/handler suites and targeted analysis passed after that check.
-
-Provider-configuration verification: **290 tests passed** across `test/exchange`,
+Trusted EVM verification with Flutter 3.41.9: **334 tests passed** across `test/exchange`,
 `test/view_model/send_view_model_commit_test.dart` and
 `test/new-ui/widgets/swap_page/pegaroute_providers_settings_test.dart`.
-Targeted analysis reported no errors; the existing unused `hive` import in
-`lib/store/settings_store.dart` is the only warning (reported twice by the analyzer).
+Coverage includes synthetic native transfers/calls on all five EVM networks,
+ETH → USDC contract instructions, ERC20 deposits with 6/18 decimals, SQLite
+restoration/callbacks, altered signed instructions, wallet/network switches,
+supplied expiry, unsupported approvals, preference changes, route ranking and
+duplicate-commit prevention. Synthetic provider/network combinations exercise
+plumbing without claiming live market availability. The local bridge is unchanged;
+its earlier six mocked tests passed. No app rebuild was performed in this increment.
+Targeted source/test analysis passed with no errors or warnings; existing
+informational style lints remain. Protected-file checksums and `git diff --check` passed.
 
 Flutter reports existing missing `assets/new-ui/` directories while preparing
 the test bundle; the test suite completes successfully without asset changes.

@@ -259,7 +259,7 @@ import 'package:cake_wallet/view_model/send/fees_view_model.dart';
 import 'package:cake_wallet/view_model/send/send_template_view_model.dart';
 import 'package:cake_wallet/view_model/send/send_view_model.dart';
 import 'package:cake_wallet/exchange/trade_execution_dispatcher.dart';
-import 'package:cake_wallet/exchange/provider/pegaroute/pegaroute_eth_execution_handler.dart';
+import 'package:cake_wallet/exchange/provider/pegaroute/pegaroute_trusted_execution.dart';
 import 'package:cake_wallet/exchange/provider/pegaroute/pegaroute_execution_lifecycle_store.dart';
 import 'package:cake_wallet/exchange/provider/pegaroute/pegaroute_native_eth.dart';
 import 'package:cake_wallet/exchange/provider/pegaroute_exchange_provider.dart';
@@ -392,16 +392,18 @@ Future<void> setup({
       // nodeListStore: getIt.get<NodeListStore>(),
       themeStore: getIt.get<ThemeStore>()));
   getIt.registerSingleton<TradesStore>(TradesStore(appStore: getIt.get<AppStore>()));
-  final pegarouteWalletContext = PegarouteActiveWalletContext(() => getIt.get<AppStore>().wallet);
+  final pegarouteWalletContext = PegarouteActiveWalletContext(
+    () => getIt.get<AppStore>().wallet,
+    supportsWallet: pegarouteTrustedWallet,
+  );
   getIt.registerSingleton<TradeExecutionDispatcher>(RegistryTradeExecutionDispatcher([
-    PegarouteEthExecutionHandler(
+    PegarouteTrustedExecutionHandler(
       walletContext: pegarouteWalletContext,
-      adapter: PegarouteNativeEthWalletAdapter(
+      adapter: PegarouteTrustedWalletAdapter(
         priority: (wallet) => settingsStore.getPriority(wallet.type, chainId: wallet.chainId),
       ),
-      nativeDepositsOnly: true,
-      lifecycleHandler: PegarouteExecutionLifecycleStore(),
-      onDepositCommitted: PegarouteExchangeProvider().notifyCommitted,
+      lifecycle: PegarouteExecutionLifecycleStore(),
+      onSourceCommitted: PegarouteExchangeProvider().notifyCommitted,
     ),
   ]), dispose: (_) => pegarouteWalletContext.dispose());
   getIt.registerSingleton<OrdersStore>(
