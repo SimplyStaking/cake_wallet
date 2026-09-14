@@ -9,6 +9,9 @@ import 'package:cw_core/utils/proxy_wrapper.dart';
 import 'pegaroute_configuration.dart';
 import 'pegaroute_execution_binding.dart';
 
+// Pegaroute contract baseline: dca607dc29dedbd0d8b9eba5f765f46f837ff90f.
+// This references audited upstream source, not the version of a running proxy.
+
 typedef PegarouteGet = Future<very_insecure_http_do_not_use.Response> Function(
     Uri uri, Map<String, String> headers);
 typedef PegaroutePost = Future<very_insecure_http_do_not_use.Response> Function(
@@ -34,9 +37,27 @@ class PegarouteUnavailableException implements Exception {
 }
 
 final class PegarouteSwapAttemptException implements Exception, TradeCreationFailure {
-  const PegarouteSwapAttemptException({required this.cause, required this.userMessage});
+  const PegarouteSwapAttemptException({
+    required this.cause,
+    required this.userMessage,
+    this.providerTransactionId,
+  });
 
   final Object cause;
+  final String? providerTransactionId;
+
+  /// Local validation diagnostics only; never dump arbitrary transport/provider bodies.
+  String get diagnosticMessage {
+    var underlying = cause;
+    while (underlying is PegarouteSwapAttemptException) {
+      underlying = underlying.cause;
+    }
+    return switch (underlying) {
+      PegarouteBindingException error => error.message,
+      PegarouteCodecException error => error.message,
+      _ => underlying.runtimeType.toString(),
+    };
+  }
 
   @override
   final String userMessage;
@@ -146,7 +167,8 @@ final class PegaroutePrivateValue {
     // string modes that cannot survive transport with their identity intact.
     final mode = value;
     if (mode is String && (mode != mode.trim() || mode == 'true' || mode == 'false')) {
-      throw const PegarouteCodecException('private string mode is not canonical for query transport');
+      throw const PegarouteCodecException(
+          'private string mode is not canonical for query transport');
     }
     return value.toString();
   }
@@ -888,23 +910,7 @@ final class PegarouteRoute {
 
   factory PegarouteRoute.fromJson(Object? value) {
     final map = _object(value);
-    _rejectUnknown(map, const {
-      'provider',
-      'subprovider',
-      'private',
-      'providerType',
-      'expectedOutput',
-      'fees',
-      'estimatedTimeSeconds',
-      'expiry',
-      'memo',
-      'inboundAddress',
-      'router',
-      'gasRate',
-      'minAmount',
-      'resolvedFee',
-      'openOceanRoute',
-    });
+    // Accept additive response metadata; known fields keep their typed contract.
     return PegarouteRoute(
       provider: _requiredString(map, 'provider'),
       providerType: _requiredString(map, 'providerType'),
@@ -930,15 +936,6 @@ final class PegarouteRoute {
 
   factory PegarouteRoute.fromRouteInfoJson(Object? value) {
     final map = _object(value);
-    _rejectUnknown(map, const {
-      'provider',
-      'subprovider',
-      'private',
-      'expectedOutput',
-      'fees',
-      'estimatedTimeSeconds',
-      'openOceanRoute',
-    });
     return PegarouteRoute(
       provider: _requiredString(map, 'provider'),
       expectedOutput: _requiredString(map, 'expectedOutput'),
@@ -1191,7 +1188,7 @@ final class PegarouteProviderInfo {
 
   factory PegarouteProviderInfo.fromJson(Object? value) {
     final map = _object(value);
-    final details = _requiredNullableValue(map, 'details');
+    final details = map['details'];
     return PegarouteProviderInfo(
       name: _requiredString(map, 'name'),
       referenceId: _requiredNullableString(map, 'referenceId'),
@@ -1715,17 +1712,21 @@ class PegarouteApiClient {
       validHash = chain == 'SOL'
           ? Base58Decoder.decode(hash).length == 64
           : RegExp(evm ? r'^0x[0-9a-fA-F]{64}$' : r'^[0-9a-fA-F]{64}$').hasMatch(hash);
-    } catch (_) { validHash = false; }
-    if (!RegExp(r'^[a-zA-Z0-9_-]+$').hasMatch(id) ||
-        !validHash) {
+    } catch (_) {
+      validHash = false;
+    }
+    if (!RegExp(r'^[a-zA-Z0-9_-]+$').hasMatch(id) || !validHash) {
       throw const PegarouteCodecException('Invalid deposit notification identity');
     }
     final response = await _post(_uri('/swap/$id/txhash'),
         {..._headers, 'Content-Type': 'application/json'}, json.encode({'txHash': hash}));
     _decode(response, (value) {
       final map = _object(value);
-      if (map['transactionId'] != id || map['txHash'] is! String ||
-          (chain == 'SOL' ? map['txHash'] != hash : (map['txHash'] as String).toLowerCase() != hash.toLowerCase()) ||
+      if (map['transactionId'] != id ||
+          map['txHash'] is! String ||
+          (chain == 'SOL'
+              ? map['txHash'] != hash
+              : (map['txHash'] as String).toLowerCase() != hash.toLowerCase()) ||
           !const {'submitted', 'executing', 'confirming', 'completed', 'failed', 'refunded'}
               .contains(map['status'])) {
         throw const PegarouteCodecException('Deposit notification identity changed');
@@ -1821,14 +1822,6 @@ class PegarouteSwapResponse {
 
   factory PegarouteSwapResponse.fromJson(Object? value) {
     final map = _object(value);
-    _rejectUnknown(map, const {
-      'transactionId',
-      'status',
-      'providerType',
-      'route',
-      'execution',
-      'provider',
-    });
     final status = _requiredString(map, 'status');
     if (status != 'pending') throw const PegarouteCodecException('swap status must be pending');
     final route = PegarouteRoute.fromRouteInfoJson(map['route']);

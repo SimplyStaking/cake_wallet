@@ -1,4 +1,7 @@
 import 'dart:async';
+import 'package:cake_wallet/exchange/provider/pegaroute/pegaroute_execution_binding.dart';
+import 'package:cake_wallet/exchange/provider/pegaroute/pegaroute_trusted_execution.dart';
+import 'package:cake_wallet/exchange/trade_execution_lifecycle.dart';
 import 'package:cake_wallet/exchange/provider/jupiter_exchange_provider.dart';
 import 'package:cake_wallet/exchange/provider/near_Intents_exchange_provider.dart';
 import 'package:cake_wallet/exchange/provider/pegaroute_exchange_provider.dart';
@@ -32,12 +35,18 @@ class TradeMonitor {
     required this.tradesStore,
     required this.appStore,
     required this.preferences,
-  });
+    DateTime Function()? clock,
+    ExchangeProvider? Function(ExchangeProviderDescription)? providerFactory,
+  })  : _clock = clock ?? DateTime.now,
+        _providerFactory = providerFactory;
 
   final TradesStore tradesStore;
   final AppStore appStore;
   final Map<String, Timer> _tradeTimers = {};
   final SharedPreferences preferences;
+  final DateTime Function() _clock;
+  final ExchangeProvider? Function(ExchangeProviderDescription)? _providerFactory;
+  final Set<String> _checksInFlight = {};
 
   ExchangeProvider? _getProviderByDescription(ExchangeProviderDescription description) {
     switch (description) {
@@ -80,6 +89,11 @@ class TradeMonitor {
     // i.e the user has not disabled the exchange api mode or the status updates
     final isTradeMonitoringPermitted = _isTradeMonitoringPermitted();
     if (!isTradeMonitoringPermitted) {
+      // Respect a preference change even when a foreground timer already exists.
+      _cancelMultipleTradeTimers(_tradeTimers.keys
+          .where((id) => tradesStore.trades.any((item) =>
+              item.trade.id == id && item.trade.provider == ExchangeProviderDescription.pegaroute))
+          .toList());
       return;
     }
 
@@ -89,7 +103,9 @@ class TradeMonitor {
     for (final item in trades) {
       final trade = item.trade;
 
-      final provider = _getProviderByDescription(trade.provider);
+      final provider = _providerFactory != null
+          ? _providerFactory(trade.provider)
+          : _getProviderByDescription(trade.provider);
 
       // Multiple checks to see if to skip the trade, if yes, we cancel the timer if it exists
       if (_shouldSkipTrade(trade, walletId, provider)) {
@@ -131,12 +147,15 @@ class TradeMonitor {
     }
 
     final createdAt = trade.createdAt;
-    if (createdAt == null) {
+    final fundedPegaroute = _isFundedPegaroute(trade);
+    if (createdAt == null && !fundedPegaroute) {
       printV('Skipping trade ${trade.id} because it has no createdAt');
       return true;
     }
 
-    if (DateTime.now().difference(createdAt).inHours > _maxTradeAgeHours) {
+    if (!fundedPegaroute &&
+        createdAt != null &&
+        _clock().difference(createdAt).inHours > _maxTradeAgeHours) {
       printV('Skipping trade ${trade.id} because it\'s older than ${_maxTradeAgeHours} hours');
       return true;
     }
@@ -159,23 +178,46 @@ class TradeMonitor {
     return false;
   }
 
+  bool _isFundedPegaroute(Trade trade) {
+    if (trade.provider != ExchangeProviderDescription.pegaroute ||
+        trade.executionLifecycleJson == null ||
+        trade.txId?.isNotEmpty != true) return false;
+    try {
+      final execution =
+          const PegarouteExecutionBindingValidator().validatePersisted(trade: trade).execution;
+      final lifecycle = TradeExecutionLifecycle.fromJsonString(trade.executionLifecycleJson!);
+      return lifecycle.state == TradeExecutionLifecycleState.broadcasted &&
+          lifecycle.executionHash == pegarouteFundingIdentity(execution, trade.txId!);
+    } catch (_) {
+      return false;
+    }
+  }
+
   void _startTradeMonitoring(Trade trade, ExchangeProvider provider) {
     final timer = Timer.periodic(
       Duration(minutes: _tradeCheckIntervalMinutes),
       (_) => _checkTradeStatus(trade, provider),
     );
 
-    _checkTradeStatus(trade, provider);
-
     _tradeTimers[trade.id] = timer;
+    _checkTradeStatus(trade, provider);
   }
 
   Future<void> _checkTradeStatus(Trade trade, ExchangeProvider provider) async {
+    final isPegaroute = trade.provider == ExchangeProviderDescription.pegaroute;
+    if (isPegaroute &&
+        (!_isTradeMonitoringPermitted() ||
+            _shouldSkipTrade(trade, appStore.wallet?.id ?? '', provider))) {
+      _cancelSingleTradeTimer(trade.id);
+      return;
+    }
     final lastUpdatedAtFromPrefs = preferences.getString('trade_${trade.id}_updated_at');
 
     if (lastUpdatedAtFromPrefs != null) {
-      final lastUpdatedAtDateTime = DateTime.parse(lastUpdatedAtFromPrefs);
-      final timeSinceLastUpdate = DateTime.now().difference(lastUpdatedAtDateTime).inMinutes;
+      final lastUpdatedAtDateTime = DateTime.tryParse(lastUpdatedAtFromPrefs);
+      final timeSinceLastUpdate = lastUpdatedAtDateTime == null
+          ? _tradeCheckIntervalMinutes
+          : _clock().difference(lastUpdatedAtDateTime).inMinutes;
 
       if (timeSinceLastUpdate < _tradeCheckIntervalMinutes) {
         printV(
@@ -185,6 +227,7 @@ class TradeMonitor {
       }
     }
 
+    if (isPegaroute && !_checksInFlight.add(trade.id)) return;
     try {
       final persisted = provider is PegarouteExchangeProvider
           ? await provider.refreshTradeStatus(trade: trade)
@@ -192,8 +235,8 @@ class TradeMonitor {
       printV('Trade ${trade.id} updated: ${persisted.state}');
       if (provider is! PegarouteExchangeProvider) await persisted.save();
 
-      await preferences.setString('trade_${trade.id}_updated_at', DateTime.now().toIso8601String());
-      printV('Trade ${trade.id} updated at: ${DateTime.now().toIso8601String()}');
+      await preferences.setString('trade_${trade.id}_updated_at', _clock().toIso8601String());
+      printV('Trade ${trade.id} updated at: ${_clock().toIso8601String()}');
 
       // If the updated trade is in a final state, we cancel the timer
       final isFinal = provider is PegarouteExchangeProvider
@@ -205,6 +248,8 @@ class TradeMonitor {
       }
     } catch (e) {
       printV('Error fetching status for ${trade.id}: $e');
+    } finally {
+      if (isPegaroute) _checksInFlight.remove(trade.id);
     }
   }
 

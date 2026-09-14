@@ -1,4 +1,5 @@
 import 'package:cake_wallet/exchange/provider/pegaroute/pegaroute_api.dart';
+import 'package:cake_wallet/exchange/provider/pegaroute/pegaroute_amount.dart';
 import 'dart:convert';
 
 import 'package:cake_wallet/exchange/provider/pegaroute/pegaroute_currency_mapper.dart';
@@ -223,6 +224,7 @@ final class PegarouteExecutionBindingValidator {
       Error.throwWithStackTrace(
         PegarouteSwapAttemptException(
           cause: error,
+          providerTransactionId: result.response.transactionId,
           userMessage:
               'Pegaroute created an order, but its execution could not be validated safely.',
         ),
@@ -267,7 +269,7 @@ final class PegarouteExecutionBindingValidator {
       destinationChain: preflight.destinationChain,
       destinationToken: preflight.destinationToken,
       routeProvider: reviewedRoute['provider'] as String,
-      subprovider: reviewedRoute['subprovider'] as String?,
+      subprovider: response.route.subprovider,
       privateIntent: reviewedRoute['private'],
       binding: TradeExecutionBinding(
         tradeId: preflight.tradeId,
@@ -433,13 +435,25 @@ final class PegarouteExecutionBindingValidator {
   void validateStatusResponse({
     required ValidatedTradeExecution validated,
     required PegarouteStatusResponse response,
+    String? broadcastTransactionHash,
   }) {
     final execution = validated.execution;
     final binding = execution.binding;
+    // OpenOcean reports zero realized input/output on a reverted transaction.
+    // Accept that observation only for the exact durably broadcast EVM hash;
+    // the original funding amount and execution remain immutable.
+    final revertedOpenOcean = execution.routeProvider == 'openocean' &&
+        execution.family == 'evm' &&
+        response.internalStatus == 'failed' &&
+        pegarouteSameAmount(response.input.amount, '0') &&
+        pegarouteSameAmount(response.output.amount ?? '', '0') &&
+        broadcastTransactionHash != null &&
+        RegExp(r'^0x[0-9a-fA-F]{64}$').hasMatch(broadcastTransactionHash) &&
+        response.input.txHash?.toLowerCase() == broadcastTransactionHash.toLowerCase();
     if (response.transactionId != (binding.providerTransactionId ?? binding.tradeId) ||
         _canonicalChain(response.input.chain) != execution.sourceChain ||
         _canonicalToken(response.input.chain, response.input.token) != execution.sourceToken ||
-        response.input.amount != binding.sourceAmount ||
+        !pegarouteSameAmount(response.input.amount, binding.sourceAmount) && !revertedOpenOcean ||
         !_sameAddress(execution.sourceChain, response.input.address ?? '', binding.senderAddress) ||
         !_sameOptionalAddress(
             execution.sourceChain,
@@ -634,7 +648,8 @@ final class PegarouteExecutionBindingValidator {
       if (provider.referenceId == null || details.txid != provider.referenceId) {
         throw const PegarouteBindingException('provider reference details changed');
       }
-      if (details.depositAmountExact != null && details.depositAmountExact != sourceAmount) {
+      if (details.depositAmountExact != null &&
+          !pegarouteSameAmount(details.depositAmountExact!, sourceAmount)) {
         throw const PegarouteBindingException('provider deposit amount changed');
       }
       if (execution.to == null ||
@@ -684,7 +699,9 @@ final class PegarouteExecutionBindingValidator {
     required DateTime? providerDepositExpiry,
   }) {
     if (_trustedSolanaSerialized(route, execution)) {
-      if (providerDepositAddress != null || providerDepositAmountExact != null || providerDepositExpiry != null) {
+      if (providerDepositAddress != null ||
+          providerDepositAmountExact != null ||
+          providerDepositExpiry != null) {
         throw const PegarouteBindingException('Serialized Solana order has deposit metadata');
       }
       return;
@@ -719,7 +736,8 @@ final class PegarouteExecutionBindingValidator {
     if ((routeMemo != null && routeMemo is! String) || execution.memo != routeMemo) {
       throw const PegarouteBindingException('persisted execution memo is not reviewed');
     }
-    if (providerDepositAmountExact != null && providerDepositAmountExact != sourceAmount) {
+    if (providerDepositAmountExact != null &&
+        !pegarouteSameAmount(providerDepositAmountExact, sourceAmount)) {
       throw const PegarouteBindingException('persisted provider deposit amount changed');
     }
     if (execution.approval != null) {
@@ -746,11 +764,19 @@ final class PegarouteExecutionBindingValidator {
     // OpenOcean supplies its concrete target at creation. Under the approved
     // trusted-provider model, bind that authenticated target with its calldata.
     if (route['provider'] == 'openocean' && execution.family == 'evm') return execution.to;
+    // Instaswap may allocate its deposit only at creation. Provider details
+    // are optional; the authenticated transfer is sufficient when no earlier
+    // target was supplied. Details, when present, are still cross-checked.
+    if (route['provider'] == 'instaswap' &&
+        const {'native-transfer', 'erc20-transfer', 'payment-with-memo', 'deposit-transfer'}
+            .contains(execution.mode)) return execution.to;
     return null;
   }
 
   static bool _trustedSolanaSerialized(Map<String, dynamic> route, PegarouteExecution execution) =>
-      route['provider'] == 'openocean' && execution.family == 'solana' && execution.mode == 'serialized-tx';
+      route['provider'] == 'openocean' &&
+      execution.family == 'solana' &&
+      execution.mode == 'serialized-tx';
 
   static void _validateExecutionAmount(TradeExecution execution, TradeExecutionBinding binding) {
     final amount = switch (execution.family) {
@@ -764,7 +790,8 @@ final class PegarouteExecutionBindingValidator {
     if (amount == null) return;
     if (amount is! Map ||
         amount['baseUnits'] != binding.sourceAmountBaseUnits ||
-        amount['display'] != binding.sourceAmount) {
+        amount['display'] is! String ||
+        !pegarouteSameAmount(amount['display'] as String, binding.sourceAmount)) {
       throw const PegarouteBindingException('execution amount differs from requested amount');
     }
   }
@@ -809,7 +836,8 @@ final class PegarouteExecutionBindingValidator {
           _requireAmount(execution.value, sourceAmount, expectedBaseUnits);
         } else {
           if (execution.value != null &&
-              (execution.value!.display != '0' || execution.value!.baseUnits != '0')) {
+              (!pegarouteSameAmount(execution.value!.display, '0') ||
+                  execution.value!.baseUnits != '0')) {
             throw const PegarouteBindingException('native call value is not bound');
           }
           // Authenticated source identity/amount and exact calldata are bound;
@@ -846,7 +874,9 @@ final class PegarouteExecutionBindingValidator {
   }
 
   static void _requireAmount(PegarouteTokenAmount? amount, String display, String baseUnits) {
-    if (amount == null || amount.display != display || amount.baseUnits != baseUnits) {
+    if (amount == null ||
+        !pegarouteSameAmount(amount.display, display) ||
+        amount.baseUnits != baseUnits) {
       throw const PegarouteBindingException('execution amount differs from requested amount');
     }
   }
@@ -976,8 +1006,6 @@ final class PegarouteExecutionBindingValidator {
     final echoed = _routeSnapshot(actual, providerType: providerType);
     const requiredIdentityFields = {
       'provider',
-      'subprovider',
-      'private',
       'expectedOutput',
       'fees',
       'estimatedTimeSeconds',
@@ -987,17 +1015,22 @@ final class PegarouteExecutionBindingValidator {
     }
     final keys = <String>[
       'provider',
-      'subprovider',
       'private',
       'expectedOutput',
       'fees',
       'estimatedTimeSeconds',
-      'openOceanRoute',
     ];
     if (providerType != null) keys.add('providerType');
     for (final key in keys) {
-      if (key != 'providerType' && !actual.presentFields.contains(key)) continue;
-      if (!const DeepCollectionEquality().equals(expected[key], echoed[key])) return false;
+      // Omitted private is public. Optional subprovider/DEX labels can be
+      // enriched at creation or polling without changing the funding intent.
+      if (key != 'providerType' && key != 'private' && !actual.presentFields.contains(key))
+        continue;
+      if (key == 'expectedOutput') {
+        if (!pegarouteSameAmount(expected[key] as String, actual.expectedOutput)) return false;
+      } else if (!const DeepCollectionEquality().equals(expected[key], echoed[key])) {
+        return false;
+      }
     }
     return true;
   }
@@ -1057,8 +1090,7 @@ final class PegarouteExecutionBindingValidator {
   static void _validateReviewedRouteForExecution(
       Map<String, dynamic> route, TradeExecution execution) {
     if (route['provider'] != execution.routeProvider ||
-        !_samePrivate(route['private'], execution.privateIntent) ||
-        route['subprovider'] != execution.subprovider) {
+        !_samePrivate(route['private'], execution.privateIntent)) {
       throw const PegarouteBindingException('reviewed route binding changed');
     }
   }
@@ -1169,7 +1201,7 @@ final class PegarouteExecutionBindingValidator {
         (_chainIdFor(sourceChain) == null ||
             RegExp(r'^0x[0-9a-fA-F]{40}$').hasMatch(refund.refundAddress)) &&
         _canonicalChain(refund.chain) == _canonicalChain(sourceChain) &&
-        refund.originalAmount == binding.sourceAmount &&
+        pegarouteSameAmount(refund.originalAmount, binding.sourceAmount) &&
         _validRefundStatus(response);
   }
 
@@ -1183,7 +1215,8 @@ final class PegarouteExecutionBindingValidator {
   static void _validateStatusLifecycle(PegarouteStatusResponse response) {
     final valid = switch (response.status) {
       'pending' => response.internalStatus == 'pending',
-      'executing' => const {'submitted', 'executing', 'confirming'}.contains(response.internalStatus),
+      'executing' =>
+        const {'submitted', 'executing', 'confirming'}.contains(response.internalStatus),
       'success' => response.internalStatus == 'completed',
       'fail' => const {'failed', 'refunded'}.contains(response.internalStatus),
       _ => false,
@@ -1214,7 +1247,9 @@ final class PegarouteExecutionBindingValidator {
       }
       if (details.presentFields.contains('depositAmountExact') &&
           (binding.providerDepositAmountExact == null ||
-              details.depositAmountExact != binding.providerDepositAmountExact)) {
+              details.depositAmountExact == null ||
+              !pegarouteSameAmount(
+                  details.depositAmountExact!, binding.providerDepositAmountExact!))) {
         throw const PegarouteBindingException('status provider details changed');
       }
       if (details.presentFields.contains('expiresAt') &&
@@ -1234,7 +1269,10 @@ final class PegarouteExecutionBindingValidator {
         !_sameAddress(sourceChain, first.depositAddress, second.depositAddress)) return false;
     if (first.presentFields.contains('depositAmountExact') &&
         second.presentFields.contains('depositAmountExact') &&
-        first.depositAmountExact != second.depositAmountExact) return false;
+        (first.depositAmountExact == null || second.depositAmountExact == null
+            ? first.depositAmountExact != second.depositAmountExact
+            : !pegarouteSameAmount(first.depositAmountExact!, second.depositAmountExact!)))
+      return false;
     if (first.presentFields.contains('expiresAt') && second.presentFields.contains('expiresAt')) {
       if (_parseOptionalDateTime(first.expiresAt, 'provider deposit expiry') !=
           _parseOptionalDateTime(second.expiresAt, 'provider deposit expiry')) return false;

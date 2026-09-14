@@ -399,21 +399,12 @@ bool _sameRouteIdentity(PegarouteRoute first, PegarouteRoute next) {
   // Output, minimum, fee amounts, memo (which can contain min-output) and
   // expiry can legitimately vary with input. Preserve them in the final quote;
   // this identity check is not semantic execution/order authorization.
-  Object? dexIdentity(PegarouteOpenOceanRoute? route) => route == null
-      ? null
-      : [
-          route.dexId,
-          route.dexCode,
-          route.dexes?.map((dex) => [dex.dexId, dex.dexCode]).toList()
-        ];
+  // Informational subprovider/DEX labels may appear or change between quotes.
   return first.provider == next.provider &&
       first.providerType == next.providerType &&
-      first.subprovider == next.subprovider &&
       first.inboundAddress == next.inboundAddress &&
       first.router == next.router &&
-      const DeepCollectionEquality().equals(first.resolvedFee, next.resolvedFee) &&
-      const DeepCollectionEquality()
-          .equals(dexIdentity(first.openOceanRoute), dexIdentity(next.openOceanRoute));
+      const DeepCollectionEquality().equals(first.resolvedFee, next.resolvedFee);
 }
 
 Never _fail(PegarouteReceiveEstimateFailure reason) =>
