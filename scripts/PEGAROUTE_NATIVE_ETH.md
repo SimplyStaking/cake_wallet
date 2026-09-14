@@ -1,9 +1,14 @@
 # Pegaroute wallet execution
 
-Contract baseline: Pegasus source **`dca607dc`**
-(`dca607dc29dedbd0d8b9eba5f765f46f837ff90f`, three commits after `v0.5.1`).
-This hardcoded reference identifies the audited integration contract, not a
+Contract baseline: Pegasus source **`177d6891`**
+(`177d6891aada4659ca9d24cf3de8cb336ce31442`, based on main `6156b8b8`).
+This hardcoded reference identifies the reviewed integration contract, not a
 running server revision. Update it when adopting upstream contract changes.
+
+This baseline includes the provider-local OpenOcean status correction: canonical
+contract/mint identities and the requested recipient survive status monitoring;
+conflicting observations reject. Cake continues to reject ticker-only token
+identities. Already-completed historical records are not repaired by that fix.
 
 Pegaroute uses Cake's existing fee calculation, software-wallet signing,
 confirmation screen, dispatcher and SQLite lifecycle. Supported execution shapes:
@@ -203,7 +208,7 @@ an authenticated status poll must return the same source hash. Callback failures
 preserve successful local broadcast and failed/pending callback state. No worker
 or automatic funding retry is added.
 
-The audited Pegasus `dca607dc` source has the basic quote/create/status/txhash endpoints
+The reviewed Pegasus `177d6891` source has the basic quote/create/status/txhash endpoints
 needed by this flow. The isolated upstream commits `7c8a0001` (immutable hash
 registration) and `b295a81d` (creation-attempt recovery) are not deployed and are
 not prerequisites for this increment. The stable legacy hash endpoint can

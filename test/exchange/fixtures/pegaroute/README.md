@@ -1,12 +1,19 @@
 # Pegaroute contract fixtures
 
-Synthetic payloads, audited against Pegasus main
+Synthetic payloads, originally audited against Pegasus main
 `74e2cd8d9dbb71f0b5cd29bd5193d0182346dd34` (2026-09-09).
+Current compatibility baseline:
+`177d6891aada4659ca9d24cf3de8cb336ce31442` (2026-09-14).
 They are mocked codec inputs, not executable offers or live captures.
 
 Authoritative sources: `src/server/openapi/schemas.ts`,
 `src/server/swaps/{schemas,handlers,mappers,execution}.ts`,
-`src/shared/private-mode.ts`, and `docs/integrators/` at that commit.
+`src/shared/private-mode.ts`, and `docs/integrators/` at the current baseline.
+
+The baseline refresh checks the quote/create/status/hash contract changes and
+the 102 mapped Cake asset identities. Existing status regressions cover canonical
+OpenOcean asset identities, ticker-only rejection, and retained funding bindings;
+the upstream fix adds no creation-attempt API or historical-record recovery.
 
 - Private intent is query-only for both quote and swap. A swap JSON body
   property is invalid. Omitted/boolean false is public; true, `zk`, and other
