@@ -62,7 +62,7 @@ class PegarouteCurrencyMapper {
   };
 
   // Cake asset intersection rechecked against src/catalog/pegaroute.json at
-  // 74e2cd8d9dbb71f0b5cd29bd5193d0182346dd34. Unknown user tokens must not be
+  // 177d6891aada4659ca9d24cf3de8cb336ce31442. Unknown user tokens must not be
   // synthesized into request IDs.
   static const _catalogAssets = <String>{
     'ETH/ETH',
