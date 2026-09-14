@@ -5,6 +5,15 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
+import 'package:cake_wallet/core/trade_monitor.dart';
+import 'package:cake_wallet/entities/exchange_api_mode.dart';
+import 'package:cake_wallet/store/app_store.dart';
+import 'package:cake_wallet/store/settings_store.dart';
+import 'package:cake_wallet/store/dashboard/trades_store.dart';
+import 'package:cake_wallet/view_model/dashboard/trade_list_item.dart';
+import 'package:cake_wallet/exchange/trade_state.dart';
+import 'package:flutter/foundation.dart';
+import 'package:mocktail/mocktail.dart';
 
 import 'package:cake_wallet/evm/evm.dart';
 import 'package:cake_wallet/exchange/provider/pegaroute/pegaroute_api.dart';
@@ -14,6 +23,7 @@ import 'package:cake_wallet/exchange/provider/pegaroute/pegaroute_execution_bind
 import 'package:cake_wallet/exchange/provider/pegaroute/pegaroute_execution_lifecycle_store.dart';
 import 'package:cake_wallet/exchange/provider/pegaroute/pegaroute_native_eth.dart';
 import 'package:cake_wallet/exchange/provider/pegaroute/pegaroute_provider_preferences.dart';
+import 'package:cake_wallet/exchange/provider/pegaroute/pegaroute_provider_label.dart';
 import 'package:cake_wallet/exchange/provider/pegaroute/pegaroute_trusted_execution.dart';
 import 'package:cake_wallet/exchange/provider/pegaroute/pegaroute_currency_mapper.dart';
 import 'package:cake_wallet/exchange/provider/pegaroute_exchange_provider.dart';
@@ -28,6 +38,7 @@ import 'package:cw_core/balance.dart';
 import 'package:cw_core/crypto_currency.dart';
 import 'package:cw_core/db/sqlite.dart' as sqlite;
 import 'package:cw_core/erc20_token.dart';
+import 'package:cw_core/evm_call_data_transaction_credentials.dart';
 import 'package:cw_core/spl_token.dart';
 import 'package:cw_core/output_info.dart';
 import 'package:cw_core/transaction_priority.dart';
@@ -43,7 +54,7 @@ import 'package:cw_evm/evm_chain_transaction_priority.dart';
 import 'package:cw_evm/pending_evm_chain_transaction.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as very_insecure_http_do_not_use;
-import 'package:mobx/mobx.dart';
+import 'package:mobx/mobx.dart' hide when;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:cake_wallet/exchange/provider/pegaroute/pegaroute_approval.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
@@ -54,6 +65,13 @@ import 'package:web3dart/crypto.dart';
 final _key = web3.EthPrivateKey.fromInt(BigInt.one);
 const _deposit = '0x0000000000000000000000000000000000000001';
 const _calldata = '0x12345678abcdef'; // Opaque synthetic instructions, not a router fixture.
+
+class _MonitorApp extends Mock implements AppStore {}
+
+class _MonitorSettings extends Mock implements SettingsStore {}
+
+class _MonitorTrades extends Mock implements TradesStore {}
+
 const _nativeCurrency = {
   1: CryptoCurrency.eth,
   56: CryptoCurrency.bnb,
@@ -124,6 +142,16 @@ class _Wallet
   WalletAddresses get walletAddresses => _Addresses();
   @override
   Future<PendingTransaction> createTransaction(Object credentials) async {
+    if (credentials is EvmCallDataTransactionCredentials) {
+      expect(credentials.useBlinkProtection, false);
+      if (sourceCurrency is Erc20Token) {
+        expect(credentials.sourceTokenAddress, (sourceCurrency as Erc20Token).contractAddress);
+        expect(credentials.sourceTokenAmount, BigInt.from(10).pow(sourceCurrency.decimals));
+        expect(credentials.value.amount, BigInt.zero);
+      }
+      return build(credentials.to, credentials.value, credentials.data,
+          gasLimit: credentials.gasLimit);
+    }
     final value = credentials as EVMChainTransactionCredentials;
     final output = value.outputs.single;
     expect(value.currency, sourceCurrency);
@@ -134,7 +162,8 @@ class _Wallet
   }
 
   CryptoCurrency sourceCurrency = CryptoCurrency.eth;
-  Future<PendingTransaction> build(String to, Money amount, String data) async {
+  Future<PendingTransaction> build(String to, Money amount, String data,
+      {int gasLimit = 21000}) async {
     builds++;
     final typed = chainId == 1;
     signedNonces.add(7 + broadcasts);
@@ -144,7 +173,7 @@ class _Wallet
           web3.EtherAmount.inWei(amount.amount + (mutation == 'amount' ? BigInt.one : BigInt.zero)),
       data: Uint8List.fromList(mutation == 'data' ? [1] : hexToBytes(data)),
       nonce: 7 + broadcasts,
-      maxGas: 21000,
+      maxGas: mutation == 'gas' ? 21000 : gasLimit,
       gasPrice: typed ? null : web3.EtherAmount.inWei(BigInt.two),
       maxPriorityFeePerGas: typed ? web3.EtherAmount.inWei(BigInt.one) : null,
       maxFeePerGas: typed ? web3.EtherAmount.inWei(BigInt.from(2)) : null,
@@ -156,7 +185,7 @@ class _Wallet
     pending = PendingEVMChainTransaction(
       signedTransaction: typed ? web3.prependTransactionType(2, signed) : signed,
       amount: amount,
-      fee: Money(BigInt.from(42000), _nativeCurrency[chainId]!),
+      fee: Money(BigInt.from(gasLimit * 2), _nativeCurrency[chainId]!),
       sendTransaction: () async {
         broadcasts++;
         await duringBroadcast?.call();
@@ -263,6 +292,7 @@ void main() {
   late List<String> calls;
   late EVM originalEvm;
   CryptoCurrency receiveCurrency = CryptoCurrency.xmr;
+  String sourceAmount = '1';
   String payoutAddress() => receiveCurrency == CryptoCurrency.xmr
       ? _payout
       : receiveCurrency == CryptoCurrency.usdcsol
@@ -277,11 +307,12 @@ void main() {
   bool completed = false;
   void Function()? afterQuote;
   void Function()? afterPost;
+  void Function(Map<String, dynamic>)? mutateStatus;
 
   TradeRequest request({CryptoCurrency? from, String? sender, String extra = ''}) => TradeRequest(
       fromCurrency: from ?? wallet.sourceCurrency,
       toCurrency: receiveCurrency,
-      fromAmount: '1',
+      fromAmount: sourceAmount,
       toAddress: payoutAddress(),
       senderAddress: sender ?? _key.address.hex,
       refundAddress: _key.address.hex,
@@ -299,6 +330,7 @@ void main() {
     preferences = PegarouteProviderPreferences(await SharedPreferences.getInstance());
     decentralizedOnly = false;
     receiveCurrency = CryptoCurrency.xmr;
+    sourceAmount = '1';
     database = await _database();
     wallet = _Wallet();
     originalEvm = evm!;
@@ -314,6 +346,7 @@ void main() {
     sourceHash = ackHash = ackId = null;
     failCreation = failCallback = completed = false;
     afterQuote = afterPost = null;
+    mutateStatus = null;
     storeHash = true;
     final api = PegarouteApiClient(
       configuration: const PegarouteConfiguration(baseUrl: 'https://fixture.invalid'),
@@ -329,44 +362,44 @@ void main() {
           return very_insecure_http_do_not_use.Response(jsonEncode(quote), 200);
         }
         expect(uri.path, '/swap/transaction-fixture');
-        return very_insecure_http_do_not_use.Response(
-            jsonEncode({
-              'transactionId': 'transaction-fixture',
-              'status': completed
-                  ? 'success'
-                  : sourceHash == null
-                      ? 'pending'
-                      : 'executing',
-              'internalStatus': completed
-                  ? 'completed'
-                  : sourceHash == null
-                      ? 'pending'
-                      : 'submitted',
-              'route': swap['route'],
-              'execution': swap['execution'],
-              'provider': swap['provider'],
-              'input': {
-                'chain': const PegarouteCurrencyMapper().map(wallet.sourceCurrency).chain,
-                'token': const PegarouteCurrencyMapper().map(wallet.sourceCurrency).token,
-                'amount': '1',
-                'address': _key.address.hex,
-                'refundAddress': _key.address.hex,
-                if (sourceHash != null) 'txHash': sourceHash
-              },
-              'output': {
-                'chain': const PegarouteCurrencyMapper().map(receiveCurrency).chain,
-                'token': const PegarouteCurrencyMapper().map(receiveCurrency).token,
-                'address': payoutAddress(),
-                if (completed) 'amount': '0.99',
-                if (completed) 'txHash': 'xmr-output-fixture'
-              },
-              'fees': (swap['route'] as Map)['fees'],
-              'timestamps': {'created': '2026-01-01T00:00:00.000Z'},
-              'error': null,
-              'refund': null,
-              'streamingProgress': null,
-            }),
-            200);
+        final body = <String, dynamic>{
+          'transactionId': 'transaction-fixture',
+          'status': completed
+              ? 'success'
+              : sourceHash == null
+                  ? 'pending'
+                  : 'executing',
+          'internalStatus': completed
+              ? 'completed'
+              : sourceHash == null
+                  ? 'pending'
+                  : 'submitted',
+          'route': swap['route'],
+          'execution': swap['execution'],
+          'provider': swap['provider'],
+          'input': {
+            'chain': const PegarouteCurrencyMapper().map(wallet.sourceCurrency).chain,
+            'token': const PegarouteCurrencyMapper().map(wallet.sourceCurrency).token,
+            'amount': sourceAmount,
+            'address': _key.address.hex,
+            'refundAddress': _key.address.hex,
+            if (sourceHash != null) 'txHash': sourceHash
+          },
+          'output': {
+            'chain': const PegarouteCurrencyMapper().map(receiveCurrency).chain,
+            'token': const PegarouteCurrencyMapper().map(receiveCurrency).token,
+            'address': payoutAddress(),
+            if (completed) 'amount': '0.99',
+            if (completed) 'txHash': 'xmr-output-fixture'
+          },
+          'fees': (swap['route'] as Map)['fees'],
+          'timestamps': {'created': '2026-01-01T00:00:00.000Z'},
+          'error': null,
+          'refund': null,
+          'streamingProgress': null,
+        };
+        mutateStatus?.call(body);
+        return very_insecure_http_do_not_use.Response(jsonEncode(body), 200);
       },
       post: (uri, headers, body) async {
         calls.add('POST ${uri.path}');
@@ -427,15 +460,22 @@ void main() {
   void contractRoute(String routeProvider) {
     receiveCurrency = _usdc;
     final route = Map<String, dynamic>.from(quote['routes'][0] as Map)
-      ..['provider'] = routeProvider;
+      ..['provider'] = routeProvider
+      // Direct routes omit this optional field in the real API.
+      ..remove('subprovider');
+    route['providerType'] = routeProvider == 'openocean' ? 'dex-aggregator' : 'cross-chain-amm';
+    swap['providerType'] = route['providerType'];
     if (routeProvider != 'openocean') {
       route['router'] = _deposit;
       route['memo'] = '=:BTC:trusted-payout:123';
       route['expiry'] = 4070908800;
     }
     quote['routes'] = [route];
-    swap['route'] = {for (final key in (swap['route'] as Map).keys) key: route[key]};
-    swap['provider'] = {'name': routeProvider, 'referenceId': null, 'details': {}};
+    swap['route'] = {
+      for (final key in ['provider', 'private', 'expectedOutput', 'fees', 'estimatedTimeSeconds'])
+        key: route[key],
+    };
+    swap['provider'] = {'name': routeProvider, 'referenceId': null};
     swap['execution'] = {
       'family': 'evm',
       'mode': 'contract-call',
@@ -462,7 +502,194 @@ void main() {
       'spender': _deposit,
       'amount': {'display': '1', 'baseUnits': BigInt.from(10).pow(source.decimals).toString()}
     };
+    swap['execution']['gasLimit'] = '351834';
   }
+
+  for (final routeProvider in ['thorchain', 'openocean']) {
+    test('$routeProvider 0.001 ETH to USDC survives optional metadata and status enrichment',
+        () async {
+      contractRoute(routeProvider);
+      sourceAmount = '0.001';
+      final route = quote['routes'][0] as Map;
+      final output = routeProvider == 'openocean' ? '2.491093' : '2.18850384';
+      route['expectedOutput'] = swap['route']['expectedOutput'] = output;
+      route['minAmount'] = null;
+      route['futureInfo'] = 'quote metadata';
+      swap['futureInfo'] = {'new': 'response metadata'};
+      (swap['route'] as Map)
+        ..remove('private')
+        ..['futureInfo'] = 'order metadata';
+      swap['execution']['value'] = {'display': sourceAmount, 'baseUnits': '1000000000000000'};
+      if (routeProvider == 'openocean') {
+        route['openOceanRoute'] = {
+          'dexes': [
+            {'dexId': 5, 'dexCode': 'UniswapV3'}
+          ]
+        };
+        swap['route']['openOceanRoute'] = {
+          ...route['openOceanRoute'] as Map,
+          'dexId': 5,
+          'dexCode': 'UniswapV3',
+        };
+      }
+
+      final trade = await create();
+      final restored = (await Trade.getByTradeId(trade.id))!;
+      expect(restored.receiveAmount, output);
+      expect(TradeExecution.fromJsonString(restored.executionJson!).subprovider, isNull);
+      expect(tradeProviderDisplayName(restored),
+          'Pegaroute via ${routeProvider == 'openocean' ? 'OpenOcean' : 'THORChain'}');
+      final pending = (await dispatcher.prepare(wallet: wallet, trade: restored))!;
+      expect(inspectPegarouteEvm(pending.hex, context.snapshot(wallet)).valueBaseUnits,
+          '1000000000000000');
+      expect(wallet.broadcasts, 0);
+      // Later informational observations cannot block successful funding/status.
+      swap['route']['subprovider'] = 'later-label';
+      swap['route']['openOceanRoute'] = {'dexId': 9, 'dexCode': 'later-dex'};
+      await pending.commit();
+      final stored = (await Trade.getByTradeId(trade.id))!;
+      expect(stored.txId, pending.id);
+      expect(TradeExecutionLifecycle.fromJsonString(stored.executionLifecycleJson!).callbackState,
+          TradeExecutionCallbackState.accepted);
+      await expectLater(pending.commit(), throwsA(isA<PegarouteBindingException>()));
+      expect(calls.where((call) => call == 'POST /swap'), hasLength(1));
+      expect(wallet.broadcasts, 1);
+    });
+  }
+
+  test('equivalent external amounts preserve original funding and execution bytes', () async {
+    sourceAmount = '1.0';
+    final trade = await create();
+    final raw = trade.executionJson;
+    mutateStatus = (body) => body['input']['amount'] = '1.000000';
+    final updated = await provider.refreshTradeStatus(trade: trade);
+    expect(updated.amount, '1.0');
+    expect(updated.executionJson, raw);
+    expect(
+        TradeExecution.fromJsonString(raw!).binding.sourceAmountBaseUnits, '1000000000000000000');
+    mutateStatus = (body) => body['input']['amount'] = '1.000000000000000001';
+    await expectLater(
+        provider.refreshTradeStatus(trade: updated), throwsA(isA<PegarouteBindingException>()));
+  });
+
+  test('bare output ticker never substitutes for canonical USDC on completed status', () async {
+    contractRoute('openocean');
+    final trade = await create();
+    completed = true;
+    mutateStatus = (body) => body['output']['token'] = 'USDC';
+    await expectLater(
+        provider.refreshTradeStatus(trade: trade), throwsA(isA<PegarouteBindingException>()));
+    expect((await Trade.getByTradeId(trade.id))!.state, isNot(TradeState.success));
+  });
+
+  for (final scenario in [
+    'funded',
+    'unfunded',
+    'disabled',
+    'tor',
+    'terminal',
+    'recent',
+    'bad-lifecycle'
+  ]) {
+    test('monitor reopens old Pegaroute trade: $scenario', () async {
+      final trade = await create();
+      if (scenario != 'unfunded') {
+        final pending = (await dispatcher.prepare(wallet: wallet, trade: trade))!;
+        await pending.commit();
+      }
+      final stored = (await Trade.getByTradeId(trade.id))!;
+      final now = DateTime.utc(2026, 9, 14);
+      stored.createdAt = now.subtract(const Duration(days: 3));
+      if (scenario == 'terminal') stored.stateRaw = TradeState.success.raw;
+      if (scenario == 'bad-lifecycle') stored.executionLifecycleJson = '{}';
+      await database.update(
+          'Trade',
+          {
+            'createdAt': stored.createdAt!.millisecondsSinceEpoch,
+            'stateRaw': stored.stateRaw,
+            'executionLifecycleJson': stored.executionLifecycleJson,
+          },
+          where: 'id = ?',
+          whereArgs: [stored.id]);
+      final app = _MonitorApp();
+      final settings = _MonitorSettings();
+      final trades = _MonitorTrades();
+      when(() => app.wallet).thenReturn(wallet);
+      when(() => app.settingsStore).thenReturn(settings);
+      when(() => settings.disableAutomaticExchangeStatusUpdates).thenReturn(scenario == 'disabled');
+      when(() => settings.exchangeStatus)
+          .thenReturn(scenario == 'tor' ? ExchangeApiMode.torOnly : ExchangeApiMode.enabled);
+      when(() => trades.trades)
+          .thenReturn([TradeListItem(trade: stored, appStore: app, key: const ValueKey('trade'))]);
+      final prefs = await SharedPreferences.getInstance();
+      if (scenario == 'recent')
+        await prefs.setString('trade_${trade.id}_updated_at', now.toIso8601String());
+      final monitor = TradeMonitor(
+          tradesStore: trades,
+          appStore: app,
+          preferences: prefs,
+          clock: () => now,
+          providerFactory: (_) => provider);
+      addTearDown(monitor.stopTradeMonitoring);
+      completed = true;
+      calls.clear();
+      monitor.resumeTradeMonitoring();
+      monitor.resumeTradeMonitoring();
+      // Drain the mocked HTTP + in-memory SQLite work without advancing the timer.
+      for (var i = 0; i < 30; i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 5));
+      }
+      expect(calls.where((call) => call == 'GET /swap/transaction-fixture').length,
+          scenario == 'funded' ? 1 : 0);
+      expect(wallet.broadcasts, scenario == 'unfunded' ? 0 : 1);
+      if (scenario == 'funded') {
+        expect((await Trade.getByTradeId(trade.id))!.state, TradeState.success);
+        expect(prefs.getString('trade_${trade.id}_updated_at'), now.toIso8601String());
+      }
+    });
+  }
+
+  for (final routeProvider in ['instaswap', 'thorchain', 'maya', 'openocean']) {
+    test('$routeProvider history retains the created-order subprovider, not the quote label',
+        () async {
+      if (routeProvider != 'instaswap') contractRoute(routeProvider);
+      quote['routes'][0]['subprovider'] = 'quote-label';
+      swap['route']['subprovider'] = 'created-label';
+      final trade = await create();
+      final restored = (await Trade.getByTradeId(trade.id))!;
+      expect(TradeExecution.fromJsonString(restored.executionJson!).subprovider, 'created-label');
+      expect(tradeProviderDisplayName(restored), endsWith(' (via created-label)'));
+      expect(await dispatcher.prepare(wallet: wallet, trade: restored), isNotNull);
+      expect(wallet.broadcasts, 0);
+    });
+  }
+
+  test('Instaswap transfer can use authenticated execution without optional provider details',
+      () async {
+    (swap['provider'] as Map).remove('details');
+    final trade = await create();
+    expect(
+        TradeExecution.fromJsonString(trade.executionJson!).binding.providerDepositAddress, isNull);
+    expect(await dispatcher.prepare(wallet: wallet, trade: trade), isNotNull);
+    expect(wallet.broadcasts, 0);
+  });
+
+  test('post-creation failure reports the order ID and a bounded validation reason', () async {
+    contractRoute('thorchain');
+    swap['execution']['chainId'] = 100;
+    await expectLater(
+      create(),
+      throwsA(isA<PegarouteSwapAttemptException>()
+          .having((error) => error.providerTransactionId, 'order ID', 'transaction-fixture')
+          .having((error) => error.userMessage, 'visible order ID', contains('transaction-fixture'))
+          .having((error) => error.diagnosticMessage, 'reason', 'execution EVM chain is not bound')
+          .having((error) => error.boundary, 'no fallback',
+              TradeCreationFailureBoundary.requestMayHaveReached)),
+    );
+    expect(calls.where((call) => call == 'POST /swap'), hasLength(1));
+    expect(wallet.builds, 0);
+    expect(wallet.broadcasts, 0);
+  });
 
   for (final chain in {
     1: CryptoCurrency.eth,
@@ -478,6 +705,7 @@ void main() {
         wallet.sourceCurrency = chain.value;
         swap['execution']['chainId'] = chain.key;
         if (routeProvider != 'instaswap') contractRoute(routeProvider);
+        swap['execution']['gasLimit'] = '351834';
         final trade = await create();
         final restored = (await Trade.getByTradeId(trade.id))!;
         final pending = (await dispatcher.prepare(wallet: wallet, trade: restored))!;
@@ -485,6 +713,7 @@ void main() {
         expect(evidence.chainId, chain.key);
         expect(evidence.data, routeProvider == 'instaswap' ? isNull : _calldata);
         expect(evidence.valueBaseUnits, '1000000000000000000');
+        expect(evidence.gasLimit, '351834');
         await pending.commit();
         final stored = (await Trade.getByTradeId(trade.id))!;
         expect(stored.txId, pending.id);
@@ -494,6 +723,112 @@ void main() {
         expect(wallet.broadcasts, 1);
       });
     }
+  }
+
+  test('rejects signed bytes below the supplied gas limit before broadcasting', () async {
+    contractRoute('openocean');
+    swap['execution']['gasLimit'] = '351834';
+    final trade = await create();
+    wallet.mutation = 'gas';
+    expect(await dispatcher.prepare(wallet: wallet, trade: trade), isNull);
+    expect(wallet.broadcasts, 0);
+  });
+
+  void revertedStatus(Map<String, dynamic> body) {
+    body['status'] = 'fail';
+    body['internalStatus'] = 'failed';
+    body['input']['amount'] = '0';
+    body['output']['amount'] = '0';
+    if (sourceHash != null) body['output']['txHash'] = sourceHash;
+    body['error'] = {
+      'code': 'TRANSACTION_FAILED',
+      'message': 'Transaction failed on-chain',
+      'userMessage': 'Transaction failed on-chain',
+      'retryable': false
+    };
+  }
+
+  for (final zero in ['0', '0.000000']) {
+    test(
+        'reverted OpenOcean $zero amounts settle the saved broadcast as failed, never refund/retry',
+        () async {
+      contractRoute('openocean');
+      final trade = await create();
+      final raw = trade.executionJson;
+      final pending = (await dispatcher.prepare(wallet: wallet, trade: trade))!;
+      await pending.commit();
+      final funded = (await Trade.getByTradeId(trade.id))!;
+      final lifecycle = funded.executionLifecycleJson;
+      mutateStatus = (body) {
+        revertedStatus(body);
+        body['input']['amount'] = zero;
+        body['output']['amount'] = zero;
+      };
+      await provider.refreshTradeStatus(trade: funded);
+      final restored = (await Trade.getByTradeId(trade.id))!;
+      expect(restored.stateRaw, 'failed');
+      expect(restored.amount, '1');
+      expect(restored.receiveAmount, zero);
+      expect(restored.txId, pending.id);
+      expect(restored.executionJson, raw);
+      expect(restored.executionLifecycleJson, lifecycle);
+      expect(restored.isRefund, isNot(true));
+      final reopened = await dispatcher.prepare(wallet: wallet, trade: restored);
+      if (reopened != null) {
+        await expectLater(reopened.commit(), throwsA(isA<PegarouteBindingException>()));
+      }
+      await expectLater(pending.commit(), throwsA(isA<PegarouteBindingException>()));
+      expect(wallet.broadcasts, 1);
+      expect(calls.where((call) => call == 'POST /swap'), hasLength(1));
+    });
+  }
+
+  for (final mutation in [
+    'hash',
+    'missing hash',
+    'pending',
+    'success',
+    'nonzero input',
+    'destination',
+    'provider',
+    'unfunded'
+  ]) {
+    test('zero-amount failure does not relax $mutation binding', () async {
+      contractRoute('openocean');
+      final trade = await create();
+      if (mutation != 'unfunded') {
+        final pending = (await dispatcher.prepare(wallet: wallet, trade: trade))!;
+        await pending.commit();
+      }
+      final stored = (await Trade.getByTradeId(trade.id))!;
+      final before = stored.toSqliteMap();
+      mutateStatus = (body) {
+        revertedStatus(body);
+        switch (mutation) {
+          case 'hash':
+            body['input']['txHash'] = '0x${'a' * 64}';
+          case 'missing hash':
+            (body['input'] as Map).remove('txHash');
+          case 'pending':
+            body['status'] = body['internalStatus'] = 'pending';
+          case 'success':
+            body['status'] = 'success';
+            body['internalStatus'] = 'completed';
+          case 'nonzero input':
+            body['input']['amount'] = '0.5';
+          case 'destination':
+            body['output']['address'] = _deposit;
+          case 'provider':
+            body['route'] = {...body['route'] as Map, 'provider': 'thorchain'};
+            body['provider'] = {...body['provider'] as Map, 'name': 'thorchain'};
+          case 'unfunded':
+            body['input']['txHash'] = '0x${'a' * 64}';
+        }
+      };
+      await expectLater(
+          provider.refreshTradeStatus(trade: stored), throwsA(isA<PegarouteBindingException>()));
+      expect((await Trade.getByTradeId(trade.id))!.toSqliteMap(), before);
+    });
   }
 
   for (final chain in [1, 56]) {

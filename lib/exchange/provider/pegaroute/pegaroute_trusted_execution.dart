@@ -4,6 +4,7 @@ import 'package:cake_wallet/exchange/trade_execution_dispatcher.dart';
 import 'package:cw_core/amount/money.dart';
 import 'package:cw_core/crypto_currency.dart';
 import 'package:cw_core/erc20_token.dart';
+import 'package:cw_core/evm_call_data_transaction_credentials.dart';
 import 'package:cw_core/output_info.dart';
 import 'package:cw_core/pending_transaction.dart';
 import 'package:cw_core/transaction_priority.dart';
@@ -140,19 +141,47 @@ class PegarouteTrustedWalletAdapter {
       throw const PegarouteBindingException('Unsupported EVM source amount');
     }
     final target = execution.payload['to'] as String;
+    final suppliedGas = execution.payload['gasLimit'] as String?;
+    final gasLimit = suppliedGas == null ? null : int.tryParse(suppliedGas);
+    if (suppliedGas != null && (gasLimit == null || gasLimit < 21000)) {
+      throw const PegarouteBindingException('Invalid supplied EVM gas limit');
+    }
+    Future<PendingTransaction> call(String to, String data, Money value,
+        {String? token, BigInt? tokenAmount}) {
+      if (gasLimit != null) {
+        return wallet.createTransaction(EvmCallDataTransactionCredentials(
+          to: to,
+          data: data,
+          value: value,
+          priority: priority(wallet),
+          gasLimit: gasLimit,
+          sourceTokenAddress: token,
+          sourceTokenAmount: tokenAmount,
+          useBlinkProtection: false,
+        ));
+      }
+      return evm!.createRawCallDataTransaction(wallet, to, data, value, priority(wallet),
+          useBlinkProtection: false, sourceTokenAddress: token, sourceTokenAmount: tokenAmount);
+    }
+
     late PendingTransaction pending;
     Money amount = Money(units, nativeCurrency);
     var signedTarget = target;
     var signedData = execution.payload['data'] as String?;
     var signedValue = units;
     if (execution.mode == 'native-transfer') {
-      pending = await wallet.createTransaction(evm!.createEVMTransactionCredentialsRaw(
-        [OutputInfo(address: target, cryptoAmount: amount, sendAll: false, isParsedAddress: false)],
-        currency: nativeCurrency,
-        priority: priority(wallet),
-        feeRate: 0,
-        useBlinkProtection: false,
-      ));
+      pending = gasLimit != null
+          ? await call(target, '0x', amount)
+          : await wallet.createTransaction(evm!.createEVMTransactionCredentialsRaw(
+              [
+                OutputInfo(
+                    address: target, cryptoAmount: amount, sendAll: false, isParsedAddress: false)
+              ],
+              currency: nativeCurrency,
+              priority: priority(wallet),
+              feeRate: 0,
+              useBlinkProtection: false,
+            ));
     } else if (execution.sourceToken != execution.nativeToken) {
       final parts = execution.sourceToken.split('-');
       final token = Erc20Token(
@@ -176,14 +205,11 @@ class PegarouteTrustedWalletAdapter {
       signedTarget = transfer ? parts.last : target;
       signedData = data;
       signedValue = BigInt.zero;
-      pending = await evm!.createRawCallDataTransaction(
-          wallet, signedTarget, data, Money.zero(nativeCurrency), priority(wallet),
-          useBlinkProtection: false, sourceTokenAddress: parts.last, sourceTokenAmount: units);
+      pending = await call(signedTarget, data, Money.zero(nativeCurrency),
+          token: parts.last, tokenAmount: units);
     } else {
       // Deliberately pass authenticated calldata through without ABI decoding.
-      pending = await evm!.createRawCallDataTransaction(
-          wallet, target, execution.payload['data'] as String, amount, priority(wallet),
-          useBlinkProtection: false);
+      pending = await call(target, execution.payload['data'] as String, amount);
     }
     final evidence = inspectPegarouteEvm(
         pending.hex,
@@ -195,6 +221,7 @@ class PegarouteTrustedWalletAdapter {
           isHardwareWallet: false,
         ));
     if (!pegarouteSameAddress(execution.sourceChain, evidence.to, signedTarget) ||
+        gasLimit != null && BigInt.parse(evidence.gasLimit!) < BigInt.from(gasLimit) ||
         evidence.valueBaseUnits != signedValue.toString() ||
         (evidence.data ?? '0x').toLowerCase() != (signedData ?? '0x').toLowerCase()) {
       throw const PegarouteBindingException(

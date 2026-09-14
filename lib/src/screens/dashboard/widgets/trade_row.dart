@@ -7,6 +7,7 @@ import "package:cake_wallet/exchange/exchange_provider_description.dart";
 class TradeRow extends StatelessWidget {
   TradeRow({
     required this.provider,
+    this.providerDisplayName,
     required this.title,
     required this.fromSymbol,
     required this.toSymbol,
@@ -20,6 +21,7 @@ class TradeRow extends StatelessWidget {
 
   final VoidCallback? onTap;
   final ExchangeProviderDescription provider;
+  final String? providerDisplayName;
   final String fromSymbol;
   final String toSymbol;
   final String title;
@@ -112,7 +114,23 @@ class TradeRow extends StatelessWidget {
                             )
                           : Container(),
                     ],
-                  )
+                  ),
+                  if (providerDisplayName != null)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 4),
+                      child: Align(
+                        alignment: Alignment.centerLeft,
+                        child: Text(
+                          providerDisplayName!,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: Theme.of(context)
+                              .textTheme
+                              .bodyMedium
+                              ?.copyWith(color: Theme.of(context).colorScheme.onSurfaceVariant),
+                        ),
+                      ),
+                    ),
                 ],
               ),
             )

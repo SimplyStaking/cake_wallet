@@ -9,10 +9,15 @@ String tradeProviderDisplayName(Trade trade) {
     final execution =
         const PegarouteExecutionBindingValidator().validatePersisted(trade: trade).execution;
     final subprovider = execution.subprovider;
-    final route = subprovider == null || subprovider.isEmpty
-        ? execution.routeProvider
-        : '${execution.routeProvider} / $subprovider';
-    return '${trade.provider.title} via $route';
+    final provider = switch (execution.routeProvider) {
+      'instaswap' => 'Instaswap',
+      'thorchain' => 'THORChain',
+      'maya' => 'Maya',
+      'openocean' => 'OpenOcean',
+      _ => execution.routeProvider,
+    };
+    final suffix = subprovider == null || subprovider.isEmpty ? '' : ' (via $subprovider)';
+    return '${trade.provider.title} via $provider$suffix';
   } catch (_) {
     return trade.provider.title;
   }

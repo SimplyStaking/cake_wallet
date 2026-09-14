@@ -1083,6 +1083,8 @@ abstract class SendViewModelBase extends WalletChangeListenerViewModel with Stor
     if (isPegaroute && _pegarouteCommitInFlight) return;
 
     final capturedPendingTransaction = pendingTransaction!;
+    final commitAmount = isPegaroute ? capturedPendingTransaction.amount : null;
+    final commitFee = isPegaroute ? capturedPendingTransaction.fee : null;
     final commitWallet = isPegaroute ? wallet : null;
     final commitChainId = commitWallet?.chainId;
     final commitWalletAddress = commitWallet?.walletAddresses.primaryAddress;
@@ -1105,7 +1107,8 @@ abstract class SendViewModelBase extends WalletChangeListenerViewModel with Stor
           ? IsAwaitingDeviceResponseState()
           : TransactionCommitting();
 
-      if (isPegaroute && tradeExecutionPrerequisiteDescription(capturedPendingTransaction) != null) {
+      if (isPegaroute &&
+          tradeExecutionPrerequisiteDescription(capturedPendingTransaction) != null) {
         try {
           await capturedPendingTransaction.commit();
           if (!identical(wallet, commitWallet) || !identical(_currentTrade, commitTrade)) {
@@ -1175,9 +1178,15 @@ abstract class SendViewModelBase extends WalletChangeListenerViewModel with Stor
             commitWallet.transactionHistory.addOne(evm!.getTransactionInfo(
               id: capturedPendingTransaction.evmTxHashFromRawHex!,
               height: 0,
-              amount: capturedPendingTransaction.amount,
-              fee: capturedPendingTransaction.fee,
-              tokenSymbol: 'ETH',
+              amount: commitAmount!,
+              fee: commitFee!,
+              tokenSymbol: commitAmount.currency.symbol.toUpperCase(),
+              exponent: commitAmount.currency.decimals,
+              contractAddress: commitAmount.currency is Erc20Token
+                  ? (commitAmount.currency as Erc20Token).contractAddress
+                  : null,
+              from: commitWalletAddress,
+              to: depositAddress,
               direction: TransactionDirection.outgoing,
               isPending: true,
               date: DateTime.now(),

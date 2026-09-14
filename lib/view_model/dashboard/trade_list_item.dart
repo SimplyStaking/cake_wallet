@@ -1,4 +1,6 @@
 import "package:cake_wallet/entities/balance_display_mode.dart";
+import "package:cake_wallet/exchange/exchange_provider_description.dart";
+import "package:cake_wallet/exchange/provider/pegaroute/pegaroute_provider_label.dart";
 import "package:cake_wallet/exchange/trade.dart";
 import "package:cake_wallet/store/app_store.dart";
 import "package:cake_wallet/view_model/dashboard/action_list_item.dart";
@@ -14,6 +16,10 @@ class TradeListItem extends ActionListItem {
   final AppStore appStore;
 
   BalanceDisplayMode get displayMode => appStore.settingsStore.balanceDisplayMode;
+
+  String? get providerDisplayName => trade.provider == ExchangeProviderDescription.pegaroute
+      ? tradeProviderDisplayName(trade)
+      : null;
 
   String get tradeFormattedAmount {
     if (displayMode == BalanceDisplayMode.hiddenBalance) {

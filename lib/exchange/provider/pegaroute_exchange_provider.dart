@@ -355,10 +355,13 @@ class PegarouteExchangeProvider extends ExchangeProvider {
         pegarouteRequireUnexpiredFunding(validated, DateTime.now().toUtc());
         return trade;
       } catch (error) {
-        throw PegarouteSwapAttemptException(
+        final failure = PegarouteSwapAttemptException(
             cause: error,
-            userMessage:
-                'The Pegaroute order was created, but its funding instructions are unavailable.');
+            providerTransactionId: result.response.transactionId,
+            userMessage: 'Pegaroute order ${result.response.transactionId} was created, '
+                'but Cake could not prepare its funding instructions.');
+        printV('Pegaroute order ${failure.providerTransactionId}: ${failure.diagnosticMessage}');
+        throw failure;
       }
     } finally {
       context.dispose();
@@ -439,6 +442,7 @@ class PegarouteExchangeProvider extends ExchangeProvider {
       _bindingValidator.validateStatusResponse(
         validated: validated,
         response: observation.response,
+        broadcastTransactionHash: _broadcastHash(latest, validated),
       );
       final expected = Map<String, Object?>.from(rows.first)..remove(Trade.selfIdColumn);
       final before = latest.toSqliteMap();
@@ -448,7 +452,8 @@ class PegarouteExchangeProvider extends ExchangeProvider {
           lifecycleJson != null &&
           observedHash != null) {
         var lifecycle = TradeExecutionLifecycle.fromJsonString(lifecycleJson);
-        final expectedHash = validated.execution.sourceChain == 'ZEC' ? latest.txId : lifecycle.executionHash;
+        final expectedHash =
+            validated.execution.sourceChain == 'ZEC' ? latest.txId : lifecycle.executionHash;
         final matchesHash = validated.execution.sourceChain == 'SOL'
             ? observedHash == expectedHash
             : observedHash.toLowerCase() == expectedHash?.toLowerCase();
@@ -512,6 +517,17 @@ class PegarouteExchangeProvider extends ExchangeProvider {
     );
   }
 
+  String? _broadcastHash(Trade trade, ValidatedTradeExecution validated) {
+    final raw = trade.executionLifecycleJson;
+    final hash = trade.txId;
+    if (raw == null || hash == null || hash.isEmpty) return null;
+    final lifecycle = TradeExecutionLifecycle.fromJsonString(raw);
+    return lifecycle.state == TradeExecutionLifecycleState.broadcasted &&
+            lifecycle.executionHash == pegarouteFundingIdentity(validated.execution, hash)
+        ? hash
+        : null;
+  }
+
   ValidatedTradeExecution _validateCaller(
     Trade trade,
     _PegarouteStatusSource source,
@@ -537,13 +553,19 @@ class PegarouteExchangeProvider extends ExchangeProvider {
         validated.execution.binding.providerTransactionId ?? trade.id,
       );
       var current = _validateCaller(trade, source);
-      _bindingValidator.validateStatusResponse(validated: current, response: response);
+      _bindingValidator.validateStatusResponse(
+          validated: current,
+          response: response,
+          broadcastTransactionHash: _broadcastHash(trade, current));
       final input = response.input;
       final output = response.output;
       final parsedFrom = await _parseCurrency(input.chain, input.token);
       final parsedTo = await _parseCurrency(output.chain, output.token);
       current = _validateCaller(trade, source);
-      _bindingValidator.validateStatusResponse(validated: current, response: response);
+      _bindingValidator.validateStatusResponse(
+          validated: current,
+          response: response,
+          broadcastTransactionHash: _broadcastHash(trade, current));
       final configuredRefund = input.refundAddress;
       final refund = response.refund;
       final refundRecord =

@@ -23,6 +23,10 @@ import 'package:cake_wallet/store/dashboard/fiat_conversion_store.dart';
 import 'package:cw_core/amount/money.dart';
 import 'package:cw_core/balance.dart';
 import 'package:cw_core/crypto_currency.dart';
+import 'package:cw_core/erc20_token.dart';
+// Offline round-trip coverage of the actual persisted EVM history format.
+// ignore: cw_custom_lints/no_restricted_imports_in_lib
+import 'package:cw_evm/evm_chain_transaction_info.dart';
 import 'package:cw_core/pending_transaction.dart';
 import 'package:cw_core/sync_status.dart';
 import 'package:cw_core/transaction_history.dart';
@@ -45,6 +49,12 @@ class _Wallet extends Mock
     implements WalletBase<Balance, TransactionHistoryBase<TransactionInfo>, TransactionInfo> {}
 
 class _WalletAddresses extends Mock implements WalletAddresses {}
+
+class _History extends Mock implements TransactionHistoryBase<TransactionInfo> {
+  final added = <TransactionInfo>[];
+  @override
+  void addOne(TransactionInfo transaction) => added.add(transaction);
+}
 
 class _Balance extends Balance {
   _Balance() : super(Money.zero(CryptoCurrency.zec), Money.zero(CryptoCurrency.zec));
@@ -76,6 +86,8 @@ class _PendingTransaction with PendingTransaction {
     this.commitStarted,
     this.releaseCommit,
     this.commitUr = false,
+    this.sourceAmount,
+    this.networkFee,
   });
 
   final String id;
@@ -84,14 +96,18 @@ class _PendingTransaction with PendingTransaction {
   final Completer<void>? commitStarted;
   final Completer<void>? releaseCommit;
   final bool commitUr;
+  final Money? sourceAmount;
+  final Money? networkFee;
   int commits = 0;
   int urCommits = 0;
 
   @override
-  Money get amount => Money.zero(CryptoCurrency.zec);
+  Money get amount => sourceAmount ?? Money.zero(CryptoCurrency.zec);
 
   @override
-  Money get fee => Money.zero(CryptoCurrency.zec);
+  Money get fee => networkFee ?? Money.zero(CryptoCurrency.zec);
+  @override
+  String? get evmTxHashFromRawHex => id;
 
   @override
   String get amountFormatted => '0';
@@ -184,6 +200,10 @@ SendViewModel _viewModel({
   required _PendingTransaction pending,
   bool saveRecipient = false,
   TradeExecutionDispatcher dispatcher = const EmptyTradeExecutionDispatcher(),
+  int? chainId,
+  WalletType walletType = WalletType.zcash,
+  CryptoCurrency walletCurrency = CryptoCurrency.zec,
+  _History? history,
 }) {
   final appStore = _AppStore();
   final settingsStore = _SettingsStore();
@@ -198,9 +218,12 @@ SendViewModel _viewModel({
   when(() => settingsStore.fiatCurrency).thenReturn(FiatCurrency.usd);
   when(() => settingsStore.shouldSaveRecipientAddress).thenReturn(saveRecipient);
 
-  when(() => wallet.type).thenReturn(WalletType.zcash);
-  when(() => wallet.currency).thenReturn(CryptoCurrency.zec);
-  when(() => wallet.chainId).thenReturn(null);
+  when(() => wallet.type).thenReturn(walletType);
+  when(() => wallet.currency).thenReturn(walletCurrency);
+  when(() => wallet.chainId).thenReturn(chainId);
+  if (history != null) when(() => wallet.transactionHistory).thenReturn(history);
+  when(() => wallet.updateTransactionsHistory()).thenAnswer((_) async {});
+  when(() => wallet.updateBalance()).thenAnswer((_) async {});
   when(() => wallet.balance).thenReturn(balance);
   when(() => wallet.syncStatus).thenReturn(StartingScanSyncStatus(0));
   when(() => wallet.isHardwareWallet).thenReturn(false);
@@ -252,6 +275,94 @@ void main() {
 
   setUp(() {
     SharedPreferences.setMockInitialValues({});
+  });
+
+  const chains = {
+    1: (WalletType.ethereum, CryptoCurrency.eth),
+    56: (WalletType.bsc, CryptoCurrency.bnb),
+    8453: (WalletType.base, CryptoCurrency.baseEth),
+    42161: (WalletType.arbitrum, CryptoCurrency.arbEth),
+    137: (WalletType.polygon, CryptoCurrency.maticpoly),
+  };
+  for (final chain in chains.entries) {
+    for (final tokenSource in [false, true]) {
+      testWidgets(
+          'Pegaroute history captures chain ${chain.key} ${tokenSource ? "token" : "native"} source and native fee',
+          (tester) async {
+        final token = Erc20Token(
+            name: 'Synthetic token',
+            symbol: 'USDC',
+            contractAddress: '0x1111111111111111111111111111111111111111',
+            decimal: 6,
+            chainId: chain.key);
+        final currency = tokenSource ? token : chain.value.$2;
+        final amount = Money(BigInt.from(251261), currency);
+        final fee = Money(BigInt.from(517375134920720), chain.value.$2);
+        final history = _History();
+        final box = _DescriptionBox();
+        when(() => box.add(any())).thenAnswer((_) async => 0);
+        late SendViewModel viewModel;
+        final pending = _PendingTransaction(
+            sourceAmount: amount,
+            networkFee: fee,
+            onCommit: () => viewModel.selectedCryptoCurrency = CryptoCurrency.zec);
+        viewModel = _viewModel(
+            descriptionBox: box,
+            pending: pending,
+            chainId: chain.key,
+            walletType: chain.value.$1,
+            walletCurrency: chain.value.$2,
+            history: history);
+        viewModel.setPendingTransactionContextForTesting(
+            transaction: pending,
+            trade: Trade(
+                id: 'trade-id',
+                amount: '0.251261',
+                inputAddress: 'deposit',
+                provider: ExchangeProviderDescription.pegaroute));
+        await viewModel.commitTransaction(_Context());
+        expect(viewModel.state, isA<TransactionCommitted>());
+        final tx = history.added.single as EVMChainTransactionInfo;
+        expect(tx.id, pending.id);
+        expect(tx.amount, amount);
+        expect(tx.tokenSymbol, currency.title);
+        expect(tx.exponent, currency.decimals);
+        expect(tx.contractAddress, tokenSource ? token.contractAddress : null);
+        expect(tx.chainId, chain.key);
+        expect(tx.fee, fee);
+        final restored = EVMChainTransactionInfo.fromJson(tx.toJson(), chain.key);
+        expect(restored.amount.amount, amount.amount);
+        expect(restored.amount.currency.decimals, currency.decimals);
+        expect(restored.fee.currency, chain.value.$2);
+        if (tokenSource) {
+          expect((restored.amount.currency as Erc20Token).contractAddress, token.contractAddress);
+          expect((restored.amount.currency as Erc20Token).chainId, chain.key);
+        }
+        await tester.pump(const Duration(seconds: 4));
+      });
+    }
+  }
+
+  testWidgets('Pegaroute does not insert source history into a switched network', (tester) async {
+    final history = _History();
+    final box = _DescriptionBox();
+    when(() => box.add(any())).thenAnswer((_) async => 0);
+    late SendViewModel viewModel;
+    final pending =
+        _PendingTransaction(onCommit: () => when(() => viewModel.wallet.chainId).thenReturn(56));
+    viewModel = _viewModel(
+        descriptionBox: box,
+        pending: pending,
+        chainId: 1,
+        walletType: WalletType.ethereum,
+        walletCurrency: CryptoCurrency.eth,
+        history: history);
+    viewModel.setPendingTransactionContextForTesting(
+        transaction: pending,
+        trade: Trade(id: 'trade-id', amount: '1', provider: ExchangeProviderDescription.pegaroute));
+    await viewModel.commitTransaction(_Context());
+    expect(history.added, isEmpty);
+    expect(viewModel.state, isA<TransactionCommitted>());
   });
 
   test('sets failure state when the commit itself fails', () async {

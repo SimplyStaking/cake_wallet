@@ -236,6 +236,45 @@ void main() {
     expect(PegarouteQuoteResponse.fromJson(value).routes.single.privateValue, isNull);
   });
 
+  test('accepts additive response metadata and omitted optional provider details', () {
+    final quote = json.decode(_fixture('quote.json')) as Map<String, dynamic>;
+    (quote['routes'] as List).single
+      ..remove('subprovider')
+      ..remove('private')
+      ..['futureLabel'] = {'name': 'informational'};
+    expect(PegarouteQuoteResponse.fromJson(quote).routes.single.subprovider, isNull);
+
+    final swap = json.decode(_fixture('swap.json')) as Map<String, dynamic>;
+    swap['futureInfo'] = ['informational'];
+    (swap['route'] as Map)
+      ..remove('subprovider')
+      ..remove('private')
+      ..['futureLabel'] = 'informational';
+    (swap['provider'] as Map).remove('details');
+    final decoded = PegarouteSwapResponse.fromJson(swap);
+    expect(decoded.provider.details, isNull);
+    expect(decoded.route.subprovider, isNull);
+    expect(decoded.execution.value!.baseUnits, '1');
+
+    (swap['execution'] as Map)['futureOperation'] = 'not supported';
+    expect(() => PegarouteSwapResponse.fromJson(swap), throwsA(isA<PegarouteCodecException>()));
+  });
+
+  test('keeps required route and execution fields required when metadata is optional', () {
+    for (final field in ['provider', 'expectedOutput', 'fees', 'estimatedTimeSeconds']) {
+      final swap = json.decode(_fixture('swap.json')) as Map<String, dynamic>;
+      (swap['route'] as Map).remove(field);
+      expect(() => PegarouteSwapResponse.fromJson(swap), throwsA(isA<PegarouteCodecException>()),
+          reason: field);
+    }
+    for (final field in ['family', 'mode', 'to', 'chainId', 'value', 'data']) {
+      final swap = json.decode(_fixture('swap.json')) as Map<String, dynamic>;
+      (swap['execution'] as Map).remove(field);
+      expect(() => PegarouteSwapResponse.fromJson(swap), throwsA(isA<PegarouteCodecException>()),
+          reason: field);
+    }
+  });
+
   test('freezes quote route maps, lists, and provider detail maps', () {
     final quoteValue = json.decode(_fixture('quote.json')) as Map<String, dynamic>;
     final quote = PegarouteQuoteResponse.fromJson(quoteValue);

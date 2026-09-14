@@ -233,13 +233,11 @@ void main() {
 
   for (final mutation in <String, void Function(Map<String, Object?>)>{
     'provider': (route) => route['provider'] = 'maya',
-    'subprovider': (route) => route['subprovider'] = 'different',
     'providerType': (route) => route['providerType'] = 'dex-aggregator',
     'private': (route) => route['private'] = true,
     'inboundAddress': (route) => route['inboundAddress'] = 'new-vault',
     'router': (route) => route['router'] = 'new-router',
     'fee policy': (route) => route['resolvedFee'] = {'feeBps': 200},
-    'OpenOcean route': (route) => route['openOceanRoute'] = {'dexId': 1, 'dexCode': 'changed'},
   }.entries) {
     test('rejects changed ${mutation.key} instead of switching curves', () async {
       final harness = _Harness((input, count) {
@@ -256,6 +254,19 @@ void main() {
     final harness = _Harness((input, count) => count == 1 ? [_route(_feeOutput(input))] : []);
     await expectLater(harness.estimate(), _failure(PegarouteReceiveEstimateFailure.routeChanged));
     expect(harness.requests, hasLength(2));
+  });
+
+  test('retains final informational labels without rejecting the selected provider', () async {
+    final harness = _Harness((input, count) => [
+          _route(_feeOutput(input))
+            ..['subprovider'] = 'partner-$count'
+            ..['openOceanRoute'] = {'dexId': count, 'dexCode': 'dex-$count'}
+        ]);
+    final result = await harness.estimate();
+    expect(harness.requests, hasLength(3));
+    expect(result.route.subprovider, 'partner-3');
+    expect(result.route.openOceanRoute!.dexId, 3);
+    expect(result.provider, 'instaswap');
   });
 
   test('retains amount-dependent memo and fee observations without treating them as order approval',

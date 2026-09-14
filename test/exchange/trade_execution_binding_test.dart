@@ -273,7 +273,7 @@ void main() {
     binding['reviewedRouteJson'] = json.encode(route);
     final trade = _trade(TradeExecution.fromJson(raw))..internalId = 1;
 
-    expect(tradeProviderDisplayName(trade), 'Pegaroute via instaswap / provider-fixture');
+    expect(tradeProviderDisplayName(trade), 'Pegaroute via Instaswap (via provider-fixture)');
     trade.providerName = 'invented-provider';
     expect(tradeProviderDisplayName(trade), 'Pegaroute');
     trade.providerName = 'instaswap';
@@ -739,14 +739,14 @@ void main() {
       throwsA(postCreationBindingFailure),
     );
 
-    final omittedRouteIdentity = json.decode(json.encode(value)) as Map<String, dynamic>;
-    (omittedRouteIdentity['route'] as Map<String, dynamic>).remove('subprovider');
-    await expectLater(
-      postResult(omittedRouteIdentity).then(
-        (result) => const PegarouteExecutionBindingValidator().bindSwapResponse(result: result),
-      ),
-      throwsA(postCreationBindingFailure),
-    );
+    final omittedMetadata = json.decode(json.encode(value)) as Map<String, dynamic>;
+    (omittedMetadata['route'] as Map<String, dynamic>)
+      ..remove('subprovider')
+      ..remove('private');
+    final publicExecution = const PegarouteExecutionBindingValidator()
+        .bindSwapResponse(result: await postResult(omittedMetadata));
+    expect(publicExecution.subprovider, isNull);
+    expect(publicExecution.privateIntent, false);
 
     final opaqueResponse = json.decode(json.encode(value)) as Map<String, dynamic>;
     opaqueResponse['execution'] = {
