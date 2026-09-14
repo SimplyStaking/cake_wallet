@@ -7,7 +7,9 @@ import 'package:cake_wallet/exchange/provider/pegaroute/pegaroute_execution_hand
 import 'package:cw_core/amount/money.dart';
 import 'package:cw_core/crypto_currency.dart';
 import 'package:cw_core/encryption_file_utils.dart';
+import 'package:cw_core/erc20_token.dart';
 import 'package:cw_core/evm_call_data_transaction_credentials.dart';
+import 'package:cw_core/exceptions.dart';
 import 'package:cw_core/wallet_addresses.dart';
 import 'package:cw_core/wallet_info.dart';
 import 'package:cw_core/wallet_type.dart';
@@ -26,6 +28,9 @@ import 'package:web3dart/web3dart.dart';
 
 final _key = EthPrivateKey.fromInt(BigInt.one); // Public synthetic key.
 const _to = '0x0000000000000000000000000000000000000001';
+const _spender = '0x0000000000000000000000000000000000000002';
+final _approvalToken =
+    Erc20Token(name: 'USD Coin', symbol: 'USDC', contractAddress: _to, decimal: 6, chainId: 1);
 
 class _Encryption extends Mock implements EncryptionFileUtils {}
 
@@ -68,8 +73,10 @@ class _Wallet extends EVMChainWallet {
 class _Client implements EVMChainClient {
   int estimate = 271613;
   int gasPrice = 5000000000;
+  BigInt expectedValue = BigInt.parse('1000000000000000');
   int signs = 0;
   int broadcasts = 0;
+  String expectedData = '12345678';
   @override
   Uint8List hexToBytes(String value) => crypto.hexToBytes(value);
   @override
@@ -86,9 +93,52 @@ class _Client implements EVMChainClient {
       EtherAmount? maxFeePerGas,
       Uint8List? data}) async {
     expect(toAddress.hex, _to);
-    expect(value.getInWei, BigInt.parse('1000000000000000'));
-    expect(bytesToHex(data!), '12345678');
+    expect(value.getInWei, expectedValue);
+    expect(bytesToHex(data!), expectedData);
     return estimate;
+  }
+
+  @override
+  Uint8List getEncodedDataForApprovalTransaction({
+    required EthereumAddress contractAddress,
+    required EtherAmount value,
+    required EthereumAddress toAddress,
+  }) {
+    expect(contractAddress.hex, _to);
+    expect(toAddress.hex, _spender);
+    expect(value.getInWei, BigInt.from(1000000));
+    return hexToBytes(expectedData);
+  }
+
+  @override
+  Future<PendingEVMChainTransaction> signApprovalTransaction({
+    required Credentials privateKey,
+    required String spender,
+    required Money amount,
+    required Money gasFee,
+    required int estimatedGasUnits,
+    required int maxFeePerGas,
+    required EVMChainTransactionPriority? priority,
+    required String contractAddress,
+    int? gasPrice,
+    bool useBlinkProtection = true,
+  }) {
+    expect(spender, _spender);
+    expect(amount, Money.parse('1', _approvalToken));
+    expect(contractAddress, _to);
+    return signTransaction(
+        privateKey: privateKey,
+        toAddress: contractAddress,
+        amount: Money.zero(CryptoCurrency.eth),
+        gasFee: gasFee,
+        estimatedGasUnits: estimatedGasUnits,
+        maxFeePerGas: maxFeePerGas,
+        priority: priority,
+        currency: CryptoCurrency.eth,
+        feeCurrency: 'ETH',
+        data: expectedData,
+        gasPrice: gasPrice,
+        useBlinkProtection: useBlinkProtection);
   }
 
   @override
@@ -173,11 +223,125 @@ void main() {
       expect(client.broadcasts, 0);
     });
   }
-  test('larger supplied gas is included in the balance check before signing', () async {
-    // Covers the smaller estimate but not the provider's larger gas limit.
+  for (final estimate in [0, 40000, 80000]) {
+    for (final affordable in [false, true]) {
+      test('approval estimate $estimate ${affordable ? "fits" : "exceeds"} native gas balance',
+          () async {
+        client.estimate = estimate;
+        client.expectedValue = BigInt.zero;
+        client.expectedData = '095ea7b3${_spender.substring(2).padLeft(64, '0')}'
+            '${BigInt.from(1000000).toRadixString(16).padLeft(64, '0')}';
+        wallet.balance[_approvalToken] = EVMChainERC20Balance(Money.parse('1', _approvalToken));
+        final units = estimate < 65000 ? 65000 : estimate;
+        // The node has no base-fee sample, so Cake adds the selected 2-gwei tip
+        // to its 5-gwei price for the existing maximum-fee calculation.
+        final fee = Money(BigInt.from(units) * BigInt.from(7000000000), CryptoCurrency.eth);
+        final available = affordable ? fee : fee - Money.fromInt(1, CryptoCurrency.eth);
+        wallet.balance[CryptoCurrency.eth] = EVMChainERC20Balance(available);
+        final result = wallet.createApprovalTransaction(
+            Money.parse('1', _approvalToken), _spender, EVMChainTransactionPriority.medium,
+            useBlinkProtection: false);
+        if (affordable) {
+          final pending = await result;
+          expect(pending.fee, fee);
+          expect(client.signs, 1);
+        } else {
+          await expectLater(
+              result,
+              throwsA(isA<TransactionWrongBalanceException>()
+                  .having((error) => error.currency, 'gas currency', CryptoCurrency.eth)
+                  .having((error) => error.fee, 'approval gas budget', fee)
+                  .having((error) => error.requiredBalance, 'native-only requirement', fee)
+                  .having((error) => error.availableBalance, 'available gas balance', available)
+                  .having((error) => error.feePriority, 'priced priority',
+                      EVMChainTransactionPriority.medium)));
+          expect(client.signs, 0);
+        }
+        expect(client.broadcasts, 0);
+      });
+    }
+  }
+  for (final balance in ['0.000836033134785206', '0.0025']) {
+    test('balance $balance reports insufficient ETH before signing', () async {
+      // The first cannot cover the principal. The second covers the smaller
+      // estimate but not the provider's larger gas limit.
+      wallet.balance[CryptoCurrency.eth] =
+          EVMChainERC20Balance(Money.parse(balance, CryptoCurrency.eth));
+      await expectLater(
+          wallet.createTransaction(credentials(351834)),
+          throwsA(isA<TransactionWrongBalanceException>()
+              .having((error) => error.currency, 'currency', CryptoCurrency.eth)
+              .having((error) => error.requiredBalance, 'principal plus gas budget',
+                  Money.parse('0.00275917', CryptoCurrency.eth))
+              .having((error) => error.availableBalance, 'available balance',
+                  Money.parse(balance, CryptoCurrency.eth))
+              .having((error) => error.fee, 'gas budget at the supplied floor',
+                  Money.parse('0.00175917', CryptoCurrency.eth))
+              .having((error) => error.requiredBalance! - error.fee!, 'source value',
+                  Money.parse('0.001', CryptoCurrency.eth))
+              .having((error) => error.amount, 'legacy amount', isNull)));
+      expect(client.signs, 0);
+      expect(client.broadcasts, 0);
+    });
+  }
+  test('token shortage reports the source token rather than the native fee currency', () async {
+    final token = Erc20Token(
+        name: 'USD Coin',
+        symbol: 'USDC',
+        contractAddress: '0x1111111111111111111111111111111111111111',
+        decimal: 6,
+        chainId: 1);
+    wallet.balance[token] = EVMChainERC20Balance(Money.parse('0.5', token));
+    client.expectedValue = BigInt.zero;
+    await expectLater(
+        wallet.createTransaction(EvmCallDataTransactionCredentials(
+          to: _to,
+          data: '0x12345678',
+          value: Money.zero(CryptoCurrency.eth),
+          priority: null,
+          gasLimit: 351834,
+          sourceTokenAddress: token.contractAddress,
+          sourceTokenAmount: BigInt.from(1000000),
+          useBlinkProtection: false,
+        )),
+        throwsA(isA<TransactionWrongBalanceException>()
+            .having((error) => error.currency, 'currency', same(token))
+            .having((error) => error.requiredBalance, 'token principal', Money.parse('1', token))
+            .having((error) => error.availableBalance, 'token balance', Money.parse('0.5', token))
+            .having((error) => error.fee, 'no native fee included in the token total', isNull)));
+    expect(client.signs, 0);
+    expect(client.broadcasts, 0);
+  });
+  test('token swap with enough tokens reports only its native gas funding shortage', () async {
+    final token = Erc20Token(
+        name: 'USD Coin',
+        symbol: 'USDC',
+        contractAddress: '0x1111111111111111111111111111111111111111',
+        decimal: 6,
+        chainId: 1);
+    wallet.balance[token] = EVMChainERC20Balance(Money.parse('1', token));
     wallet.balance[CryptoCurrency.eth] =
-        EVMChainERC20Balance(Money.parse('0.0025', CryptoCurrency.eth));
-    await expectLater(wallet.createTransaction(credentials(351834)), throwsException);
+        EVMChainERC20Balance(Money.parse('0.000836033134785206', CryptoCurrency.eth));
+    client.expectedValue = BigInt.zero;
+    await expectLater(
+        wallet.createTransaction(EvmCallDataTransactionCredentials(
+          to: _to,
+          data: '0x12345678',
+          value: Money.zero(CryptoCurrency.eth),
+          priority: null,
+          gasLimit: 351834,
+          sourceTokenAddress: token.contractAddress,
+          sourceTokenAmount: BigInt.from(1000000),
+          useBlinkProtection: false,
+        )),
+        throwsA(isA<TransactionWrongBalanceException>()
+            .having((error) => error.currency, 'shortage currency', CryptoCurrency.eth)
+            .having((error) => error.requiredBalance, 'native gas only',
+                Money.parse('0.00175917', CryptoCurrency.eth))
+            .having((error) => error.availableBalance, 'native balance',
+                Money.parse('0.000836033134785206', CryptoCurrency.eth))
+            .having((error) => error.fee, 'native gas budget',
+                Money.parse('0.00175917', CryptoCurrency.eth))));
     expect(client.signs, 0);
     expect(client.broadcasts, 0);
   });

@@ -37,7 +37,8 @@ void main() {
     ]) {
       testWidgets('$closing preserves the underlying ${nested ? 'nested' : 'root'} navigator',
           (tester) async {
-        tester.view.physicalSize = const Size(1200, 2000);
+        tester.view.physicalSize =
+            closing == 'error close' ? const Size(390, 844) : const Size(1200, 2000);
         tester.view.devicePixelRatio = 1;
         addTearDown(tester.view.resetPhysicalSize);
         addTearDown(tester.view.resetDevicePixelRatio);
@@ -91,8 +92,18 @@ void main() {
         final navigator = nested ? inner.currentState! : root.currentState!;
         expect(find.byType(SwapConfirmSheet), findsOneWidget);
         if (closing == 'error close') {
-          runInAction(() => state.value = FailureState('Synthetic preparation error'));
+          const breakdown = 'You do not have enough ETH to send this amount.\n\n'
+              'Amount: 0.0005 ETH\n'
+              'Max network fee: 0.00086164639831152 ETH\n'
+              'Fee priority: Medium\n'
+              'Transaction Cost: 0.00136164639831152 ETH\n'
+              'Available Balance: 0.000836033134785206 ETH\n'
+              'Overshot: 0.000525613263526314 ETH';
+          runInAction(() => state.value = FailureState(breakdown));
           await tester.pumpAndSettle();
+          expect(find.text(breakdown), findsOneWidget);
+          await tester.ensureVisible(find.text(breakdown));
+          await tester.ensureVisible(find.text(S.current.close));
           await tester.tap(find.text(S.current.close));
         } else if (closing == 'manual close') {
           await tester.tap(find.byIcon(Icons.close));

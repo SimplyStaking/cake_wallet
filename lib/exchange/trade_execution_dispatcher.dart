@@ -1,4 +1,5 @@
 import 'package:cw_core/pending_transaction.dart';
+import 'package:cw_core/exceptions.dart';
 import 'dart:async';
 
 import 'package:cw_core/wallet_base.dart';
@@ -249,6 +250,8 @@ class RegistryTradeExecutionDispatcher implements TradeExecutionDispatcher {
     try {
       guarded = await handler.prepare(guard: guard);
     } on TradeExecutionPrerequisiteException {
+      rethrow;
+    } on TransactionWrongBalanceException {
       rethrow;
     } catch (_) {
       return null;

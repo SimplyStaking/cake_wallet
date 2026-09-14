@@ -36,6 +36,7 @@ import 'package:cake_wallet/exchange/trade_request.dart';
 import 'package:cw_core/amount/money.dart';
 import 'package:cw_core/balance.dart';
 import 'package:cw_core/crypto_currency.dart';
+import 'package:cw_core/exceptions.dart';
 import 'package:cw_core/db/sqlite.dart' as sqlite;
 import 'package:cw_core/erc20_token.dart';
 import 'package:cw_core/evm_call_data_transaction_credentials.dart';
@@ -106,6 +107,10 @@ class _Addresses implements WalletAddresses {
   dynamic noSuchMethod(Invocation invocation) => throw UnimplementedError();
 }
 
+class _Balance extends Balance {
+  _Balance(Money available) : super(available, Money.zero(available.currency));
+}
+
 class _Wallet
     extends WalletBase<Balance, TransactionHistoryBase<TransactionInfo>, TransactionInfo> {
   _Wallet()
@@ -162,6 +167,10 @@ class _Wallet
   }
 
   CryptoCurrency sourceCurrency = CryptoCurrency.eth;
+  Map<CryptoCurrency, Balance>? balances;
+  @override
+  ObservableMap<CryptoCurrency, Balance> get balance =>
+      ObservableMap.of(balances ?? {sourceCurrency: _Balance(Money.parse('100', sourceCurrency))});
   Future<PendingTransaction> build(String to, Money amount, String data,
       {int gasLimit = 21000}) async {
     builds++;
@@ -204,6 +213,7 @@ class _Evm implements EVM {
   BigInt? allowance = BigInt.zero;
   bool? receipt = true;
   final approvalAmounts = <BigInt>[];
+  TransactionWrongBalanceException? approvalBalanceError;
   void Function()? duringReceipt;
   @override
   Future<BigInt?> getAllowance(WalletBase wallet, String tokenContract, String spender) async {
@@ -228,6 +238,7 @@ class _Evm implements EVM {
       {bool useBlinkProtection = true}) async {
     expect(useBlinkProtection, false);
     approvalAmounts.add(amount.amount);
+    if (approvalBalanceError != null) throw approvalBalanceError!;
     final current = wallet as _Wallet;
     final data = '0x095ea7b3${spender.substring(2).padLeft(64, '0')}'
         '${amount.amount.toRadixString(16).padLeft(64, '0')}';
@@ -324,6 +335,95 @@ void main() {
     await trade.save();
     return trade;
   }
+
+  for (final afterQuoteRequest in [false, true]) {
+    test(
+        'insufficient source balance ${afterQuoteRequest ? "after quote" : "before quote"} prevents order creation',
+        () async {
+      sourceAmount = '0.001';
+      void lowerBalance() {
+        wallet.balances = {
+          CryptoCurrency.eth: _Balance(Money.parse('0.000836033134785206', CryptoCurrency.eth))
+        };
+      }
+
+      if (afterQuoteRequest) {
+        afterQuote = lowerBalance;
+      } else {
+        lowerBalance();
+      }
+      await expectLater(
+          create(),
+          throwsA(isA<TransactionWrongBalanceException>()
+              .having((error) => error.currency, 'currency', CryptoCurrency.eth)
+              .having((error) => error.requiredBalance, 'exact principal',
+                  Money.parse('0.001', CryptoCurrency.eth))
+              .having((error) => error.availableBalance, 'exact spendable balance',
+                  Money.parse('0.000836033134785206', CryptoCurrency.eth))
+              .having((error) => error.fee, 'no executable fee yet', isNull)));
+      expect(calls, afterQuoteRequest ? ['GET /quote'] : isEmpty);
+      expect(await database.query(Trade.tableName), isEmpty);
+      expect(wallet.builds, 0);
+      expect(wallet.broadcasts, 0);
+    });
+  }
+
+  test('source balance check resolves catalog aliases without borrowing another chain balance',
+      () async {
+    wallet.sourceCurrency = _usdc;
+    wallet.balances = {
+      _usdc: _Balance(Money.parse('0.999999', _usdc)),
+      CryptoCurrency.eth: _Balance(Money.parse('100', CryptoCurrency.eth)),
+      CryptoCurrency.usdcsol: _Balance(Money.parse('100', CryptoCurrency.usdcsol)),
+    };
+    await expectLater(
+        provider.createTrade(
+            request: request(from: CryptoCurrency.usdc), isFixedRateMode: false, isSendAll: false),
+        throwsA(isA<TransactionWrongBalanceException>().having(
+            (error) => (error.currency as Erc20Token).contractAddress,
+            'source contract',
+            _usdc.contractAddress)));
+    expect(calls, isEmpty);
+    expect(wallet.builds, 0);
+  });
+
+  test('a same-ticker token cannot supply balance for a different canonical contract', () async {
+    final impostor = Erc20Token(
+        name: 'Unrelated token',
+        symbol: 'USDC',
+        contractAddress: '0x1111111111111111111111111111111111111111',
+        decimal: 6,
+        chainId: 1,
+        tag: 'ETH');
+    wallet.sourceCurrency = _usdc;
+    wallet.balances = {impostor: _Balance(Money.parse('100', impostor))};
+    await expectLater(create(), throwsA(isA<PegarouteUnavailableException>()));
+    expect(calls, isEmpty);
+    expect(wallet.builds, 0);
+  });
+
+  test('source balance equal to the amount permits creation without claiming gas affordability',
+      () async {
+    wallet.balances = {CryptoCurrency.eth: _Balance(Money.parse('1', CryptoCurrency.eth))};
+    final trade = await create();
+    expect(trade.executionJson, isNotNull);
+    expect(calls, ['GET /quote', 'POST /swap']);
+    expect(wallet.builds, 0);
+  });
+
+  test('one wei of source shortage prevents creation despite double precision equality', () async {
+    wallet.balances = {
+      CryptoCurrency.eth: _Balance(Money.parse('0.999999999999999999', CryptoCurrency.eth))
+    };
+    await expectLater(
+        create(),
+        throwsA(isA<TransactionWrongBalanceException>().having(
+            (error) => error.requiredBalance! - error.availableBalance!,
+            'one wei shortfall',
+            Money.fromInt(1, CryptoCurrency.eth))));
+    expect(calls, isEmpty);
+    expect(wallet.builds, 0);
+  });
 
   setUp(() async {
     SharedPreferences.setMockInitialValues({});
@@ -1326,6 +1426,25 @@ void main() {
       expect(wallet.broadcasts, 1);
     });
   }
+  test('approval gas shortage survives guarded preparation without signing or swap funding',
+      () async {
+    approvalRoute();
+    final trade = await create();
+    final error = TransactionWrongBalanceException(CryptoCurrency.eth,
+        requiredBalance: Money.parse('0.000455', CryptoCurrency.eth),
+        availableBalance: Money.parse('0.0001', CryptoCurrency.eth),
+        fee: Money.parse('0.000455', CryptoCurrency.eth));
+    (evm as _Evm).approvalBalanceError = error;
+    await expectLater(dispatcher.prepare(wallet: wallet, trade: trade), throwsA(same(error)));
+    expect(wallet.builds, 0);
+    expect(wallet.broadcasts, 0);
+    expect(sourceHash, isNull);
+    expect(
+        await PegarouteApprovalFlow.store.read(const PegarouteExecutionBindingValidator()
+            .validatePersisted(trade: trade, wallet: wallet)),
+        isEmpty);
+  });
+
   test('approval-required order is saved before preparing a separately confirmed approval',
       () async {
     wallet.sourceCurrency = _usdc;
