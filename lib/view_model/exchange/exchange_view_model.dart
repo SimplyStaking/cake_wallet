@@ -17,6 +17,7 @@ import 'package:cake_wallet/entities/exchange_api_mode.dart';
 import 'package:cake_wallet/entities/fiat_api_mode.dart';
 import 'package:cake_wallet/entities/fiat_currency.dart';
 import 'package:cake_wallet/entities/preferences_key.dart';
+import 'package:cake_wallet/entities/transaction_wrong_balance_message.dart';
 import 'package:cake_wallet/entities/wallet_contact.dart';
 import 'package:cake_wallet/exchange/exchange_provider_description.dart';
 import 'package:cake_wallet/exchange/exchange_template.dart';
@@ -64,6 +65,7 @@ import 'package:cw_core/crypto_amount_format.dart';
 import 'package:cw_core/crypto_currency.dart';
 import 'package:cw_core/currencies_with_memo.dart';
 import 'package:cw_core/erc20_token.dart';
+import 'package:cw_core/exceptions.dart';
 import 'package:cw_core/spl_token.dart';
 import 'package:cw_core/sync_status.dart';
 import 'package:cw_core/transaction_priority.dart';
@@ -1382,6 +1384,15 @@ abstract class ExchangeViewModelBase extends WalletChangeListenerViewModel with 
                   'refundAddress': depositAddress,
                 },
               );
+              if (e is TransactionWrongBalanceException) {
+                // Changing providers cannot fix a wallet funding failure.
+                tradeState = TradeIsCreatedFailure(
+                  title: S.current.trade_not_created,
+                  error: transactionWrongBalanceMessage(e,
+                      useBaseUnit: amountParsingProxy.useSatoshi(e.currency)),
+                );
+                return;
+              }
               if (providerOrderCreated || blocksTradeCreationFallback(e)) {
                 tradeState = TradeIsCreatedFailure(
                   title: S.current.trade_not_created,

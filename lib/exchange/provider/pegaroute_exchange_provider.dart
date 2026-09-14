@@ -20,9 +20,11 @@ import 'package:cake_wallet/exchange/trade_refund.dart';
 import 'package:cake_wallet/exchange/trade_request.dart';
 import 'package:cake_wallet/exchange/trade_state.dart';
 import 'package:cake_wallet/utils/token_utilities.dart';
+import 'package:cw_core/amount/money.dart';
 import 'package:cw_core/crypto_currency.dart';
 import 'package:cw_core/db/sqlite.dart';
 import 'package:cw_core/erc20_token.dart';
+import 'package:cw_core/exceptions.dart';
 import 'package:cw_core/spl_token.dart';
 import 'package:cw_core/tron_token.dart';
 import 'package:cw_core/utils/print_verbose.dart';
@@ -251,6 +253,34 @@ class PegarouteExchangeProvider extends ExchangeProvider {
     );
   }
 
+  // This proves principal affordability only. Transaction-specific gas and
+  // approval checks still run against the returned execution before funding.
+  void _requireSourceBalance({
+    required WalletBase wallet,
+    required CryptoCurrency currency,
+    required PegarouteAssetId source,
+    required String amount,
+  }) {
+    final required = Money.parse(amount, currency);
+    final balances = wallet.balance.entries
+        .where((entry) => _currencyMapper.matchesCanonicalTuple(entry.key, source))
+        .toList();
+    if (balances.length != 1) throw const PegarouteUnavailableException();
+    final Money available = balances.single.value.available;
+    final balanceCurrency = available.currency;
+    if (balanceCurrency is! CryptoCurrency ||
+        !_currencyMapper.matchesCanonicalTuple(balanceCurrency, source) ||
+        balances.single.key.decimals != currency.decimals ||
+        available.decimals != currency.decimals) {
+      throw const PegarouteBindingException('Funding balance does not match the source asset');
+    }
+    final sourceAvailable = available.copyWith(currency: currency);
+    if (required > sourceAvailable) {
+      throw TransactionWrongBalanceException(currency,
+          requiredBalance: required, availableBalance: sourceAvailable);
+    }
+  }
+
   @override
   Future<Trade> createTrade({
     required TradeRequest request,
@@ -273,6 +303,9 @@ class PegarouteExchangeProvider extends ExchangeProvider {
     // initial Trade save. Restored rows still require their original identity.
     final fromCurrency = _persistableCurrency(request.fromCurrency, source);
     final toCurrency = _persistableCurrency(request.toCurrency, destination);
+    void checkSourceBalance() => _requireSourceBalance(
+        wallet: wallet, currency: fromCurrency, source: source, amount: request.fromAmount);
+    checkSourceBalance();
     final context =
         PegarouteActiveWalletContext(currentWallet!, supportsWallet: pegarouteTrustedWallet);
     final before = context.snapshot(wallet);
@@ -340,6 +373,7 @@ class PegarouteExchangeProvider extends ExchangeProvider {
       );
       checkWallet();
       if (!_providerAllowed(route.provider)) throw const PegarouteUnavailableException();
+      checkSourceBalance();
       final result = await _apiClient.swap(preflight);
       try {
         checkWallet();

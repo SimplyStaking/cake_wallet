@@ -9,6 +9,7 @@ import 'package:cw_core/crypto_currency.dart';
 import 'package:cw_core/encryption_file_utils.dart';
 import 'package:cw_core/erc20_token.dart';
 import 'package:cw_core/evm_call_data_transaction_credentials.dart';
+import 'package:cw_core/exceptions.dart';
 import 'package:cw_core/node.dart';
 import 'package:cw_core/pathForWallet.dart';
 import 'package:cw_core/pending_transaction.dart';
@@ -1038,7 +1039,13 @@ abstract class EVMChainWalletBase
     }
 
     if (requiredNative > nativeBal) {
-      throw Exception('Not enough ${nativeCurrency.title} to cover value and fees.');
+      throw TransactionWrongBalanceException(
+        nativeCurrency,
+        requiredBalance: requiredNative,
+        availableBalance: nativeBal,
+        fee: gasFee,
+        feePriority: priority,
+      );
     }
 
     final cleanAddress = sourceTokenAddress?.toLowerCase() ?? '';
@@ -1057,9 +1064,14 @@ abstract class EVMChainWalletBase
 
       final tokenKey = matchingTokens.first;
       final tokenBalance = balance[tokenKey]?.available ?? Money.zero(tokenKey);
+      final requiredToken = Money(sourceTokenAmount, tokenKey);
 
-      if (tokenBalance < Money(sourceTokenAmount, tokenKey)) {
-        throw Exception('Insufficient ${tokenKey.symbol} balance to cover the transaction amount.');
+      if (tokenBalance < requiredToken) {
+        throw TransactionWrongBalanceException(
+          tokenKey,
+          requiredBalance: requiredToken,
+          availableBalance: tokenBalance,
+        );
       }
     }
 
@@ -1111,12 +1123,22 @@ abstract class EVMChainWalletBase
         ? 65000
         : (gasFeesModel.estimatedGasUnits < 65000 ? 65000 : gasFeesModel.estimatedGasUnits);
 
+    // Budget for the gas limit actually sent to the signer, including the
+    // existing approval floor. Token allowance itself does not spend principal.
+    final gasFee =
+        Money(BigInt.from(safeGasUnits) * BigInt.from(gasFeesModel.maxFeePerGas), currency);
+    final available = balance[currency]?.available ?? Money.zero(currency);
+    if (gasFee > available) {
+      throw TransactionWrongBalanceException(currency,
+          requiredBalance: gasFee, availableBalance: available, fee: gasFee, feePriority: priority);
+    }
+
     return _client.signApprovalTransaction(
       privateKey: _evmChainPrivateKey,
       spender: spender,
       amount: amount,
       priority: priority,
-      gasFee: Money.fromInt(gasFeesModel.estimatedGasFee, currency),
+      gasFee: gasFee,
       maxFeePerGas: gasFeesModel.maxFeePerGas,
       estimatedGasUnits: safeGasUnits,
       contractAddress: tokenContract,

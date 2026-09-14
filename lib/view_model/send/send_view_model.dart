@@ -22,6 +22,7 @@ import 'package:cake_wallet/entities/fiat_currency.dart';
 import 'package:cake_wallet/entities/preferences_key.dart';
 import 'package:cake_wallet/entities/template.dart';
 import 'package:cake_wallet/entities/transaction_description.dart';
+import 'package:cake_wallet/entities/transaction_wrong_balance_message.dart';
 import 'package:cake_wallet/entities/wallet_contact.dart';
 import 'package:cake_wallet/evm/evm.dart';
 import 'package:cake_wallet/exchange/exchange_provider_description.dart';
@@ -1732,6 +1733,9 @@ abstract class SendViewModelBase extends WalletChangeListenerViewModel with Stor
       return errorMessage;
     }
     if (isEVMWallet || walletType == WalletType.haven) {
+      if (error is TransactionWrongBalanceException) {
+        return transactionWrongBalanceMessage(error);
+      }
       if (errorMessage.contains('gas required exceeds allowance')) {
         return S.current.gas_exceeds_allowance;
       }

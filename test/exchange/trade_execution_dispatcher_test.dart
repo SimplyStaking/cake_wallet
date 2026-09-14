@@ -8,6 +8,7 @@ import 'package:cake_wallet/exchange/trade_execution.dart';
 import 'package:cw_core/amount/money.dart';
 import 'package:cw_core/balance.dart';
 import 'package:cw_core/crypto_currency.dart';
+import 'package:cw_core/exceptions.dart';
 import 'package:cw_core/pending_transaction.dart';
 import 'package:cw_core/transaction_history.dart';
 import 'package:cw_core/transaction_info.dart';
@@ -66,6 +67,7 @@ class _Handler implements TradeExecutionHandler, TradeExecutionLifecycleHandler 
     this.throwDuringCommit = false,
     this.ignoreGuard = false,
     this.validatePreparedGeneration = false,
+    this.prepareError,
   });
 
   final bool external;
@@ -75,6 +77,7 @@ class _Handler implements TradeExecutionHandler, TradeExecutionLifecycleHandler 
   final bool throwDuringCommit;
   final bool ignoreGuard;
   final bool validatePreparedGeneration;
+  final Object? prepareError;
   int preparedGeneration = 0;
   int prepareCalls = 0;
   int validationCalls = 0;
@@ -104,6 +107,7 @@ class _Handler implements TradeExecutionHandler, TradeExecutionLifecycleHandler 
       (wallet, execution) async {
         if (prepareCompleter != null) await prepareCompleter!.future;
         constructionStarted = true;
+        if (prepareError != null) throw prepareError!;
         capturedGeneration = preparedGeneration;
         return _prepared();
       },
@@ -470,6 +474,40 @@ void main() {
     expect(handler.prepareCalls, 1);
     expect(handler.pending.commits, 0);
   });
+
+  for (final scenario in ['balance', 'unknown', 'balance with changed binding']) {
+    test('guarded preparation handles $scenario failure', () async {
+      final trade = Trade(
+        id: 'trade',
+        amount: '1',
+        from: CryptoCurrency.xmr,
+        to: CryptoCurrency.btc,
+        provider: ExchangeProviderDescription.pegaroute,
+        senderAddress: 'sender',
+        payoutAddress: 'destination',
+        walletId: 'wallet',
+        fromWalletAddress: 'sender',
+        providerName: 'instaswap',
+        executionJson: _execution().encode(),
+      );
+      final error = scenario == 'unknown'
+          ? StateError('unclassified wallet failure')
+          : TransactionWrongBalanceException(CryptoCurrency.xmr);
+      final completer = Completer<void>();
+      final handler = _Handler(false, prepareCompleter: completer, prepareError: error);
+      final pending =
+          RegistryTradeExecutionDispatcher([handler]).prepare(wallet: _Wallet(), trade: trade);
+      final expectation = scenario == 'balance'
+          ? expectLater(pending, throwsA(same(error)))
+          : expectLater(pending, completion(isNull));
+      if (scenario == 'balance with changed binding') trade.amount = '2';
+      completer.complete();
+      await expectation;
+      expect(handler.constructionStarted, isTrue);
+      expect(handler.prepareCalls, 0);
+      expect(handler.commitHookCalls, 0);
+    });
+  }
 
   test('returns successful commit when post-commit callback fails', () async {
     final execution = _execution();

@@ -132,10 +132,12 @@ class _SwapConfirmSheetState extends State<SwapConfirmSheet> {
                   offset: commited ? const Offset(-1, 0) : Offset.zero,
                   duration: const Duration(milliseconds: 300),
                   curve: Curves.easeOutCubic,
-                  child: SwapTransactionDetails(
-                    exchangeViewModel: widget.exchangeViewModel,
-                    exchangeTradeViewModel: widget.exchangeTradeViewModel,
-                    receiveAmount: widget.receiveAmount,
+                  child: SingleChildScrollView(
+                    child: SwapTransactionDetails(
+                      exchangeViewModel: widget.exchangeViewModel,
+                      exchangeTradeViewModel: widget.exchangeTradeViewModel,
+                      receiveAmount: widget.receiveAmount,
+                    ),
                   ),
                 ),
               ],

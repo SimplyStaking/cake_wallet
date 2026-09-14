@@ -10,6 +10,7 @@ import 'package:cake_wallet/exchange/exchange_provider_description.dart';
 import 'package:cake_wallet/exchange/trade.dart';
 import 'package:cake_wallet/exchange/trade_execution.dart';
 import 'package:cake_wallet/exchange/trade_execution_dispatcher.dart';
+import 'package:cake_wallet/generated/i18n.dart';
 import 'package:cake_wallet/store/app_store.dart';
 import 'package:cake_wallet/store/settings_store.dart';
 import 'package:cake_wallet/view_model/contact_list/contact_list_view_model.dart';
@@ -23,7 +24,9 @@ import 'package:cake_wallet/store/dashboard/fiat_conversion_store.dart';
 import 'package:cw_core/amount/money.dart';
 import 'package:cw_core/balance.dart';
 import 'package:cw_core/crypto_currency.dart';
+import 'package:cw_core/transaction_priority.dart';
 import 'package:cw_core/erc20_token.dart';
+import 'package:cw_core/exceptions.dart';
 // Offline round-trip coverage of the actual persisted EVM history format.
 // ignore: cw_custom_lints/no_restricted_imports_in_lib
 import 'package:cw_evm/evm_chain_transaction_info.dart';
@@ -77,6 +80,10 @@ class _DescriptionBox extends Mock implements Box<TransactionDescription> {}
 class _TransactionDescriptionFake extends Fake implements TransactionDescription {}
 
 class _Context extends Mock implements BuildContext {}
+
+class _Priority extends TransactionPriority {
+  const _Priority() : super(title: 'Medium', raw: 1);
+}
 
 class _PendingTransaction with PendingTransaction {
   _PendingTransaction({
@@ -150,6 +157,19 @@ class _NextStepDispatcher extends EmptyTradeExecutionDispatcher {
   Future<PendingTransaction?> prepare({required WalletBase wallet, required Trade trade}) async {
     preparations++;
     return next;
+  }
+}
+
+class _BalanceFailureDispatcher extends EmptyTradeExecutionDispatcher {
+  _BalanceFailureDispatcher(this.error);
+  final TransactionWrongBalanceException error;
+  int preparations = 0;
+  @override
+  bool supports(TradeExecution execution) => true;
+  @override
+  Future<PendingTransaction?> prepare({required WalletBase wallet, required Trade trade}) async {
+    preparations++;
+    throw error;
   }
 }
 
@@ -271,6 +291,7 @@ SendViewModel _pegarouteViewModel({
 void main() {
   setUpAll(() {
     registerFallbackValue(_TransactionDescriptionFake());
+    S.current = const S();
   });
 
   setUp(() {
@@ -393,6 +414,224 @@ void main() {
     await viewModel.commitTransaction(_Context());
     expect(payment.commits, 1);
     expect(viewModel.state, isA<TransactionCommitted>());
+  });
+
+  for (final currency in [
+    CryptoCurrency.eth,
+    Erc20Token(
+        name: 'USD Coin',
+        symbol: 'USDC',
+        contractAddress: '0x1111111111111111111111111111111111111111',
+        decimal: 6,
+        chainId: 1),
+  ]) {
+    test('Pegaroute preparation displays the insufficient ${currency.title} balance', () async {
+      final dispatcher = _BalanceFailureDispatcher(TransactionWrongBalanceException(currency));
+      final box = _DescriptionBox();
+      final viewModel = _viewModel(
+          descriptionBox: box,
+          pending: _PendingTransaction(),
+          dispatcher: dispatcher,
+          walletType: WalletType.ethereum,
+          walletCurrency: CryptoCurrency.eth,
+          chainId: 1);
+      expect(await viewModel.createTransaction(trade: _stageTrade()), isNull);
+      expect(viewModel.pendingTransaction, isNull);
+      expect(viewModel.state, isA<FailureState>());
+      expect((viewModel.state as FailureState).error,
+          S.current.tx_wrong_balance_exception(currency.toString()));
+      expect(dispatcher.preparations, 1);
+      verifyNever(() => viewModel.wallet.createTransaction(any()));
+      verifyNever(() => box.add(any()));
+    });
+  }
+
+  for (final chain in chains.entries) {
+    test('failed preparation shows exact native value and gas budget on chain ${chain.key}',
+        () async {
+      final currency = chain.value.$2;
+      final symbol = currency.symbol;
+      final dispatcher = _BalanceFailureDispatcher(TransactionWrongBalanceException(
+        currency,
+        requiredBalance: Money.parse('0.00275917', currency),
+        availableBalance: Money.parse('0.000836033134785206', currency),
+        fee: Money.parse('0.00175917', currency),
+        feePriority: const _Priority(),
+      ));
+      final box = _DescriptionBox();
+      final viewModel = _viewModel(
+          descriptionBox: box,
+          pending: _PendingTransaction(),
+          dispatcher: dispatcher,
+          walletType: chain.value.$1,
+          walletCurrency: currency,
+          chainId: chain.key);
+      expect(await viewModel.createTransaction(trade: _stageTrade()), isNull);
+      expect(viewModel.pendingTransaction, isNull);
+      expect(viewModel.state, isA<FailureState>());
+      expect(
+          (viewModel.state as FailureState).error,
+          '${S.current.tx_wrong_balance_exception(currency.toString())}\n\n'
+          '${S.current.transaction_details_amount}: 0.001 $symbol\n'
+          '${S.current.wc_max_network_fee}: 0.00175917 $symbol\n'
+          '${S.current.settings_fee_priority}: Medium\n'
+          '${S.current.transaction_cost}: 0.00275917 $symbol\n'
+          '${S.current.available_balance}: 0.000836033134785206 $symbol\n'
+          '${S.current.overshot}: 0.001923136865214794 $symbol');
+      expect(dispatcher.preparations, 1);
+      verifyNever(() => viewModel.wallet.createTransaction(any()));
+      verifyNever(() => box.add(any()));
+    });
+  }
+
+  test('token principal failure uses the token decimals without a native fee total', () async {
+    final token = Erc20Token(
+        name: 'USD Coin',
+        symbol: 'USDC',
+        contractAddress: '0x1111111111111111111111111111111111111111',
+        decimal: 6,
+        chainId: 1);
+    final dispatcher = _BalanceFailureDispatcher(TransactionWrongBalanceException(
+      token,
+      requiredBalance: Money.parse('1.000001', token),
+      availableBalance: Money.parse('0.5', token),
+    ));
+    final viewModel = _viewModel(
+        descriptionBox: _DescriptionBox(),
+        pending: _PendingTransaction(),
+        dispatcher: dispatcher,
+        walletType: WalletType.ethereum,
+        walletCurrency: CryptoCurrency.eth,
+        chainId: 1);
+    expect(await viewModel.createTransaction(trade: _stageTrade()), isNull);
+    expect(viewModel.pendingTransaction, isNull);
+    expect(viewModel.state, isA<FailureState>());
+    expect(
+        (viewModel.state as FailureState).error,
+        '${S.current.tx_wrong_balance_exception('USDC')}\n\n'
+        '${S.current.transaction_cost}: 1.000001 USDC\n'
+        '${S.current.available_balance}: 0.5 USDC\n'
+        '${S.current.overshot}: 0.500001 USDC');
+  });
+
+  test('known balances without a fee retain a one-wei shortfall without inventing a fee', () {
+    final viewModel = _viewModel(
+        descriptionBox: _DescriptionBox(),
+        pending: _PendingTransaction(),
+        walletType: WalletType.ethereum,
+        walletCurrency: CryptoCurrency.eth,
+        chainId: 1);
+    final message = viewModel.translateErrorMessage(
+        TransactionWrongBalanceException(
+          CryptoCurrency.eth,
+          requiredBalance: Money.parse('1', CryptoCurrency.eth),
+          availableBalance: Money.parse('0.999999999999999999', CryptoCurrency.eth),
+        ),
+        WalletType.ethereum,
+        CryptoCurrency.eth);
+    expect(
+        message,
+        '${S.current.tx_wrong_balance_exception('ETH')}\n\n'
+        '${S.current.transaction_cost}: 1 ETH\n'
+        '${S.current.available_balance}: 0.999999999999999999 ETH\n'
+        '${S.current.overshot}: 0.000000000000000001 ETH');
+  });
+
+  test('incomplete or mismatched balance metadata keeps the localized legacy failure', () {
+    final viewModel = _viewModel(
+        descriptionBox: _DescriptionBox(),
+        pending: _PendingTransaction(),
+        walletType: WalletType.ethereum,
+        walletCurrency: CryptoCurrency.eth,
+        chainId: 1);
+    for (final error in [
+      TransactionWrongBalanceException(CryptoCurrency.eth),
+      TransactionWrongBalanceException(CryptoCurrency.eth,
+          requiredBalance: Money.parse('1', CryptoCurrency.eth)),
+      TransactionWrongBalanceException(CryptoCurrency.eth,
+          availableBalance: Money.zero(CryptoCurrency.eth)),
+      TransactionWrongBalanceException(CryptoCurrency.eth,
+          requiredBalance: Money.parse('1', CryptoCurrency.eth),
+          availableBalance: Money.zero(CryptoCurrency.bnb)),
+    ]) {
+      expect(viewModel.translateErrorMessage(error, WalletType.ethereum, CryptoCurrency.eth),
+          S.current.tx_wrong_balance_exception('ETH'));
+    }
+  });
+
+  test('a differently denominated fee is never subtracted from the required balance', () {
+    final viewModel = _viewModel(
+        descriptionBox: _DescriptionBox(),
+        pending: _PendingTransaction(),
+        walletType: WalletType.bsc,
+        walletCurrency: CryptoCurrency.bnb,
+        chainId: 56);
+    final message = viewModel.translateErrorMessage(
+        TransactionWrongBalanceException(
+          CryptoCurrency.bnb,
+          requiredBalance: Money.parse('1', CryptoCurrency.bnb),
+          availableBalance: Money.parse('0.5', CryptoCurrency.bnb),
+          fee: Money.parse('0.001', CryptoCurrency.eth),
+        ),
+        WalletType.bsc,
+        CryptoCurrency.bnb);
+    expect(
+        message,
+        '${S.current.tx_wrong_balance_exception('BNB')}\n\n'
+        '${S.current.transaction_cost}: 1 BNB\n'
+        '${S.current.available_balance}: 0.5 BNB\n'
+        '${S.current.overshot}: 0.5 BNB');
+  });
+
+  test('Litecoin retains its legacy wallet currency and integer amount formatting', () {
+    final viewModel = _viewModel(
+        descriptionBox: _DescriptionBox(),
+        pending: _PendingTransaction(),
+        walletType: WalletType.litecoin,
+        walletCurrency: CryptoCurrency.ltc);
+    // Bitcoin-family exceptions carry BTC even when the wallet is Litecoin.
+    final error = TransactionWrongBalanceException(CryptoCurrency.btc, amount: 12345);
+    expect(error.amount, 12345);
+    expect(viewModel.translateErrorMessage(error, WalletType.litecoin, CryptoCurrency.ltc),
+        S.current.tx_wrong_balance_with_amount_exception('LTC', '12345'));
+    expect(
+        viewModel.translateErrorMessage(TransactionWrongBalanceException(CryptoCurrency.btc),
+            WalletType.litecoin, CryptoCurrency.ltc),
+        S.current.tx_wrong_balance_exception('LTC'));
+  });
+
+  test('confirmed approval retains a subsequent balance failure without funding the swap',
+      () async {
+    final approval = _ApprovalTransaction();
+    final dispatcher = _BalanceFailureDispatcher(TransactionWrongBalanceException(
+      CryptoCurrency.eth,
+      requiredBalance: Money.parse('0.00175917', CryptoCurrency.eth),
+      availableBalance: Money.parse('0.000836033134785206', CryptoCurrency.eth),
+      fee: Money.parse('0.00175917', CryptoCurrency.eth),
+    ));
+    final box = _DescriptionBox();
+    final viewModel = _viewModel(
+        descriptionBox: box,
+        pending: approval,
+        dispatcher: dispatcher,
+        walletType: WalletType.ethereum,
+        walletCurrency: CryptoCurrency.eth,
+        chainId: 1);
+    viewModel.setPendingTransactionContextForTesting(transaction: approval, trade: _stageTrade());
+    await viewModel.commitTransaction(_Context());
+    expect(approval.commits, 1);
+    expect(dispatcher.preparations, 1);
+    expect(viewModel.pendingTransaction, isNull);
+    expect(viewModel.state, isA<FailureState>());
+    expect(
+        (viewModel.state as FailureState).error,
+        '${S.current.tx_wrong_balance_exception('ETH')}\n\n'
+        '${S.current.wc_max_network_fee}: 0.00175917 ETH\n'
+        '${S.current.transaction_cost}: 0.00175917 ETH\n'
+        '${S.current.available_balance}: 0.000836033134785206 ETH\n'
+        '${S.current.overshot}: 0.000923136865214794 ETH');
+    verifyNever(() => viewModel.wallet.createTransaction(any()));
+    verifyNever(() => box.add(any()));
   });
 
   test('pending approval keeps the confirmation error and does not prepare funding', () async {
