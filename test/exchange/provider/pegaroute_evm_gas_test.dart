@@ -77,6 +77,19 @@ class _Client implements EVMChainClient {
   int signs = 0;
   int broadcasts = 0;
   String expectedData = '12345678';
+  BigInt? liveBalance;
+  Object? balanceError;
+  late BigInt Function() cachedBalance;
+  int balanceReads = 0;
+  @override
+  Future<EtherAmount> getBalance(EthereumAddress address, {BlockNum? atBlock}) async {
+    expect(address, _key.address);
+    expect(atBlock, const BlockNum.pending());
+    balanceReads++;
+    if (balanceError != null) throw balanceError!;
+    return EtherAmount.inWei(liveBalance ?? cachedBalance());
+  }
+
   @override
   Uint8List hexToBytes(String value) => crypto.hexToBytes(value);
   @override
@@ -189,6 +202,7 @@ void main() {
     SharedPreferences.setMockInitialValues({'evm_scam_check_v2_done_gas-fixture': true});
     client = _Client();
     wallet = _Wallet(client);
+    client.cachedBalance = () => wallet.balance[CryptoCurrency.eth]!.available.amount;
     final history = _History();
     when(() => history.init()).thenAnswer((_) async {});
     wallet.transactionHistory = history;
@@ -220,6 +234,50 @@ void main() {
       final expected = estimate > 351834 ? estimate : 351834;
       expect(evidence.gasLimit, '$expected');
       expect(pending.fee.amount, BigInt.from(expected) * BigInt.from(client.gasPrice));
+      expect(client.broadcasts, 0);
+    });
+  }
+  test('token swap checks the post-approval node balance instead of its cached balance', () async {
+    wallet.balance[CryptoCurrency.eth] =
+        EVMChainERC20Balance(Money.parse('0.000836033134785206', CryptoCurrency.eth));
+    wallet.balance[_approvalToken] = EVMChainERC20Balance(Money.parse('5', _approvalToken));
+    client.liveBalance = BigInt.parse('717351881928726');
+    client.estimate = 300000;
+    client.gasPrice = 2500000000;
+    client.expectedValue = BigInt.zero;
+    await expectLater(
+        wallet.createTransaction(EvmCallDataTransactionCredentials(
+            to: _to,
+            data: '0x12345678',
+            value: Money.zero(CryptoCurrency.eth),
+            priority: null,
+            gasLimit: 260662,
+            sourceTokenAddress: _approvalToken.contractAddress,
+            sourceTokenAmount: BigInt.from(5000000),
+            useBlinkProtection: false)),
+        throwsA(isA<TransactionWrongBalanceException>()
+            .having((error) => error.currency, 'native gas currency', CryptoCurrency.eth)
+            .having((error) => error.availableBalance!.amount, 'post-approval funds',
+                BigInt.parse('717351881928726'))
+            .having((error) => error.requiredBalance, 'signed gas budget',
+                Money.parse('0.00075', CryptoCurrency.eth))));
+    expect(client.balanceReads, 1);
+    expect(client.signs, 0);
+    expect(client.broadcasts, 0);
+  });
+  for (final approval in [false, true]) {
+    test('${approval ? "approval" : "call"} stops when current node balance is unavailable',
+        () async {
+      client.balanceError = StateError('node balance unavailable');
+      wallet.balance[_approvalToken] = EVMChainERC20Balance(Money.parse('1', _approvalToken));
+      if (approval) client.expectedValue = BigInt.zero;
+      final result = approval
+          ? wallet.createApprovalTransaction(
+              Money.parse('1', _approvalToken), _spender, EVMChainTransactionPriority.medium,
+              useBlinkProtection: false)
+          : wallet.createTransaction(credentials(351834));
+      await expectLater(result, throwsA(same(client.balanceError)));
+      expect(client.signs, 0);
       expect(client.broadcasts, 0);
     });
   }

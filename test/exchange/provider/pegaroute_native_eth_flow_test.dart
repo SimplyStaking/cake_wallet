@@ -1359,6 +1359,24 @@ void main() {
     expect(wallet.builds, 0);
   });
 
+  test('an enabled route without a minimum does not inherit another route minimum', () async {
+    final route = Map<String, dynamic>.from(quote['routes'][0] as Map);
+    quote['routes'] = [
+      {...route, 'provider': 'instaswap', 'minAmount': '12'},
+      {...route, 'provider': 'openocean', 'minAmount': null},
+    ];
+    Future<double?> minimum() async =>
+        (await provider.fetchLimits(from: _usdc, to: CryptoCurrency.eth, isFixedRateMode: false))
+            ?.min;
+    expect(await minimum(), 0);
+    await preferences.setEnabled('openocean', false);
+    expect(await minimum(), 12);
+    await preferences.setEnabled('instaswap', false);
+    await preferences.setEnabled('openocean', true);
+    expect(await minimum(), 0);
+    expect(calls.where((call) => call.startsWith('POST')), isEmpty);
+  });
+
   test('disabled Instaswap cannot create an order, including with decentralized-only', () async {
     decentralizedOnly = true;
     await preferences.setEnabled('instaswap', false);

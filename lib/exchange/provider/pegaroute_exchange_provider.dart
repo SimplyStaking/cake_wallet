@@ -162,7 +162,9 @@ class PegarouteExchangeProvider extends ExchangeProvider {
           .toList();
       if (routes.isEmpty || _quoteAssets(from, to) == null) return null;
       final minimums = routes
-          .map((route) => double.tryParse(route.minAmount ?? ''))
+          // No advertised minimum on an eligible route must not inherit a
+          // different route's minimum. The executable quote is still validated.
+          .map((route) => route.minAmount == null ? 0.0 : double.tryParse(route.minAmount!))
           .whereType<double>()
           .where((amount) => amount.isFinite && amount >= 0)
           .toList(growable: false);
