@@ -93,6 +93,7 @@ abstract class ExchangeViewModelBase extends WalletChangeListenerViewModel with 
   final List<ReactionDisposer> _disposers = [];
 
   void dispose() {
+    _rateRequestId++;
     bestRateSync.cancel();
     for (final disposer in _disposers) {
       disposer();
@@ -193,12 +194,6 @@ abstract class ExchangeViewModelBase extends WalletChangeListenerViewModel with 
         _onPairChange();
       }
     });
-
-    // providerDisplay is read by ui to display auto-selected provider.
-    // it's on a delay so it doesn't flicker.
-    _disposers.add(reaction((_) => bestRateProvider, (val) {
-      providerDisplay = val;
-    }, delay: 300));
 
     receiveCurrencies = CryptoCurrency.all
         .where((cryptoCurrency) => !excludeReceiveCurrencies.contains(cryptoCurrency))
@@ -370,6 +365,9 @@ abstract class ExchangeViewModelBase extends WalletChangeListenerViewModel with 
   final List<ExchangeProvider> _tradeAvailableProviders = [];
   int _pegaroutePreferencesRevision = 0;
   int _limitsRequestId = 0;
+  int _rateRequestId = 0;
+  Object? _quotedContext;
+  Object? _requestedRateContext;
 
   Map<ExchangeProvider, Limits?> _providerLimits = {};
 
@@ -451,6 +449,9 @@ abstract class ExchangeViewModelBase extends WalletChangeListenerViewModel with 
 
   @observable
   bool noProviderForPair = false;
+
+  @observable
+  bool isFetchingRate = false;
 
   @observable
   bool isSendFromExternal = false;
@@ -639,8 +640,8 @@ abstract class ExchangeViewModelBase extends WalletChangeListenerViewModel with 
   @action
   void setForcedProvider(ExchangeProvider? provider) {
     forcedProvider = provider;
-    forcedProviderRate = 0.0;
-    calculateForcedProviderRate();
+    _invalidateRates();
+    calculateBestRate();
   }
 
   WalletInfo? selectedAddressBookWallet;
@@ -823,9 +824,11 @@ abstract class ExchangeViewModelBase extends WalletChangeListenerViewModel with 
 
   @action
   Future<void> changeReceiveAmount({required String amount, bool isCanonical = false}) async {
+    final previous = _receiveAmount?.toString();
     if (amount.isEmpty) {
       _depositAmount = null;
       _receiveAmount = null;
+      _invalidateRates();
       return;
     }
 
@@ -835,19 +838,15 @@ abstract class ExchangeViewModelBase extends WalletChangeListenerViewModel with 
 
     if (_receiveAmount == null) {
       _depositAmount = null;
+      _invalidateRates();
       return;
     }
 
-    final _enteredAmount = double.tryParse(_receiveAmount.toString()) ?? 0;
-
-    if (bestRate == 0) {
-      _depositAmount = null;
-
+    if (previous != _receiveAmount.toString()) {
       await calculateBestRate();
+    } else {
+      _applyRateToAmounts();
     }
-
-    final amount_ = _enteredAmount / (forcedProvider == null ? bestRate : forcedProviderRate);
-    _depositAmount = amount_.tryToMoney(depositCurrency);
   }
 
   @action
@@ -878,9 +877,11 @@ abstract class ExchangeViewModelBase extends WalletChangeListenerViewModel with 
 
   @action
   Future<void> changeDepositAmount({required String amount, bool isCanonical = false}) async {
+    final previous = _depositAmount?.toString();
     if (amount.isEmpty) {
       _depositAmount = null;
       _receiveAmount = null;
+      _invalidateRates();
       return;
     }
 
@@ -890,6 +891,7 @@ abstract class ExchangeViewModelBase extends WalletChangeListenerViewModel with 
 
     if (_depositAmount == null) {
       _receiveAmount = null;
+      _invalidateRates();
       return;
     }
 
@@ -897,17 +899,11 @@ abstract class ExchangeViewModelBase extends WalletChangeListenerViewModel with 
     /// as it should remain exactly what the user set
     if (isFixedRateMode) return;
 
-    final _enteredAmount = double.tryParse(_depositAmount.toString()) ?? 0;
-
-    /// in case the best rate was not calculated yet
-    if (bestRate == 0) {
-      _receiveAmount = null;
-
+    if (previous != _depositAmount.toString()) {
       await calculateBestRate();
+    } else {
+      _applyRateToAmounts();
     }
-
-    final amount_ = _enteredAmount * (forcedProvider == null ? bestRate : forcedProviderRate);
-    _receiveAmount = amount_.tryToMoney(receiveCurrency);
   }
 
   bool checkIfInputMeetsMinOrMaxCondition(String input) {
@@ -922,22 +918,67 @@ abstract class ExchangeViewModelBase extends WalletChangeListenerViewModel with 
     return true;
   }
 
-  Future<void> calculateForcedProviderRate() async {
-    if (forcedProvider == null || depositCurrency == receiveCurrency) {
-      forcedProviderRate = 0.0;
-      return;
+  Future<void> calculateForcedProviderRate() => calculateBestRate();
+
+  // Only the entered side belongs in the request identity; updating the
+  // calculated side must not invalidate the quote that produced it.
+  Object _rateAssetContext(CryptoCurrency currency) => (
+        currency,
+        currency.tag,
+        currency.decimals,
+        currency is Erc20Token ? currency.chainId : null,
+      );
+
+  Object get _rateContext => (
+        _rateAssetContext(depositCurrency),
+        _rateAssetContext(receiveCurrency),
+        isFixedRateMode ? _receiveAmount?.toString() : _depositAmount?.toString(),
+        isFixedRateMode,
+        forcedProvider,
+        isSendAllEnabled,
+        isSendFromExternal,
+        wallet,
+        wallet.id,
+        wallet.type,
+        wallet.chainId,
+        forceDecentralizedExchanges,
+        selectedProviders.map((provider) => provider.description.raw).join(','),
+        _pegaroutePreferencesRevision,
+        _limitsRequestId,
+      );
+
+  void _clearRates() {
+    _sortedAvailableProviders.clear();
+    bestRate = 0;
+    bestRateProvider = null;
+    providerDisplay = null;
+    forcedProviderRate = 0;
+    if (isFixedRateMode) {
+      _depositAmount = null;
+    } else {
+      _receiveAmount = null;
     }
+  }
 
-    final amount =
-        double.tryParse(isFixedRateMode ? _receiveAmount.toString() : _depositAmount.toString()) ??
-            initialAmountByAssets(isFixedRateMode ? receiveCurrency : depositCurrency);
+  void _invalidateRates() {
+    _rateRequestId++;
+    _quotedContext = null;
+    _clearRates();
+    noProviderForPair = false;
+    isFetchingRate = false;
+  }
 
-    forcedProviderRate = await forcedProvider!.fetchRate(
-        from: depositCurrency,
-        to: receiveCurrency,
-        amount: amount,
-        isFixedRateMode: isFixedRateMode,
-        isReceiveAmount: isFixedRateMode);
+  void _applyRateToAmounts() {
+    final rate = forcedProvider == null ? bestRate : forcedProviderRate;
+    if (isFixedRateMode) {
+      final input = double.tryParse(_receiveAmount.toString());
+      _depositAmount =
+          input != null && rate > 0 ? (input / rate).tryToMoney(depositCurrency) : null;
+    } else {
+      final input = double.tryParse(_depositAmount.toString());
+      _receiveAmount =
+          input != null && rate > 0 ? (input * rate).tryToMoney(receiveCurrency) : null;
+    }
   }
 
   bool _excludeProviderForSwapAll(ExchangeProvider provider) =>
@@ -948,21 +989,38 @@ abstract class ExchangeViewModelBase extends WalletChangeListenerViewModel with 
   bool _excludeProviderForReceiveExtraId(ExchangeProvider provider) =>
       memoLabelTypeFor(receiveCurrency) != null && !provider.supportsMemoOrDestinationTag;
 
+  @action
   Future<void> calculateBestRate() async {
-    final pegaroutePreferencesRevision = _pegaroutePreferencesRevision;
-    final limitsRequestId = _limitsRequestId;
+    final context = _rateContext;
+    if (context != _requestedRateContext) _invalidateRates();
+    _requestedRateContext = context;
+    final requestId = ++_rateRequestId;
     if (depositCurrency == receiveCurrency) {
-      bestRate = 0.0;
-      bestRateProvider = null;
+      _clearRates();
+      noProviderForPair = true;
+      isFetchingRate = false;
       return;
     }
+    isFetchingRate = true;
+    // Compare providers together once their limit discovery has completed.
+    // loadLimits starts the quote for the latest input when it finishes.
+    if (limitsState is LimitsIsLoading) return;
+    final from = depositCurrency;
+    final to = receiveCurrency;
+    final fixedRate = isFixedRateMode;
     final amount =
         double.tryParse(isFixedRateMode ? _receiveAmount.toString() : _depositAmount.toString()) ??
             initialAmountByAssets(isFixedRateMode ? receiveCurrency : depositCurrency);
 
     final validProvidersForAmount = _tradeAvailableProviders.where((provider) {
+      if (!selectedProviders.contains(provider) || !providerList.contains(provider)) return false;
       if (_excludeProviderForSwapAll(provider)) return false;
       if (_excludeProviderForReceiveExtraId(provider)) return false;
+      if (isSendFromExternal && provider is PegarouteExchangeProvider) return false;
+
+      // Pegaroute limits are sampled at 1 unit. Only a quote at the current
+      // amount establishes route availability.
+      if (provider is PegarouteExchangeProvider) return true;
 
       final limits = _providerLimits[provider];
 
@@ -979,31 +1037,38 @@ abstract class ExchangeViewModelBase extends WalletChangeListenerViewModel with 
 
     final result = await Future.wait<double>(
       _providers.map(
-        (element) => element
-            .fetchRate(
-                from: depositCurrency,
-                to: receiveCurrency,
-                amount: amount,
-                isFixedRateMode: isFixedRateMode,
-                isReceiveAmount: isFixedRateMode)
-            .timeout(
-              Duration(seconds: 7),
-              onTimeout: () => 0.0,
-            ),
+        (element) async {
+          try {
+            return await element
+                .fetchRate(
+                    from: from,
+                    to: to,
+                    amount: amount,
+                    isFixedRateMode: fixedRate,
+                    isReceiveAmount: fixedRate)
+                .timeout(const Duration(seconds: 7));
+          } catch (_) {
+            return 0.0;
+          }
+        },
       ),
     );
-    if (pegaroutePreferencesRevision != _pegaroutePreferencesRevision ||
-        limitsRequestId != _limitsRequestId) return;
+    if (requestId != _rateRequestId) return;
+    if (context != _rateContext) {
+      await calculateBestRate();
+      return;
+    }
 
     // We'll use a new SplayTreeMap to avoid concurrent modification issues
     final newSortedProviders =
         SplayTreeMap<double, ExchangeProvider>((double a, double b) => b.compareTo(a));
 
     for (int i = 0; i < result.length; i++) {
-      if (result[i] != 0) {
+      final rate = result[i];
+      if (rate.isFinite && rate > 0) {
         /// add this provider as its valid for this trade
         try {
-          newSortedProviders[result[i]] = _providers[i];
+          newSortedProviders[rate] = _providers[i];
         } catch (e) {
           // will throw "Concurrent modification during iteration" error if modified at the same
           // time [createTrade] is called, as this is not a normal map, but a sorted map
@@ -1013,15 +1078,25 @@ abstract class ExchangeViewModelBase extends WalletChangeListenerViewModel with 
       }
     }
 
-    // Replace the old map with the new one
-    _sortedAvailableProviders.clear();
+    // Commit one complete comparison, including clearing an empty result.
+    _clearRates();
     _sortedAvailableProviders.addAll(newSortedProviders);
 
     if (_sortedAvailableProviders.isNotEmpty) {
       bestRate = _sortedAvailableProviders.keys.first;
       bestRateProvider = _sortedAvailableProviders.values.first;
+      providerDisplay = bestRateProvider;
     }
-    noProviderForPair = _sortedAvailableProviders.isEmpty;
+    final forcedIndex = forcedProvider == null ? -1 : _providers.indexOf(forcedProvider!);
+    if (forcedIndex >= 0) {
+      final rate = result[forcedIndex];
+      forcedProviderRate = rate.isFinite && rate > 0 ? rate : 0;
+    }
+    noProviderForPair =
+        forcedProvider == null ? _sortedAvailableProviders.isEmpty : forcedProviderRate == 0;
+    _quotedContext = context;
+    isFetchingRate = false;
+    _applyRateToAmounts();
   }
 
   @action
@@ -1032,19 +1107,20 @@ abstract class ExchangeViewModelBase extends WalletChangeListenerViewModel with 
     // previous provider selection/pair during a refresh or after a failed one.
     limits = Limits(min: null, max: null);
     _providerLimits.clear();
-    _sortedAvailableProviders.clear();
-    bestRateProvider = null;
-    bestRate = 0.0;
+    _invalidateRates();
     if (depositCurrency == receiveCurrency) {
+      noProviderForPair = true;
       limitsState = LimitsLoadedSuccessfully(limits: Limits(min: 0, max: 0));
       return;
     }
     if (selectedProviders.isEmpty) {
+      noProviderForPair = true;
       limitsState = LimitsLoadedFailure(error: S.current.none_of_selected_providers_can_exchange);
       return;
     }
 
     limitsState = LimitsIsLoading();
+    isFetchingRate = true;
 
     final from = isFixedRateMode ? receiveCurrency : depositCurrency;
     final to = isFixedRateMode ? depositCurrency : receiveCurrency;
@@ -1101,11 +1177,22 @@ abstract class ExchangeViewModelBase extends WalletChangeListenerViewModel with 
       limitsState = LimitsLoadedFailure(error: 'Limits loading failed');
     }
 
-    calculateBestRate();
+    await calculateBestRate();
   }
 
   @action
   Future<void> createTrade() async {
+    final enteredAmount = isFixedRateMode ? _receiveAmount : _depositAmount;
+    if (enteredAmount != null && !enteredAmount.isZero && !enteredAmount.isNegative) {
+      if (_quotedContext != _rateContext || isFetchingRate) await calculateBestRate();
+      if (noProviderForPair) {
+        tradeState = TradeIsCreatedFailure(
+          title: S.current.trade_not_created,
+          error: S.current.none_of_selected_providers_can_exchange,
+        );
+        return;
+      }
+    }
     final depositAmountValue = _depositAmount ?? Money.zero(depositCurrency);
     final receiveAmountValue = _receiveAmount ?? Money.zero(receiveCurrency);
 
@@ -1293,8 +1380,11 @@ abstract class ExchangeViewModelBase extends WalletChangeListenerViewModel with 
 
         bestRate = providerRate;
         bestRateProvider = provider;
+        providerDisplay = provider;
 
-        await changeDepositAmount(amount: _depositAmount.toString(), isCanonical: true);
+        // The fallback loop owns its captured comparison. Do not start a new
+        // automatic comparison while preparing this provider's request.
+        _applyRateToAmounts();
 
         final request = TradeRequest(
           fromCurrency: depositCurrency,
@@ -1315,15 +1405,19 @@ abstract class ExchangeViewModelBase extends WalletChangeListenerViewModel with 
 
         var amount = isFixedRateMode ? _receiveAmount.toString() : _depositAmount.toString();
 
-        if (limitsState is LimitsLoadedSuccessfully) {
+        if (limitsState is LimitsLoadedSuccessfully || provider is PegarouteExchangeProvider) {
           if (double.tryParse(amount) == null) {
             printV('createTrade: ${provider.title} amount parse failed: "$amount"');
             continue;
           }
 
-          if (limits.min != null && double.parse(amount) < limits.min!) {
+          if (provider is! PegarouteExchangeProvider &&
+              limits.min != null &&
+              double.parse(amount) < limits.min!) {
             continue;
-          } else if (limits.max != null && double.parse(amount) > limits.max!) {
+          } else if (provider is! PegarouteExchangeProvider &&
+              limits.max != null &&
+              double.parse(amount) > limits.max!) {
             continue;
           } else {
             var providerOrderCreated = false;
@@ -1717,12 +1811,14 @@ abstract class ExchangeViewModelBase extends WalletChangeListenerViewModel with 
     if (provider.description.isCentralized && forceDecentralizedExchanges) return;
     if (!selectedProviders.contains(provider)) selectedProviders.add(provider);
     if (providerList.contains(provider)) _tradeAvailableProviders.add(provider);
+    _invalidateRates();
   }
 
   @action
   void removeExchangeProvider(ExchangeProvider provider) {
     selectedProviders.remove(provider);
     _tradeAvailableProviders.remove(provider);
+    _invalidateRates();
     if (forcedProvider == provider) {
       setForcedProvider(null);
     }

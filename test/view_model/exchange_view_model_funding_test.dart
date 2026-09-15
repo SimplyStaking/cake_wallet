@@ -1,4 +1,6 @@
 import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
 
 import 'package:cake_wallet/core/amount_parsing_proxy.dart';
 import 'package:cake_wallet/entities/bitcoin_amount_display_mode.dart';
@@ -10,6 +12,9 @@ import 'package:cake_wallet/exchange/limits.dart';
 import 'package:cake_wallet/exchange/limits_state.dart';
 import 'package:cake_wallet/exchange/provider/exchange_provider.dart';
 import 'package:cake_wallet/exchange/provider/pegaroute/pegaroute_provider_preferences.dart';
+import 'package:cake_wallet/exchange/provider/pegaroute/pegaroute_api.dart';
+import 'package:cake_wallet/exchange/provider/pegaroute/pegaroute_configuration.dart';
+import 'package:cake_wallet/exchange/provider/pegaroute_exchange_provider.dart';
 import 'package:cake_wallet/exchange/trade.dart';
 import 'package:cake_wallet/exchange/trade_creation_failure.dart';
 import 'package:cake_wallet/exchange/trade_request.dart';
@@ -36,6 +41,7 @@ import 'package:cw_core/wallet_base.dart';
 import 'package:cw_core/wallet_info.dart';
 import 'package:cw_core/wallet_type.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:http/http.dart' as very_insecure_http_do_not_use;
 import 'package:mobx/mobx.dart' show ObservableMap;
 import 'package:mocktail/mocktail.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -99,6 +105,7 @@ class _Provider extends ExchangeProvider {
   final requests = <TradeRequest>[];
   Future<Limits?>? nextLimits;
   Future<double>? nextRate;
+  final quotedAmounts = <double>[];
 
   @override
   String get title => description.title;
@@ -133,8 +140,10 @@ class _Provider extends ExchangeProvider {
     required double amount,
     required bool isFixedRateMode,
     required bool isReceiveAmount,
-  }) async =>
-      await (nextRate ?? Future.value(rate));
+  }) async {
+    quotedAmounts.add(amount);
+    return await (nextRate ?? Future.value(rate));
+  }
 
   @override
   Future<Trade> createTrade({
@@ -194,8 +203,10 @@ class _OfflineExchangeViewModel extends ExchangeViewModel {
 }
 
 Future<_OfflineExchangeViewModel> _viewModel(
-  List<_Provider> providers, {
+  List<ExchangeProvider> providers, {
   CryptoCurrency depositCurrency = CryptoCurrency.eth,
+  CryptoCurrency receiveCurrency = CryptoCurrency.xmr,
+  bool initialQuoteExpected = true,
 }) async {
   final preferences = await SharedPreferences.getInstance();
   final appStore = _AppStore();
@@ -235,13 +246,14 @@ Future<_OfflineExchangeViewModel> _viewModel(
     viewModel.addExchangeProvider(provider);
   }
   viewModel.depositCurrency = depositCurrency;
+  viewModel.receiveCurrency = receiveCurrency;
   viewModel.receiveAddress = 'destination-address';
   viewModel.fixturesReady = true;
   await viewModel.loadLimits();
   await viewModel.calculateBestRate();
   await viewModel.changeDepositAmount(amount: '1', isCanonical: true);
   expect(viewModel.forcedProvider, isNull);
-  expect(viewModel.bestRateProvider, same(providers.first));
+  expect(viewModel.bestRateProvider, initialQuoteExpected ? same(providers.first) : isNull);
   return viewModel;
 }
 
@@ -323,6 +335,365 @@ void main() {
     await Future<void>.delayed(Duration.zero);
     expect(viewModel.bestRateProvider, same(provider));
     expect(provider.requests, isEmpty);
+  });
+
+  test('empty refresh clears the best provider, displayed rate and calculated output', () async {
+    final provider = _Provider(ExchangeProviderDescription.pegaroute, rate: 2384);
+    final viewModel = await _viewModel([provider]);
+    viewModel.providerDisplay = provider;
+    provider.nextRate = Future.value(0);
+    await viewModel.calculateBestRate();
+    expect(viewModel.noProviderForPair, isTrue);
+    expect(viewModel.bestRate, 0);
+    expect(viewModel.bestRateProvider, isNull);
+    expect(viewModel.providerDisplay, isNull);
+    expect(viewModel.receiveAmount, isEmpty);
+    expect(viewModel.depositAmount, '1');
+  });
+
+  test('amount edits query the entered amount instead of scaling the initial comparison', () async {
+    final provider = _Provider(ExchangeProviderDescription.pegaroute, rate: 2384);
+    final viewModel = await _viewModel([provider]);
+    provider.nextLimits = Future.value(Limits(min: 0, max: null));
+    await viewModel.loadLimits();
+    final pending = Completer<double>();
+    provider.nextRate = pending.future;
+    final refresh = viewModel.changeDepositAmount(amount: '0.002', isCanonical: true);
+    expect(provider.quotedAmounts.last, 0.002);
+    expect(viewModel.bestRate, 0);
+    expect(viewModel.receiveAmount, isEmpty);
+    pending.complete(0);
+    await refresh;
+    expect(viewModel.noProviderForPair, isTrue);
+    expect(viewModel.receiveAmount, isEmpty);
+    expect(provider.requests, isEmpty);
+  });
+
+  test('an older same-input quote cannot replace a newer unavailable result', () async {
+    final provider = _Provider(ExchangeProviderDescription.pegaroute, rate: 2);
+    final viewModel = await _viewModel([provider]);
+    final older = Completer<double>();
+    provider.nextRate = older.future;
+    final refresh = viewModel.calculateBestRate();
+    provider.nextRate = Future.value(0);
+    await viewModel.calculateBestRate();
+    older.complete(20);
+    await refresh;
+    expect(viewModel.noProviderForPair, isTrue);
+    expect(viewModel.bestRate, 0);
+  });
+
+  test('a quote for an older amount cannot replace the current amount result', () async {
+    final provider = _Provider(ExchangeProviderDescription.changeNow, rate: 2);
+    final viewModel = await _viewModel([provider]);
+    final older = Completer<double>();
+    provider.nextRate = older.future;
+    final first = viewModel.changeDepositAmount(amount: '2', isCanonical: true);
+    provider.nextRate = Future.value(3);
+    await viewModel.changeDepositAmount(amount: '3', isCanonical: true);
+    older.complete(20);
+    await first;
+    expect(viewModel.bestRate, 3);
+    expect(viewModel.depositAmount, '3');
+    expect(viewModel.receiveAmount, '9');
+  });
+
+  test('a removed provider cannot reappear when its old quote completes', () async {
+    final first = _Provider(ExchangeProviderDescription.pegaroute, rate: 3);
+    final second = _Provider(ExchangeProviderDescription.exolix, rate: 2);
+    final viewModel = await _viewModel([first, second]);
+    final older = Completer<double>();
+    first.nextRate = older.future;
+    final refresh = viewModel.calculateBestRate();
+    viewModel.removeExchangeProvider(first);
+    await viewModel.calculateBestRate();
+    older.complete(10);
+    await refresh;
+    expect(viewModel.bestRateProvider, same(second));
+    expect(viewModel.bestRate, 2);
+  });
+
+  test('failed provider quotes are isolated and an all-failed refresh clears stale output',
+      () async {
+    final first = _Provider(ExchangeProviderDescription.pegaroute, rate: 3);
+    final second = _Provider(ExchangeProviderDescription.exolix, rate: 2);
+    final viewModel = await _viewModel([first, second]);
+    first.nextRate = Future.error(StateError('transport failed'));
+    await viewModel.calculateBestRate();
+    expect(viewModel.bestRateProvider, same(second));
+    first.nextRate = Future.error(StateError('transport failed'));
+    second.nextRate = Future.value(0);
+    await viewModel.calculateBestRate();
+    expect(viewModel.bestRateProvider, isNull);
+    expect(viewModel.receiveAmount, isEmpty);
+  });
+
+  test('automatic comparison keeps the higher Exolix rate over a lower Pegaroute rate', () async {
+    final exolix = _Provider(ExchangeProviderDescription.exolix, rate: 3);
+    final pegaroute = _Provider(ExchangeProviderDescription.pegaroute, rate: 2);
+    final viewModel = await _viewModel([exolix, pegaroute]);
+    pegaroute.nextRate = Future.value(2.5);
+    await viewModel.calculateBestRate();
+    expect(viewModel.bestRateProvider, same(exolix));
+    expect(viewModel.bestRate, 3);
+    expect(viewModel.receiveAmount, '3');
+  });
+
+  test('unavailable quotes use the existing Cake error instead of an invalid-output error',
+      () async {
+    final provider = _Provider(ExchangeProviderDescription.pegaroute, rate: 2);
+    final viewModel = await _viewModel([provider]);
+    provider.nextRate = Future.value(0);
+    await viewModel.calculateBestRate();
+    await viewModel.createTrade();
+    expect((viewModel.tradeState as TradeIsCreatedFailure).error,
+        S.current.none_of_selected_providers_can_exchange);
+    expect(provider.requests, isEmpty);
+  });
+
+  test('clearing the input invalidates an in-flight quote and its output', () async {
+    final provider = _Provider(ExchangeProviderDescription.changeNow, rate: 2);
+    final viewModel = await _viewModel([provider]);
+    final pending = Completer<double>();
+    provider.nextRate = pending.future;
+    final refresh = viewModel.calculateBestRate();
+    await viewModel.changeDepositAmount(amount: '');
+    pending.complete(2);
+    await refresh;
+    expect(viewModel.bestRateProvider, isNull);
+    expect(viewModel.depositAmount, isEmpty);
+    expect(viewModel.receiveAmount, isEmpty);
+    expect(viewModel.isFetchingRate, isFalse);
+  });
+
+  test('a pair change rejects the previous quote while new limits are loading', () async {
+    final provider = _Provider(ExchangeProviderDescription.changeNow, rate: 2);
+    final viewModel = await _viewModel([provider]);
+    final pending = Completer<double>();
+    provider.nextRate = pending.future;
+    final refresh = viewModel.calculateBestRate();
+    final limits = Completer<Limits?>();
+    provider.nextLimits = limits.future;
+    viewModel.fiatConversionStore.prices[CryptoCurrency.usdcArb] = 1;
+    viewModel.fixturesReady = false;
+    viewModel.changeReceiveCurrency(currency: CryptoCurrency.usdcArb);
+    viewModel.fixturesReady = true;
+    final reload = viewModel.loadLimits();
+    pending.complete(2);
+    await refresh;
+    expect(viewModel.bestRateProvider, isNull);
+    expect(viewModel.receiveAmount, isEmpty);
+    provider.nextRate = Future.value(3);
+    limits.complete(Limits(min: 0, max: null));
+    await reload;
+    expect(viewModel.bestRate, 3);
+    expect(viewModel.receiveAmount, '3');
+  });
+
+  test('a stale provider-settings failure cannot overwrite a successful refresh', () async {
+    final provider = _Provider(ExchangeProviderDescription.changeNow, rate: 2);
+    final viewModel = await _viewModel([provider]);
+    final pending = Completer<double>();
+    provider.nextRate = pending.future;
+    final refresh = viewModel.calculateBestRate();
+    provider.nextRate = Future.value(3);
+    await viewModel.pegarouteProviderPreferences.setEnabled('instaswap', false);
+    await Future<void>.delayed(Duration.zero);
+    pending.completeError(StateError('old transport error'));
+    await refresh;
+    expect(viewModel.bestRate, 3);
+    expect(viewModel.noProviderForPair, isFalse);
+  });
+
+  test('an unavailable forced provider is not presented as a usable automatic quote', () async {
+    final exolix = _Provider(ExchangeProviderDescription.exolix, rate: 3);
+    final pegaroute = _Provider(ExchangeProviderDescription.pegaroute, rate: 2);
+    final viewModel = await _viewModel([exolix, pegaroute]);
+    pegaroute.nextRate = Future.value(0);
+    viewModel.setForcedProvider(pegaroute);
+    await Future<void>.delayed(Duration.zero);
+    expect(viewModel.forcedProviderRate, 0);
+    expect(viewModel.noProviderForPair, isTrue);
+    expect(viewModel.receiveAmount, isEmpty);
+    await viewModel.createTrade();
+    expect((viewModel.tradeState as TradeIsCreatedFailure).error,
+        S.current.none_of_selected_providers_can_exchange);
+    expect(exolix.requests, isEmpty);
+    expect(pegaroute.requests, isEmpty);
+    viewModel.setForcedProvider(null);
+    await Future<void>.delayed(Duration.zero);
+    expect(viewModel.bestRateProvider, same(exolix));
+    expect(viewModel.noProviderForPair, isFalse);
+    expect(viewModel.receiveAmount, '3');
+  });
+
+  test('same-value UI reactions do not re-request unavailable quotes', () async {
+    final provider = _Provider(ExchangeProviderDescription.changeNow, rate: 2);
+    final viewModel = await _viewModel([provider]);
+    provider.nextRate = Future.value(0);
+    await viewModel.calculateBestRate();
+    final requests = provider.quotedAmounts.length;
+    await viewModel.changeDepositAmount(amount: '1.0', isCanonical: true);
+    expect(provider.quotedAmounts, hasLength(requests));
+    expect(viewModel.receiveAmount, isEmpty);
+  });
+
+  test('receive-target mode preserves the entered side when its quote disappears', () async {
+    final provider = _Provider(ExchangeProviderDescription.changeNow, rate: 2);
+    final viewModel = await _viewModel([provider]);
+    viewModel.isFixedRateMode = true;
+    await viewModel.changeReceiveAmount(amount: '4', isCanonical: true);
+    await Future<void>.delayed(Duration.zero);
+    expect(viewModel.depositAmount, '2');
+    provider.nextRate = Future.value(0);
+    await viewModel.calculateBestRate();
+    expect(viewModel.receiveAmount, '4');
+    expect(viewModel.depositAmount, isEmpty);
+    expect(viewModel.noProviderForPair, isTrue);
+  });
+
+  test('provider errors use the existing Cake message after safe fallback is exhausted', () async {
+    final first = _Provider(ExchangeProviderDescription.pegaroute,
+        rate: 3,
+        error: const PegarouteApiError(
+            httpStatus: 400,
+            code: 'AMOUNT_TOO_LOW',
+            message: 'upstream diagnostic',
+            userMessage: 'Instaswap: Minimum: 1.1 ETH.',
+            retryable: false));
+    final second = _Provider(ExchangeProviderDescription.exolix,
+        rate: 2, error: StateError('ordinary provider failure'));
+    final viewModel = await _viewModel([first, second]);
+    await viewModel.createTrade();
+    expect(first.requests, hasLength(1));
+    expect(second.requests, hasLength(1));
+    expect((viewModel.tradeState as TradeIsCreatedFailure).error,
+        S.current.none_of_selected_providers_can_exchange);
+  });
+
+  test('a missing 1-unit Pegaroute limit does not suppress actual-amount discovery', () async {
+    final quote = jsonDecode(File('test/exchange/fixtures/pegaroute/quote.json').readAsStringSync())
+        as Map<String, dynamic>;
+    quote['expiresAt'] = '2099-01-01T00:00:00.000Z';
+    final routes = quote['routes'];
+    final amounts = <String>[];
+    final provider = PegarouteExchangeProvider(
+        apiClient: PegarouteApiClient(
+      configuration: const PegarouteConfiguration(baseUrl: 'https://fixture.invalid'),
+      get: (uri, headers) async {
+        final amount = uri.queryParameters['amount']!;
+        amounts.add(amount);
+        return very_insecure_http_do_not_use.Response(
+            jsonEncode({
+              ...quote,
+              'routes': amount == '0.003' ? routes : <Object>[],
+              'warnings': amount == '0.003'
+                  ? <Object>[]
+                  : [
+                      {
+                        'provider': 'instaswap',
+                        'code': 'PROVIDER_UNAVAILABLE',
+                        'message': 'private diagnostic',
+                        'userMessage': 'Temporarily unavailable.'
+                      }
+                    ],
+            }),
+            200);
+      },
+      post: (_, __, ___) async => throw StateError('Discovery must not create an order'),
+    ));
+    final viewModel = await _viewModel([provider], initialQuoteExpected: false);
+    expect(viewModel.limitsState, isA<LimitsLoadedFailure>());
+    await viewModel.createTrade();
+    expect((viewModel.tradeState as TradeIsCreatedFailure).error,
+        S.current.none_of_selected_providers_can_exchange);
+    await viewModel.changeDepositAmount(amount: '0.003', isCanonical: true);
+    expect(amounts.last, '0.003');
+    expect(viewModel.bestRateProvider, same(provider));
+    expect(viewModel.noProviderForPair, isFalse);
+    expect(viewModel.receiveAmount, isNotEmpty);
+  });
+
+  test('unavailable swaps use the same Cake error with Pegaroute enabled or disabled', () async {
+    final quote = jsonDecode(File('test/exchange/fixtures/pegaroute/quote.json').readAsStringSync())
+        as Map<String, dynamic>;
+    quote['expiresAt'] = '2099-01-01T00:00:00.000Z';
+    final route = Map<String, dynamic>.from((quote['routes'] as List).first as Map)
+      ..['minAmount'] = null
+      ..['expectedOutput'] = '7';
+    final quotedAmounts = <String>[];
+    final pegaroute = PegarouteExchangeProvider(
+        apiClient: PegarouteApiClient(
+      configuration: const PegarouteConfiguration(baseUrl: 'https://fixture.invalid'),
+      get: (uri, headers) async {
+        final amount = uri.queryParameters['amount']!;
+        quotedAmounts.add(amount);
+        return very_insecure_http_do_not_use.Response(
+            jsonEncode({
+              ...quote,
+              'routes': double.parse(amount) >= 0.003 ? [route] : <Object>[],
+              'warnings': [
+                {
+                  'provider': 'instaswap',
+                  'code': 'AMOUNT_TOO_LOW',
+                  'message': 'internal upstream diagnostic',
+                  'userMessage': 'Minimum: 0.002049625039184008 ETH.'
+                },
+                {
+                  'provider': 'openocean',
+                  'code': 'UNSUPPORTED_PAIR',
+                  'message': 'internal upstream diagnostic',
+                  'userMessage': 'Unsupported pair.'
+                },
+              ],
+            }),
+            200);
+      },
+      post: (_, __, ___) async => throw StateError('Discovery must not create an order'),
+    ));
+    final other = _Provider(ExchangeProviderDescription.exolix, rate: 0);
+    final viewModel = await _viewModel([pegaroute, other], receiveCurrency: CryptoCurrency.usdcArb);
+    await viewModel.changeDepositAmount(amount: '0.002', isCanonical: true);
+    expect(quotedAmounts.last, '0.002');
+    expect(viewModel.noProviderForPair, isTrue);
+    expect(viewModel.bestRateProvider, isNull);
+    expect(viewModel.receiveAmount, isEmpty);
+    await viewModel.createTrade();
+    expect((viewModel.tradeState as TradeIsCreatedFailure).error,
+        S.current.none_of_selected_providers_can_exchange);
+
+    viewModel.removeExchangeProvider(pegaroute);
+    await viewModel.loadLimits();
+    await viewModel.createTrade();
+    expect((viewModel.tradeState as TradeIsCreatedFailure).error,
+        S.current.none_of_selected_providers_can_exchange);
+    expect(viewModel.receiveAmount, isEmpty);
+
+    viewModel.addExchangeProvider(pegaroute);
+    await viewModel.loadLimits();
+    await viewModel.changeDepositAmount(amount: '0.003', isCanonical: true);
+    expect(quotedAmounts.last, '0.003');
+    expect(viewModel.noProviderForPair, isFalse);
+    expect(viewModel.bestRateProvider, same(pegaroute));
+    expect(viewModel.receiveAmount, '7');
+    expect(other.requests, isEmpty);
+  });
+
+  test('a timed-out quote clears the old provider and uses the existing unavailable error',
+      () async {
+    final provider = _Provider(ExchangeProviderDescription.changeNow, rate: 2);
+    final viewModel = await _viewModel([provider]);
+    final pending = Completer<double>();
+    provider.nextRate = pending.future;
+    await viewModel.calculateBestRate();
+    expect(viewModel.isFetchingRate, isFalse);
+    expect(viewModel.bestRateProvider, isNull);
+    await viewModel.createTrade();
+    expect((viewModel.tradeState as TradeIsCreatedFailure).error,
+        S.current.none_of_selected_providers_can_exchange);
+    pending.complete(3);
+    await Future<void>.delayed(Duration.zero);
+    expect(viewModel.bestRate, 0);
   });
 
   test('wallet balance failure stops automatic selection with a localized error', () async {
