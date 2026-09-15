@@ -484,6 +484,28 @@ void main() {
     });
   }
 
+  test('capitalized node funding rejection is localized with exact native amounts', () async {
+    final pending = _PendingTransaction(
+        commitError: StateError('RPCError: got code -32000 with msg '
+            '"Insufficient funds for gas * price + value: '
+            'have 717351881928726 want 723646218408612"'));
+    final viewModel = _viewModel(
+        descriptionBox: _DescriptionBox(),
+        pending: pending,
+        walletType: WalletType.ethereum,
+        walletCurrency: CryptoCurrency.eth,
+        chainId: 1);
+    viewModel.setPendingTransactionContextForTesting(transaction: pending, trade: _stageTrade());
+    await viewModel.commitTransaction(_Context());
+    expect(
+        (viewModel.state as FailureState).error,
+        '${S.current.tx_wrong_balance_exception('ETH')}\n\n'
+        '${S.current.transaction_cost}: 0.000723646218408612 ETH\n'
+        '${S.current.available_balance}: 0.000717351881928726 ETH\n'
+        '${S.current.overshot}: 0.000006294336479886 ETH');
+    expect(pending.commits, 1);
+  });
+
   test('token principal failure uses the token decimals without a native fee total', () async {
     final token = Erc20Token(
         name: 'USD Coin',

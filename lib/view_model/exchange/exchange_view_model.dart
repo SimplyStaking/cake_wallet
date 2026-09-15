@@ -369,6 +369,7 @@ abstract class ExchangeViewModelBase extends WalletChangeListenerViewModel with 
 
   final List<ExchangeProvider> _tradeAvailableProviders = [];
   int _pegaroutePreferencesRevision = 0;
+  int _limitsRequestId = 0;
 
   Map<ExchangeProvider, Limits?> _providerLimits = {};
 
@@ -949,6 +950,7 @@ abstract class ExchangeViewModelBase extends WalletChangeListenerViewModel with 
 
   Future<void> calculateBestRate() async {
     final pegaroutePreferencesRevision = _pegaroutePreferencesRevision;
+    final limitsRequestId = _limitsRequestId;
     if (depositCurrency == receiveCurrency) {
       bestRate = 0.0;
       bestRateProvider = null;
@@ -990,7 +992,8 @@ abstract class ExchangeViewModelBase extends WalletChangeListenerViewModel with 
             ),
       ),
     );
-    if (pegaroutePreferencesRevision != _pegaroutePreferencesRevision) return;
+    if (pegaroutePreferencesRevision != _pegaroutePreferencesRevision ||
+        limitsRequestId != _limitsRequestId) return;
 
     // We'll use a new SplayTreeMap to avoid concurrent modification issues
     final newSortedProviders =
@@ -1024,11 +1027,22 @@ abstract class ExchangeViewModelBase extends WalletChangeListenerViewModel with 
   @action
   Future<void> loadLimits() async {
     final pegaroutePreferencesRevision = _pegaroutePreferencesRevision;
+    final requestId = ++_limitsRequestId;
+    // Clear ranges immediately: the amount field must not validate against a
+    // previous provider selection/pair during a refresh or after a failed one.
+    limits = Limits(min: null, max: null);
+    _providerLimits.clear();
+    _sortedAvailableProviders.clear();
+    bestRateProvider = null;
+    bestRate = 0.0;
     if (depositCurrency == receiveCurrency) {
       limitsState = LimitsLoadedSuccessfully(limits: Limits(min: 0, max: 0));
       return;
     }
-    if (selectedProviders.isEmpty) return;
+    if (selectedProviders.isEmpty) {
+      limitsState = LimitsLoadedFailure(error: S.current.none_of_selected_providers_can_exchange);
+      return;
+    }
 
     limitsState = LimitsIsLoading();
 
@@ -1058,7 +1072,8 @@ abstract class ExchangeViewModelBase extends WalletChangeListenerViewModel with 
       }).toList();
 
       final entries = await Future.wait(futures);
-      if (pegaroutePreferencesRevision != _pegaroutePreferencesRevision) return;
+      if (pegaroutePreferencesRevision != _pegaroutePreferencesRevision ||
+          requestId != _limitsRequestId) return;
       _providerLimits = Map.fromEntries(entries);
 
       _providerLimits.values.whereType<Limits>().forEach((tempLimits) {

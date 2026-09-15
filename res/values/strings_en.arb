@@ -1189,6 +1189,7 @@
   "swap_unavailable_switch_to_network": "This address type can't receive funds from a swap. Switch to your ${network} wallet to continue.",
   "sweeping_wallet": "Sweeping wallet",
   "sweeping_wallet_alert": "This shouldn’t take long. DO NOT LEAVE THIS SCREEN OR THE SWEPT FUNDS MAY BE LOST.",
+  "swipe_for_contract_approval": "Swipe for contract approval",
   "swipe_to_bridge": "Swipe to bridge",
   "swipe_to_send": "Swipe to send",
   "switch_camera": "Switch camera",

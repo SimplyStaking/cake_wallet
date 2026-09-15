@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:cake_wallet/core/amount_parsing_proxy.dart';
 import 'package:cake_wallet/entities/bitcoin_amount_display_mode.dart';
 import 'package:cake_wallet/entities/exchange_api_mode.dart';
@@ -5,6 +7,7 @@ import 'package:cake_wallet/entities/preferences_key.dart';
 import 'package:cake_wallet/exchange/exchange_provider_description.dart';
 import 'package:cake_wallet/exchange/exchange_trade_state.dart';
 import 'package:cake_wallet/exchange/limits.dart';
+import 'package:cake_wallet/exchange/limits_state.dart';
 import 'package:cake_wallet/exchange/provider/exchange_provider.dart';
 import 'package:cake_wallet/exchange/provider/pegaroute/pegaroute_provider_preferences.dart';
 import 'package:cake_wallet/exchange/trade.dart';
@@ -94,6 +97,8 @@ class _Provider extends ExchangeProvider {
   final Object? error;
   final _Trade trade;
   final requests = <TradeRequest>[];
+  Future<Limits?>? nextLimits;
+  Future<double>? nextRate;
 
   @override
   String get title => description.title;
@@ -119,7 +124,7 @@ class _Provider extends ExchangeProvider {
     required CryptoCurrency to,
     required bool isFixedRateMode,
   }) async =>
-      Limits(min: 0.1, max: 100);
+      await (nextLimits ?? Future.value(Limits(min: 0.1, max: 100)));
 
   @override
   Future<double> fetchRate({
@@ -129,7 +134,7 @@ class _Provider extends ExchangeProvider {
     required bool isFixedRateMode,
     required bool isReceiveAmount,
   }) async =>
-      rate;
+      await (nextRate ?? Future.value(rate));
 
   @override
   Future<Trade> createTrade({
@@ -263,6 +268,61 @@ void main() {
         )).thenAnswer((_) async => <Map<String, Object?>>[]);
     sqlite.db = database;
     addTearDown(() => sqlite.db = previousDatabase);
+  });
+
+  test('provider preference change clears old minimum while refreshing, including failure',
+      () async {
+    final provider = _Provider(ExchangeProviderDescription.changeNow, rate: 2);
+    final viewModel = await _viewModel([provider]);
+    viewModel.limits = Limits(min: 12, max: null);
+    final response = Completer<Limits?>();
+    provider.nextLimits = response.future;
+    await viewModel.pegarouteProviderPreferences.setEnabled('instaswap', false);
+    expect(viewModel.limitsState, isA<LimitsIsLoading>());
+    expect(viewModel.limits.min, isNull);
+    expect(viewModel.bestRateProvider, isNull);
+    response.complete(null);
+    await Future<void>.delayed(Duration.zero);
+    expect(viewModel.limitsState, isA<LimitsLoadedFailure>());
+    expect(viewModel.limits.min, isNull);
+    expect(provider.requests, isEmpty);
+  });
+
+  test('an older limit response cannot overwrite the current refreshed limits', () async {
+    final provider = _Provider(ExchangeProviderDescription.changeNow, rate: 2);
+    final viewModel = await _viewModel([provider]);
+    final older = Completer<Limits?>();
+    provider.nextLimits = older.future;
+    final firstLoad = viewModel.loadLimits();
+    final newer = Completer<Limits?>();
+    provider.nextLimits = newer.future;
+    final secondLoad = viewModel.loadLimits();
+    newer.complete(Limits(min: 0, max: null));
+    await secondLoad;
+    older.complete(Limits(min: 12, max: null));
+    await firstLoad;
+    expect(viewModel.limits.min, 0);
+    expect(provider.requests, isEmpty);
+  });
+
+  test('an in-flight rate cannot restore a quote while its limits are being refreshed', () async {
+    final provider = _Provider(ExchangeProviderDescription.changeNow, rate: 2);
+    final viewModel = await _viewModel([provider]);
+    final rateResponse = Completer<double>();
+    provider.nextRate = rateResponse.future;
+    final oldQuote = viewModel.calculateBestRate();
+    final limitResponse = Completer<Limits?>();
+    provider.nextLimits = limitResponse.future;
+    final reload = viewModel.loadLimits();
+    expect(viewModel.bestRateProvider, isNull);
+    rateResponse.complete(2);
+    await oldQuote;
+    expect(viewModel.bestRateProvider, isNull);
+    limitResponse.complete(Limits(min: 0, max: null));
+    await reload;
+    await Future<void>.delayed(Duration.zero);
+    expect(viewModel.bestRateProvider, same(provider));
+    expect(provider.requests, isEmpty);
   });
 
   test('wallet balance failure stops automatic selection with a localized error', () async {

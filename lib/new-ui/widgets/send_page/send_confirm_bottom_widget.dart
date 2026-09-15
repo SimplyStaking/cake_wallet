@@ -49,8 +49,11 @@ class SendConfirmBottomWidget extends StatelessWidget {
             onConfirmed: () {
               sendViewModel.commitTransaction(context);
             },
-            swiperText: approval == null ? S.of(context).swipe_to_send : S.of(context).approve_tokens,
-            accessibleNavigationModeButtonText: approval == null ? S.of(context).send : S.of(context).approve);
+            swiperText: approval == null
+                ? S.of(context).swipe_to_send
+                : S.of(context).swipe_for_contract_approval,
+            accessibleNavigationModeButtonText:
+                approval == null ? S.of(context).send : S.of(context).approve);
       case IsExecutingState:
         return LoadingBottomWidget(
           text: "${S.of(context).generating_transaction}...",

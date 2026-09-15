@@ -1740,7 +1740,7 @@ abstract class SendViewModelBase extends WalletChangeListenerViewModel with Stor
         return S.current.gas_exceeds_allowance;
       }
 
-      if (errorMessage.contains('insufficient funds')) {
+      if (errorMessage.toLowerCase().contains('insufficient funds')) {
         final feeCurrency = switch (walletType) {
           WalletType.bsc => "BNB",
           WalletType.polygon => "POL",
@@ -1761,6 +1761,30 @@ abstract class SendViewModelBase extends WalletChangeListenerViewModel with Stor
         // Handle parsing errors (couldn't parse the error message)
         if (parsedErrorMessageResult.error != null) {
           return S.current.insufficient_funds_for_tx;
+        }
+
+        // The node's have/want values are exact base units. Reuse the funding
+        // message for a simple shortfall, keeping queued-cost errors below on
+        // their existing path when their overshot includes other transactions.
+        final nativeCurrency = switch (walletType) {
+          WalletType.bsc => CryptoCurrency.bnb,
+          WalletType.polygon => CryptoCurrency.maticpoly,
+          WalletType.base => CryptoCurrency.baseEth,
+          WalletType.arbitrum => CryptoCurrency.arbEth,
+          _ => CryptoCurrency.eth,
+        };
+        final available = Money.tryParse(parsedErrorMessageResult.balanceWei ?? '', nativeCurrency,
+            isBaseUnit: true);
+        final required = Money.tryParse(parsedErrorMessageResult.txCostWei ?? '', nativeCurrency,
+            isBaseUnit: true);
+        if (available != null &&
+            required != null &&
+            !available.isNegative &&
+            required > available &&
+            (required - available).amount ==
+                BigInt.tryParse(parsedErrorMessageResult.overshotWei ?? '')) {
+          return transactionWrongBalanceMessage(TransactionWrongBalanceException(nativeCurrency,
+              requiredBalance: required, availableBalance: available));
         }
 
         // Handle successfully parsed errors with specific values

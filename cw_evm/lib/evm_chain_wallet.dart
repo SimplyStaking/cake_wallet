@@ -1031,7 +1031,14 @@ abstract class EVMChainWalletBase
     if (gasLimit != null && gas.maxFeePerGas <= 0) {
       throw EVMChainTransactionFeesException('Gas price is unavailable');
     }
-    final nativeBal = balance[nativeCurrency]?.available ?? Money.zero(nativeCurrency);
+    // Approval fees or pending payments can make the UI's cached balance stale.
+    // Funding requires a successful node read; background-sync fallback is not
+    // sufficient evidence of affordability here.
+    final nativeBal = Money(
+        (await _client.getBalance(_evmChainPrivateKey.address, atBlock: const BlockNum.pending()))
+            .getInWei,
+        nativeCurrency);
+    balance[nativeCurrency] = EVMChainERC20Balance(nativeBal);
     var requiredNative = gasFee;
 
     if (valueWei.currency == nativeCurrency) {
@@ -1127,7 +1134,11 @@ abstract class EVMChainWalletBase
     // existing approval floor. Token allowance itself does not spend principal.
     final gasFee =
         Money(BigInt.from(safeGasUnits) * BigInt.from(gasFeesModel.maxFeePerGas), currency);
-    final available = balance[currency]?.available ?? Money.zero(currency);
+    final available = Money(
+        (await _client.getBalance(_evmChainPrivateKey.address, atBlock: const BlockNum.pending()))
+            .getInWei,
+        currency);
+    balance[currency] = EVMChainERC20Balance(available);
     if (gasFee > available) {
       throw TransactionWrongBalanceException(currency,
           requiredBalance: gasFee, availableBalance: available, fee: gasFee, feePriority: priority);
