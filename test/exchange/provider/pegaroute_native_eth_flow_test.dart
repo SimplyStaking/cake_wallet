@@ -402,6 +402,30 @@ void main() {
     expect(wallet.builds, 0);
   });
 
+  test('creation with no eligible quote rejects before POST without returning backend warnings',
+      () async {
+    quote['routes'] = <Object>[];
+    quote['warnings'] = [
+      {
+        'provider': 'instaswap',
+        'code': 'AMOUNT_TOO_LOW',
+        'message': 'private diagnostic',
+        'userMessage': 'Minimum: 1.1 ETH.'
+      },
+      {
+        'provider': 'openocean',
+        'code': 'UNSUPPORTED_PAIR',
+        'message': 'private diagnostic',
+        'userMessage': 'Unsupported pair.'
+      },
+    ];
+    await preferences.setEnabled('openocean', false);
+    await expectLater(create(), throwsA(isA<PegarouteUnavailableException>()));
+    expect(calls, ['GET /quote']);
+    expect(await Trade.getAll(), isEmpty);
+    expect(wallet.builds, 0);
+  });
+
   test('source balance equal to the amount permits creation without claiming gas affordability',
       () async {
     wallet.balances = {CryptoCurrency.eth: _Balance(Money.parse('1', CryptoCurrency.eth))};
