@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'package:cake_wallet/exchange/provider/pegaroute/pegaroute_solana_wire.dart';
 
 class TradeExecution {
   factory TradeExecution({
@@ -512,15 +513,18 @@ bool _validateCosmosDeposit(Map<String, dynamic> payload) =>
     (payload['assetDecimals'] as int) >= 0;
 
 bool _validateSerialized(String family, Map<String, dynamic> payload) =>
-    _hasExactKeys(payload, const {'serializedTransaction', 'minOut'}) &&
+    _hasExactKeys(
+        payload, {'serializedTransaction', 'minOut', if (family == 'solana') 'encoding'}) &&
+    (family != 'solana' || payload['encoding'] is String) &&
     _nonEmpty(payload['serializedTransaction']) &&
-    _validSerializedTransaction(family, payload['serializedTransaction'] as String) &&
+    _validSerializedTransaction(
+        family, payload['serializedTransaction'] as String, payload['encoding'] as String?) &&
     _validTokenAmountOrNull(payload['minOut']);
 
-bool _validSerializedTransaction(String family, String value) {
+bool _validSerializedTransaction(String family, String value, String? encoding) {
   if (value.trim() != value || value.isEmpty) return false;
   if (family == 'solana') {
-    return RegExp(r'^[1-9A-HJ-NP-Za-km-z]+$').hasMatch(value);
+    return isValidPegarouteSolanaTransaction(value, encoding);
   }
   return RegExp(r'^[A-Za-z0-9+/]+={0,2}$').hasMatch(value) && value.length % 4 == 0;
 }

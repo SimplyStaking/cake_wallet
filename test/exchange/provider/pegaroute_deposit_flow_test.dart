@@ -124,6 +124,7 @@ class _Wallet
   final CryptoCurrency currency;
   bool hardware = false, unknown = false, postBroadcastFailure = false, exactBalance = false;
   String? expectedMemo;
+  String? expectedSerialized;
   String? returnedId;
   int builds = 0, broadcasts = 0;
   late _Pending pending;
@@ -321,7 +322,8 @@ void main() {
     sqlite.db = null;
   });
 
-  Future<Trade> create({String? memo, bool serialized = false}) async {
+  Future<Trade> create(
+      {String? memo, bool serialized = false, String? encoded, String encoding = 'base58'}) async {
     final family = switch (wallet.type) {
       WalletType.monero => 'other',
       WalletType.solana => 'solana',
@@ -348,13 +350,15 @@ void main() {
       if (family == 'utxo') 'gasRate': null,
     };
     if (serialized) {
+      wallet.expectedSerialized = encoded ?? Base58Encoder.encode(_solBytes);
       quote['routes'][0]['provider'] = 'openocean';
       swap['route']['provider'] = 'openocean';
       swap['provider'] = {'name': 'openocean', 'referenceId': null, 'details': null};
       swap['execution'] = {
         'family': 'solana',
         'mode': 'serialized-tx',
-        'serializedTransaction': Base58Encoder.encode(_solBytes),
+        'serializedTransaction': wallet.expectedSerialized,
+        'encoding': encoding,
         'minOut': null
       };
     }
@@ -408,17 +412,32 @@ void main() {
     final trade = await create(memo: '1234');
     expect(await dispatcher.prepare(wallet: wallet, trade: trade), isNotNull);
   });
-  test('OpenOcean serialized Solana order is bound, restored and funded once', () async {
-    wallet = _Wallet(WalletType.solana, CryptoCurrency.sol);
-    final trade = await create(serialized: true);
-    final restored = (await Trade.getByTradeId(trade.id))!;
-    expect(TradeExecution.fromJsonString(restored.executionJson!).mode, 'serialized-tx');
-    final pending = (await dispatcher.prepare(wallet: wallet, trade: restored))!;
-    await pending.commit();
-    expect((await Trade.getByTradeId(trade.id))!.txId, pending.id);
-    expect(notifiedHash, pending.id);
-    expect(wallet.broadcasts, 1);
-  });
+  for (final entry in {
+    Base58Encoder.encode(_solBytes): 'base58',
+    base64Encode(_solBytes): 'base64',
+    BytesUtils.toHexString(_solBytes): 'hex',
+    '0x${BytesUtils.toHexString(_solBytes)}': 'hex',
+  }.entries) {
+    final encoded = entry.key;
+    test(
+        'OpenOcean serialized Solana ${encoded.substring(0, 4)} is bound, restored and funded once',
+        () async {
+      wallet = _Wallet(WalletType.solana, CryptoCurrency.sol);
+      final trade = await create(serialized: true, encoded: encoded, encoding: entry.value);
+      final restored = (await Trade.getByTradeId(trade.id))!;
+      expect(TradeExecution.fromJsonString(restored.executionJson!).mode, 'serialized-tx');
+      expect(
+          TradeExecution.fromJsonString(restored.executionJson!).payload['serializedTransaction'],
+          encoded);
+      expect(
+          TradeExecution.fromJsonString(restored.executionJson!).payload['encoding'], entry.value);
+      final pending = (await dispatcher.prepare(wallet: wallet, trade: restored))!;
+      await pending.commit();
+      expect((await Trade.getByTradeId(trade.id))!.txId, pending.id);
+      expect(notifiedHash, pending.id);
+      expect(wallet.broadcasts, 1);
+    });
+  }
   test('SPL deposit preserves mint and decimal identity', () async {
     wallet = _Wallet(
         WalletType.solana,
@@ -435,6 +454,55 @@ void main() {
     await pending.commit();
     expect(pending.amount.currency, isA<SPLToken>());
   });
+  for (final mutation in ['label', 'equivalent reencoding']) {
+    test('Solana $mutation cannot replace the prepared raw provider binding', () async {
+      wallet = _Wallet(WalletType.solana, CryptoCurrency.sol);
+      final trade =
+          await create(serialized: true, encoded: base64Encode(_solBytes), encoding: 'base64');
+      final pending = (await dispatcher.prepare(wallet: wallet, trade: trade))!;
+      final value = jsonDecode(trade.executionJson!) as Map<String, dynamic>;
+      (value['payload'] as Map)['encoding'] = 'base58';
+      if (mutation == 'equivalent reencoding') {
+        (value['payload'] as Map)['serializedTransaction'] = Base58Encoder.encode(_solBytes);
+      }
+      trade.executionJson = jsonEncode(value);
+      await expectLater(pending.commit(), throwsA(isA<PegarouteBindingException>()));
+      expect(wallet.broadcasts, 0);
+    });
+  }
+
+  test('status echo cannot replace bound Solana raw text and label with equivalent bytes',
+      () async {
+    wallet = _Wallet(WalletType.solana, CryptoCurrency.sol);
+    final trade =
+        await create(serialized: true, encoded: base64Encode(_solBytes), encoding: 'base64');
+    final pending = (await dispatcher.prepare(wallet: wallet, trade: trade))!;
+    await pending.commit();
+    final stored = (await Trade.getByTradeId(trade.id))!;
+    serveStatus = true;
+    await provider.refreshTradeStatus(trade: stored);
+    (swap['execution'] as Map)
+      ..['encoding'] = 'base58'
+      ..['serializedTransaction'] = Base58Encoder.encode(_solBytes);
+    await expectLater(
+        provider.refreshTradeStatus(trade: stored), throwsA(isA<PegarouteBindingException>()));
+    expect(wallet.broadcasts, 1);
+  });
+  test('status echo label alone is bound when both codecs decode the same text', () async {
+    const wire = 'AQEB'; // Lexically valid Base64 and Base58; no wallet preparation here.
+    wallet = _Wallet(WalletType.solana, CryptoCurrency.sol);
+    final trade = await create(serialized: true, encoded: wire, encoding: 'base64');
+    serveStatus = true;
+    statusHash = Base58Encoder.encode(List.filled(64, 1));
+    await provider.refreshTradeStatus(trade: trade);
+    (swap['execution'] as Map)['encoding'] = 'base58';
+    await expectLater(
+        provider.refreshTradeStatus(trade: trade),
+        throwsA(isA<PegarouteBindingException>()
+            .having((e) => e.message, 'reason', 'status execution changed')));
+    expect(wallet.broadcasts, 0);
+  });
+
   test('ZEC post-broadcast refresh and callback errors preserve successful payment', () async {
     wallet.postBroadcastFailure = true;
     failCallback = true;
@@ -468,7 +536,8 @@ void main() {
   test('Solana RPC ID mismatch retains unknown funding and cannot trigger a second send', () async {
     wallet = _Wallet(WalletType.solana, CryptoCurrency.sol)
       ..returnedId = Base58Encoder.encode(List.filled(64, 2));
-    final trade = await create();
+    final trade =
+        await create(serialized: true, encoded: base64Encode(_solBytes), encoding: 'base64');
     final pending = (await dispatcher.prepare(wallet: wallet, trade: trade))!;
     await expectLater(pending.commit(), throwsA(isA<PegarouteBindingException>()));
     final stored = (await Trade.getByTradeId(trade.id))!;
@@ -476,6 +545,8 @@ void main() {
         TradeExecutionLifecycleState.broadcastUnknown);
     expect(notifiedHash, isNull);
     await expectLater(pending.commit(), throwsA(isA<PegarouteBindingException>()));
+    final restoredPending = (await dispatcher.prepare(wallet: wallet, trade: stored))!;
+    await expectLater(restoredPending.commit(), throwsStateError);
     expect(wallet.broadcasts, 1);
   });
   test('ZEC ambiguous broadcast keeps an attempt marker and never invents a txid', () async {

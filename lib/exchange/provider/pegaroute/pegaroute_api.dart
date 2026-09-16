@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'pegaroute_solana_wire.dart';
 import 'package:blockchain_utils/blockchain_utils.dart' show Base58Decoder;
 
 import 'package:http/http.dart' as very_insecure_http_do_not_use;
@@ -503,6 +504,7 @@ class PegarouteExecution {
     String? asset,
     int? assetDecimals,
     String? serializedTransaction,
+    String? encoding,
     PegarouteTokenAmount? minOut,
     String? gasRate,
   }) {
@@ -522,6 +524,7 @@ class PegarouteExecution {
       asset: asset,
       assetDecimals: assetDecimals,
       serializedTransaction: serializedTransaction,
+      encoding: encoding,
       minOut: minOut,
       gasRate: gasRate,
     );
@@ -545,6 +548,7 @@ class PegarouteExecution {
     this.asset,
     this.assetDecimals,
     this.serializedTransaction,
+    this.encoding,
     this.minOut,
     this.gasRate,
   });
@@ -593,6 +597,7 @@ class PegarouteExecution {
           family: family,
           mode: mode,
           serializedTransaction: _requiredString(map, 'serializedTransaction'),
+          encoding: family == 'solana' ? _requiredString(map, 'encoding') : null,
           minOut: _requiredNullableTokenAmount(map, 'minOut'),
         );
       } else {
@@ -643,10 +648,14 @@ class PegarouteExecution {
   final String? asset;
   final int? assetDecimals;
   final String? serializedTransaction;
+  final String? encoding;
   final PegarouteTokenAmount? minOut;
   final String? gasRate;
 
   void validate() {
+    if (encoding != null && (family != 'solana' || mode != 'serialized-tx')) {
+      _invalid('encoding outside Solana serialized execution');
+    }
     if (family == 'evm') {
       if (chain != null ||
           amount != null ||
@@ -750,7 +759,7 @@ class PegarouteExecution {
       if (serializedTransaction == null || serializedTransaction!.isEmpty) {
         _invalid('serialized transaction');
       }
-      if (!_validSerializedTransaction(family, serializedTransaction!)) {
+      if (!_validSerializedTransaction(family, serializedTransaction!, encoding)) {
         _invalid('serialized transaction encoding');
       }
       return;
@@ -793,6 +802,7 @@ class PegarouteExecution {
       if (family == 'solana' || family == 'sui')
         if (mode == 'serialized-tx') ...{
           'serializedTransaction': serializedTransaction,
+          if (family == 'solana') 'encoding': encoding,
           'minOut': minOut?.toJson(),
         } else ...{
           'to': to,
@@ -839,7 +849,13 @@ Set<String> _executionKeys(String family, String mode) {
     return const {'family', 'mode', 'to', 'amount', 'memo', 'asset', 'assetDecimals'};
   }
   if ((family == 'solana' || family == 'sui') && mode == 'serialized-tx') {
-    return const {'family', 'mode', 'serializedTransaction', 'minOut'};
+    return {
+      'family',
+      'mode',
+      'serializedTransaction',
+      'minOut',
+      if (family == 'solana') 'encoding'
+    };
   }
   if ((const {'solana', 'sui', 'xrp', 'tron', 'near', 'hypercore', 'cardano'}).contains(family) &&
       mode == 'deposit-transfer') {
@@ -2112,10 +2128,10 @@ bool _validCalldata(String? value) {
   return hex.length.isEven && RegExp(r'^[0-9a-fA-F]+$').hasMatch(hex);
 }
 
-bool _validSerializedTransaction(String family, String value) {
+bool _validSerializedTransaction(String family, String value, String? encoding) {
   if (value.trim() != value || value.isEmpty) return false;
   if (family == 'solana') {
-    return RegExp(r'^[1-9A-HJ-NP-Za-km-z]+$').hasMatch(value);
+    return isValidPegarouteSolanaTransaction(value, encoding);
   }
   return RegExp(r'^[A-Za-z0-9+/]+={0,2}$').hasMatch(value) && value.length % 4 == 0;
 }

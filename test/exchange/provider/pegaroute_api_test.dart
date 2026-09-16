@@ -172,7 +172,13 @@ List<Map<String, dynamic>> _executionVariants() => [
         'asset': 'THOR.RUNE',
         'assetDecimals': 8,
       },
-      {'family': 'solana', 'mode': 'serialized-tx', 'serializedTransaction': '3MN', 'minOut': null},
+      {
+        'family': 'solana',
+        'mode': 'serialized-tx',
+        'encoding': 'base58',
+        'serializedTransaction': '3MN',
+        'minOut': null
+      },
       {'family': 'sui', 'mode': 'serialized-tx', 'serializedTransaction': 'dHh4', 'minOut': null},
       ...['solana', 'sui', 'xrp', 'tron', 'near', 'hypercore', 'cardano'].map(
         (family) => <String, dynamic>{
@@ -315,6 +321,33 @@ void main() {
         ),
         returnsNormally,
       );
+    }
+  });
+
+  test('Solana serialized execution requires and preserves its encoding label', () {
+    final value = _executionVariants().firstWhere((value) => value['family'] == 'solana');
+    final execution = PegarouteExecution.fromJson(value);
+    expect(execution.toJson()['encoding'], 'base58');
+    expect(execution.toJson()['serializedTransaction'], value['serializedTransaction']);
+  });
+
+  test('Solana serialized execution rejects missing and invalid encoding labels', () {
+    final value = _executionVariants().firstWhere((value) => value['family'] == 'solana');
+    value.remove('encoding');
+    expect(() => PegarouteExecution.fromJson(value), throwsA(isA<PegarouteCodecException>()));
+    for (final label in [null, '', 'BASE64', 'base64 ', 'unknown', 1, true]) {
+      value['encoding'] = label;
+      expect(() => PegarouteExecution.fromJson(value), throwsA(isA<PegarouteCodecException>()));
+    }
+  });
+
+  test('encoding is forbidden on every non-Solana-serialized API shape', () {
+    for (final value in _executionVariants()) {
+      if (value['family'] == 'solana' && value['mode'] == 'serialized-tx') continue;
+      for (final label in [null, 'base64']) {
+        value['encoding'] = label;
+        expect(() => PegarouteExecution.fromJson(value), throwsA(isA<PegarouteCodecException>()));
+      }
     }
   });
 
