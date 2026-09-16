@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'pegaroute_solana_wire.dart';
 
 import 'package:cake_wallet/bitcoin/bitcoin.dart';
 import 'package:cake_wallet/monero/monero.dart';
@@ -115,7 +116,9 @@ Future<PendingTransaction> preparePegarouteDeposit(
   final amount = Money(BigInt.parse(execution.binding.sourceAmountBaseUnits), currency);
   if (source == 'SOL' && execution.mode == 'serialized-tx') {
     return wallet.createTransaction(SolanaSerializedTransactionCredentials(
-        transactionBase58: execution.payload['serializedTransaction'] as String,
+        transactionBase58: Base58Encoder.encode(decodePegarouteSolanaTransaction(
+            execution.payload['serializedTransaction'] as String,
+            execution.payload['encoding'] as String)),
         amount: amount,
         destinationAddress: execution.binding.destinationAddress));
   }

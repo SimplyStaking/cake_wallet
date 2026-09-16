@@ -52,6 +52,35 @@ TradeExecution _execution(
     );
 
 void main() {
+  test('restored Solana payload requires an exact encoding label and other shapes forbid it', () {
+    final payload = <String, dynamic>{
+      'serializedTransaction': '3MN',
+      'minOut': null,
+      'encoding': 'base58',
+    };
+    final value = _execution(family: 'solana', mode: 'serialized-tx', payload: payload).toJson();
+    final restored = TradeExecution.fromJsonString(jsonEncode(value));
+    expect(restored.payload, payload);
+    final invalidPayload = Map<String, dynamic>.from(payload)..remove('encoding');
+    value['payload'] = invalidPayload;
+    expect(() => TradeExecution.fromJson(value), throwsFormatException);
+    for (final label in [null, '', 'BASE64', 'base64 ', 'unknown', 1, true]) {
+      invalidPayload['encoding'] = label;
+      expect(() => TradeExecution.fromJson(value), throwsFormatException);
+    }
+    for (final label in [null, 'base64']) {
+      expect(
+          () => _execution(family: 'sui', mode: 'serialized-tx', payload: {
+                'serializedTransaction': 'dHh4',
+                'minOut': null,
+                'encoding': label,
+              }),
+          throwsFormatException);
+      expect(
+          () => _execution(payload: {..._evmPayload(), 'encoding': label}), throwsFormatException);
+    }
+  });
+
   test('round trips a valid immutable execution envelope', () {
     final execution = _execution(mode: 'native-transfer');
     final reloaded = TradeExecution.fromJsonString(execution.encode());
@@ -89,7 +118,7 @@ void main() {
       () => _execution(
         family: 'solana',
         mode: 'serialized-tx',
-        payload: {'serializedTransaction': '3MN', 'minOut': null},
+        payload: {'serializedTransaction': '3MN', 'encoding': 'base58', 'minOut': null},
       ),
       returnsNormally,
     );

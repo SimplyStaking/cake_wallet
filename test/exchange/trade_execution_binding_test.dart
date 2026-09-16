@@ -753,6 +753,7 @@ void main() {
       'family': 'solana',
       'mode': 'serialized-tx',
       'serializedTransaction': '3MN',
+      'encoding': 'base58',
       'minOut': null,
     };
     await expectLater(
