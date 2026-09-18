@@ -6,6 +6,7 @@ class ListItemRegularRow extends ListItem {
     required super.keyValue,
     required super.label,
     this.subtitle,
+    this.subtitleColor,
     this.trailingText,
     this.iconPath,
     this.badgeIconPath,
@@ -25,6 +26,7 @@ class ListItemRegularRow extends ListItem {
   });
 
   final String? subtitle;
+  final Color? subtitleColor;
   final String? trailingText;
   final String? iconPath;
   final String? trailingIconPath;

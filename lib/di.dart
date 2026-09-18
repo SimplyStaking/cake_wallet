@@ -258,6 +258,11 @@ import 'package:cake_wallet/view_model/seed_settings_view_model.dart';
 import 'package:cake_wallet/view_model/send/fees_view_model.dart';
 import 'package:cake_wallet/view_model/send/send_template_view_model.dart';
 import 'package:cake_wallet/view_model/send/send_view_model.dart';
+import 'package:cake_wallet/exchange/trade_execution_dispatcher.dart';
+import 'package:cake_wallet/exchange/provider/pegaroute/pegaroute_trusted_execution.dart';
+import 'package:cake_wallet/exchange/provider/pegaroute/pegaroute_execution_lifecycle_store.dart';
+import 'package:cake_wallet/exchange/provider/pegaroute/pegaroute_native_eth.dart';
+import 'package:cake_wallet/exchange/provider/pegaroute_exchange_provider.dart';
 import 'package:cake_wallet/view_model/set_up_2fa_viewmodel.dart';
 import 'package:cake_wallet/view_model/settings/connection_sync_view_model.dart';
 import 'package:cake_wallet/view_model/settings/display_settings_view_model.dart';
@@ -387,6 +392,20 @@ Future<void> setup({
       // nodeListStore: getIt.get<NodeListStore>(),
       themeStore: getIt.get<ThemeStore>()));
   getIt.registerSingleton<TradesStore>(TradesStore(appStore: getIt.get<AppStore>()));
+  final pegarouteWalletContext = PegarouteActiveWalletContext(
+    () => getIt.get<AppStore>().wallet,
+    supportsWallet: pegarouteTrustedWallet,
+  );
+  getIt.registerSingleton<TradeExecutionDispatcher>(RegistryTradeExecutionDispatcher([
+    PegarouteTrustedExecutionHandler(
+      walletContext: pegarouteWalletContext,
+      adapter: PegarouteTrustedWalletAdapter(
+        priority: (wallet) => settingsStore.getPriority(wallet.type, chainId: wallet.chainId),
+      ),
+      lifecycle: PegarouteExecutionLifecycleStore(),
+      onSourceCommitted: PegarouteExchangeProvider().notifyCommitted,
+    ),
+  ]), dispose: (_) => pegarouteWalletContext.dispose());
   getIt.registerSingleton<OrdersStore>(
       OrdersStore(ordersSource: _ordersSource, settingsStore: getIt.get<SettingsStore>()));
   getIt.registerSingleton<BridgeTransfersStore>(BridgeTransfersStore());
@@ -904,7 +923,8 @@ Future<void> setup({
             : null,
         coinTypeToSpendFrom: coinTypeToSpendFrom ?? UnspentCoinType.nonMweb,
         getIt.get<UnspentCoinsListViewModel>(param1: coinTypeToSpendFrom),
-        getIt.get<FeesViewModel>()),
+        getIt.get<FeesViewModel>(),
+        tradeExecutionDispatcher: getIt.get<TradeExecutionDispatcher>()),
   );
 
   getIt.registerFactoryParam<SendPage, PaymentRequest?, UnspentCoinType?>(

@@ -12,6 +12,9 @@ import 'package:cake_wallet/exchange/provider/exolix_exchange_provider.dart';
 import 'package:cake_wallet/exchange/provider/jupiter_exchange_provider.dart';
 import 'package:cake_wallet/exchange/provider/near_Intents_exchange_provider.dart';
 import 'package:cake_wallet/exchange/provider/pegaroute_exchange_provider.dart';
+import 'package:cake_wallet/exchange/provider/pegaroute/pegaroute_execution_binding.dart';
+import 'package:cake_wallet/exchange/provider/pegaroute/pegaroute_execution_handler_support.dart';
+import 'package:cake_wallet/exchange/provider/pegaroute/pegaroute_trusted_execution.dart';
 import 'package:cake_wallet/exchange/provider/swapsxyz_exchange_provider.dart';
 import 'package:cake_wallet/exchange/provider/swaptrade_exchange_provider.dart';
 import 'package:cake_wallet/exchange/provider/sideshift_exchange_provider.dart';
@@ -21,6 +24,7 @@ import 'package:cake_wallet/exchange/provider/thorchain_exchange.provider.dart';
 import 'package:cake_wallet/exchange/provider/trocador_exchange_provider.dart';
 import 'package:cake_wallet/exchange/provider/xoswap_exchange_provider.dart';
 import 'package:cake_wallet/exchange/trade.dart';
+import 'package:cake_wallet/exchange/trade_external_funding_policy.dart';
 import 'package:cake_wallet/generated/i18n.dart';
 import 'package:cake_wallet/reactions/wallet_connect.dart';
 import 'package:cake_wallet/src/screens/exchange_trade/exchange_trade_item.dart';
@@ -96,8 +100,8 @@ abstract class ExchangeTradeViewModelBase with Store {
       case ExchangeProviderDescription.nearIntents:
         _provider = NearIntentsExchangeProvider();
         break;
-      case ExchangeProviderDescription.pegaRoute:
-        _provider = PegaRouteExchangeProvider();
+      case ExchangeProviderDescription.pegaroute:
+        _provider = PegarouteExchangeProvider();
         break;
     }
 
@@ -134,7 +138,13 @@ abstract class ExchangeTradeViewModelBase with Store {
   bool get shouldHideExternalSendButton {
     if (_provider == null) return false;
 
+    if (!TradeExternalFundingPolicy.canUse(trade)) return true;
+
     if (!isSwapsXYZCanSendFromExternal) return true;
+
+    // Pegaroute deposits require the bound in-wallet funding path.
+    // Never expose a QR that can lead users into an unsupported execution path.
+    if (_provider is PegarouteExchangeProvider) return true;
 
     return _providersThatHideExternalSend.any(
       (providerType) => _provider.runtimeType == providerType,
@@ -250,10 +260,13 @@ abstract class ExchangeTradeViewModelBase with Store {
   @action
   Future<void> _updateTrade() async {
     try {
-      final updatedTrade = await _provider!.findTradeById(id: trade.id);
-
-      trade.mergeFindTradeByIdResult(updatedTrade);
-      await trade.save();
+      if (_provider is PegarouteExchangeProvider) {
+        await (_provider as PegarouteExchangeProvider).refreshTradeStatus(trade: trade);
+      } else {
+        final updatedTrade = await _provider!.findTradeById(id: trade.id);
+        trade.mergeFindTradeByIdResult(updatedTrade);
+        await trade.save();
+      }
       tradesStore.setTrade(trade);
 
       _updateItems();
@@ -268,6 +281,7 @@ abstract class ExchangeTradeViewModelBase with Store {
 
     final tagFrom = tradeFrom?.tag != null ? "${tradeFrom!.tag} " : "";
     final tagTo = tradeTo?.tag != null ? "${tradeTo!.tag} " : "";
+    final canUseExternalFunding = TradeExternalFundingPolicy.canUse(trade);
 
     items.clear();
 
@@ -300,30 +314,34 @@ abstract class ExchangeTradeViewModelBase with Store {
           isReceiveDetail: true,
           isExternalSendDetail: false,
         ),
-        ExchangeTradeItem(
-          title: "${S.current.send_to_this_address("$tradeFrom", tagFrom)}:",
-          data: trade.inputAddress ?? '',
-          isCopied: false,
-          isReceiveDetail: false,
-          isExternalSendDetail: true,
-        ),
       ]);
 
-      items.add(
-        isSwapsXYZCanSendFromExternal
-            ? ExchangeTradeItem(
-                title: S.current.send_to_this_address('${tradeFrom}', tagFrom) + ':',
-                data: trade.inputAddress ?? '',
-                isCopied: false,
-                isReceiveDetail: false,
-                isExternalSendDetail: true)
-            : ExchangeTradeItem(
-                title: 'Smart contract call (no address required)',
-                data: 'Wallet will execute a contract call. On-chain transaction',
-                isCopied: false,
-                isReceiveDetail: false,
-                isExternalSendDetail: true),
-      );
+      if (canUseExternalFunding) {
+        items.add(
+          ExchangeTradeItem(
+            title: "${S.current.send_to_this_address("$tradeFrom", tagFrom)}:",
+            data: trade.inputAddress ?? '',
+            isCopied: false,
+            isReceiveDetail: false,
+            isExternalSendDetail: true,
+          ),
+        );
+        items.add(
+          isSwapsXYZCanSendFromExternal
+              ? ExchangeTradeItem(
+                  title: S.current.send_to_this_address('${tradeFrom}', tagFrom) + ':',
+                  data: trade.inputAddress ?? '',
+                  isCopied: false,
+                  isReceiveDetail: false,
+                  isExternalSendDetail: true)
+              : ExchangeTradeItem(
+                  title: 'Smart contract call (no address required)',
+                  data: 'Wallet will execute a contract call. On-chain transaction',
+                  isCopied: false,
+                  isReceiveDetail: false,
+                  isExternalSendDetail: true),
+        );
+      }
     }
 
     final isExtraIdExist = trade.extraId != null && trade.extraId!.isNotEmpty;
@@ -359,6 +377,22 @@ abstract class ExchangeTradeViewModelBase with Store {
 
   String? checkIfCanSend(Trade? trade, WalletBase wallet) {
     if (trade == null) return 'Trade is null';
+    if (trade.provider == ExchangeProviderDescription.pegaroute) {
+      try {
+        final validated = const PegarouteExecutionBindingValidator()
+            .validatePersisted(trade: trade, wallet: wallet);
+        pegarouteRequireUnexpiredFunding(validated, DateTime.now().toUtc());
+        if (!pegarouteTrustedWallet(wallet) ||
+            !pegarouteTrustedExecution(validated.execution) ||
+            trade.stateRaw != 'created' ||
+            trade.txId?.isNotEmpty == true ||
+            trade.executionLifecycleJson != null) {
+          return 'This Pegaroute order is not available for funding';
+        }
+      } catch (_) {
+        return 'This Pegaroute order is not bound to the current wallet';
+      }
+    }
 
     final tradeFrom = trade.from;
     if (tradeFrom == null) return 'Trade from currency is null';
@@ -420,6 +454,8 @@ abstract class ExchangeTradeViewModelBase with Store {
   }
 
   PaymentURI? get paymentUri {
+    if (!TradeExternalFundingPolicy.canUse(trade)) return null;
+
     final inputAddress = trade.inputAddress;
     final amount = trade.amount;
     final fromCurrency = trade.from;

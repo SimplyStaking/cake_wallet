@@ -7,6 +7,7 @@ import 'package:cake_wallet/src/screens/receive/widgets/qr_image.dart';
 import 'package:cake_wallet/utils/address_formatter.dart';
 import 'package:cake_wallet/utils/clipboard_util.dart';
 import 'package:cake_wallet/view_model/exchange/exchange_trade_view_model.dart';
+import 'package:cake_wallet/exchange/trade_external_funding_policy.dart';
 import 'package:cw_core/crypto_currency.dart';
 import 'package:cw_core/payment_uris.dart';
 import 'package:flutter/material.dart';
@@ -48,7 +49,10 @@ class _SwapSendExternalModalState extends State<SwapSendExternalModal> {
 
   @override
   Widget build(BuildContext context) {
-    if (widget.address.isEmpty) return SizedBox.shrink();
+    if (widget.address.isEmpty ||
+        !TradeExternalFundingPolicy.canUse(widget.exchangeTradeViewModel.trade)) {
+      return const SizedBox.shrink();
+    }
     final resolvedSize = MediaQuery.of(context).size.width * (largeQrMode ? 0.8 : 0.54);
 
     return PopScope(
@@ -170,8 +174,7 @@ class _SwapSendExternalModalState extends State<SwapSendExternalModal> {
                         )),
                     if (widget.exchangeTradeViewModel.trade.extraId != null)
                       CopyWrapper(
-                        data: ClipboardData(
-                            text: widget.exchangeTradeViewModel.trade.extraId!),
+                        data: ClipboardData(text: widget.exchangeTradeViewModel.trade.extraId!),
                         builder: (context, copied) => Container(
                           width: double.infinity,
                           decoration: BoxDecoration(

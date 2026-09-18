@@ -9,6 +9,7 @@ import 'package:cake_wallet/exchange/provider/letsexchange_exchange_provider.dar
 import 'package:cake_wallet/exchange/provider/jupiter_exchange_provider.dart';
 import 'package:cake_wallet/exchange/provider/near_Intents_exchange_provider.dart';
 import 'package:cake_wallet/exchange/provider/pegaroute_exchange_provider.dart';
+import 'package:cake_wallet/exchange/provider/pegaroute/pegaroute_provider_label.dart';
 import 'package:cake_wallet/exchange/provider/swapsxyz_exchange_provider.dart';
 import 'package:cake_wallet/exchange/provider/swaptrade_exchange_provider.dart';
 import 'package:cake_wallet/exchange/provider/sideshift_exchange_provider.dart';
@@ -85,8 +86,8 @@ abstract class TradeDetailsViewModelBase with Store {
       case ExchangeProviderDescription.nearIntents:
         _provider = NearIntentsExchangeProvider();
         break;
-      case ExchangeProviderDescription.pegaRoute:
-        _provider = PegaRouteExchangeProvider();
+      case ExchangeProviderDescription.pegaroute:
+        _provider = PegarouteExchangeProvider();
         break;
     }
 
@@ -147,10 +148,13 @@ abstract class TradeDetailsViewModelBase with Store {
   @action
   Future<void> _updateTrade() async {
     try {
-      final updatedTrade = await _provider!.findTradeById(id: trade.id);
-
-      trade.mergeFindTradeByIdResult(updatedTrade);
-      await trade.save();
+      if (_provider is PegarouteExchangeProvider) {
+        await (_provider as PegarouteExchangeProvider).refreshTradeStatus(trade: trade);
+      } else {
+        final updatedTrade = await _provider!.findTradeById(id: trade.id);
+        trade.mergeFindTradeByIdResult(updatedTrade);
+        await trade.save();
+      }
 
       _updateItems();
     } catch (e) {
@@ -197,8 +201,12 @@ abstract class TradeDetailsViewModelBase with Store {
           value: destinationMemo));
     }
 
-    items.add(StandartListItem(
-        title: S.current.trade_details_provider, value: trade.provider.toString()));
+    items.add(
+      StandartListItem(
+        title: S.current.trade_details_provider,
+        value: tradeProviderDisplayName(trade),
+      ),
+    );
 
     final trackUrl = TradeDetailsViewModelBase.getTrackUrl(trade.provider, trade);
     if (trackUrl != null) {

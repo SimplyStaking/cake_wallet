@@ -1,0 +1,257 @@
+# Pegaroute wallet execution
+
+Contract baseline: Pegasus source **`177d6891`**
+(`177d6891aada4659ca9d24cf3de8cb336ce31442`, based on main `6156b8b8`).
+This hardcoded reference identifies the reviewed integration contract, not a
+running server revision. Update it when adopting upstream contract changes.
+
+This baseline includes the provider-local OpenOcean status correction: canonical
+contract/mint identities and the requested recipient survive status monitoring;
+conflicting observations reject. Cake continues to reject ticker-only token
+identities. Already-completed historical records are not repaired by that fix.
+
+Pegaroute uses Cake's existing fee calculation, software-wallet signing,
+confirmation screen, dispatcher and SQLite lifecycle. Supported execution shapes:
+
+| Source | Funding operation | Providers |
+| --- | --- | --- |
+| Native asset on Ethereum, BSC, Base, Arbitrum or Polygon | Native transfer | Instaswap; compatible authenticated OpenOcean instructions |
+| Native asset on those networks | Single contract call | THORChain, Maya, OpenOcean |
+| Mapped ERC20 on those networks | One standard token transfer, zero native value | Instaswap |
+| Mapped ERC20 on those networks | Single contract call, zero native value; separately confirmed approval/reset when required | THORChain, Maya, OpenOcean |
+| BTC, BCH, LTC, DOGE | Exact deposit with optional UTF-8 OP_RETURN memo; ordinary non-MWEB path | Compatible Instaswap, THORChain, Maya instructions |
+| XMR | One memo-free deposit with one transaction ID | Compatible deposit instructions |
+| Native SOL and mapped SPL | Memo-free deposit; SPL destination is an owner address | Compatible deposit instructions; SPL via Instaswap |
+| Native TRX | Memo-free deposit | Compatible deposit instructions |
+| ZEC | Memo-free deposit supported by Cake's existing builder, with extra balance for fees | Compatible deposit instructions |
+| Native SOL and mapped SPL | Supplied legacy/v0 transaction, wallet as fee payer | OpenOcean |
+
+These are wallet capabilities, **not a claim that every provider serves every
+network or pair**. Pegasus supplies available routes. Destination assets are not
+hardcoded: any mapped destination can be used when the selected provider returns
+compatible instructions. OpenOcean routes are same-chain.
+
+Creation obtains a fresh address-bound quote, selects the highest-output enabled
+executable route, consumes the one-shot preflight and returns a bound Trade for
+Cake's ordinary save. The authenticated execution snapshot, canonical assets,
+exact source amount, sender, payout/refund intent, provider and wallet/network
+are persisted together. Built-in token aliases are resolved to canonical typed
+contract/mint identities before order creation. Supplied funding expiries are enforced; absent expiry
+is permitted. EVM preparation inspects actual signed type-2 or EIP-155 legacy
+bytes to bind signer, chain, target, native value and exact calldata, and derives
+the real network hash. Prepared EVM bytes cannot change before commit.
+
+When Pegaroute supplies an EVM gas limit, a typed wallet credential carries it
+through Cake's existing call builder. The signed limit is the larger of that
+limit and the wallet estimate. The confirmation fee and native-balance check
+use that same limit and Cake's fee pricing; unavailable pricing stops preparation.
+Signed-byte checks also enforce the supplied gas floor.
+
+Deposits use fresh immutable bound outputs through Cake's wallet credentials.
+UTXO memos are explicitly UTF-8-to-hex encoded for Cake's OP_RETURN builder;
+XMR/SOL/TRON/ZEC required memos remain excluded. Supplied Solana transactions
+use a small wallet `createTransaction` credential path: check mainnet and fee
+payer, preserve the legacy/v0 message, sign inside Cake, verify signatures and
+broadcast fixed bytes through the captured wallet connection. No Jupiter
+execution endpoint or independent instruction-effect decoding is involved.
+
+## Trusted-provider model
+
+**Cake trusts authenticated Pegaroute instructions for contract effects.**
+Independent decoding of output asset, recipient, minimum return, nested calls,
+fees, refunds and authority effects is explicitly deferred, with no work scheduled
+for this increment. Incorrect or compromised upstream instructions could have
+unintended effects even when their accompanying metadata matches the request.
+The byte checks establish which transaction Cake signs, not what that contract
+will ultimately do. Existing strict verifier seams are retained separately.
+
+## Provider configuration
+
+In the new swap UI, open **Swap providers → Pegaroute → Manage providers**.
+Pegaroute remains one exchange entry. The Instaswap, THORChain, Maya and
+OpenOcean toggles are saved locally; automatic selection respects them.
+
+All four settings retain the saved provider toggles and centralized/decentralized
+labels. Exchange comparison and fresh creation use the same preferences and
+execution-shape eligibility. Native and token inputs can use enabled DEX routes
+when Instaswap is disabled. Token calls with approval metadata are saved as bound
+orders before allowance checks. Preparation checks the exact token/spender and
+either prepares an approval or proceeds directly to the swap when allowance is
+sufficient. Unknown allowance stops preparation without broadcasting. Quotes
+cannot guarantee allowance readiness when the spender first arrives at creation.
+The fresh creation quote may change the estimate; its chosen provider and output
+are carried through the Trade and normal confirmation UI.
+
+`subprovider` is optional informational metadata from any top-level provider,
+omitted when not specified by that provider. Creation saves the returned label;
+confirmation, trade details and history show `Pegaroute via <PROVIDER>` with
+` (via <SUB-PROVIDER>)` when supplied. Missing or enriched subprovider/OpenOcean
+DEX metadata does not block funding, status polling or receive estimation.
+Omitted route `private` means public; optional `provider.details` and additive
+informational response fields are accepted. Required execution fields remain
+validated. Post-creation errors retain the provider order ID and emit a bounded
+local validation reason without dumping provider responses.
+
+OpenOcean can report zero realized input/output for a reverted EVM swap. Cake
+accepts that failed status only when its source hash matches the durably
+broadcast transaction, retaining the original funding amount and execution.
+It records failure without treating the revert as a refund or enabling another
+payment. Confirmation closes its own route; it cancels its completion reaction,
+dismissal timer and local status timer when disposed.
+
+**Decentralized-only** excludes Instaswap without erasing its saved preference.
+Changing settings refreshes limits/rates and discards results from older settings.
+The read-only provider API retains broader native/token quote discovery and uses
+the same preferences when supplied, including for receive-amount estimates.
+
+## Status reconciliation contract
+
+Cake accepts exactly equivalent external decimal quantities (for example `1.0`
+and `1`) while retaining the original funding amount, base units and raw execution
+snapshot. Real amount differences, including provider precision truncation, remain
+rejected. Contract/mint-qualified assets still require canonical status IDs;
+bare provider tickers are never substituted for saved identity.
+
+The existing trade monitor resumes funded nonterminal Pegaroute trades even after
+24 hours. Eligibility requires the saved broadcast lifecycle to match the bound
+execution and network hash. Automatic-status, exchange API, Tor-only, active-wallet,
+terminal-state and saved last-update preferences still apply. Reconciliation does
+not prepare, create or fund an order. Post-send EVM history captures source symbol,
+decimals and contract on the captured network; network fees retain native currency.
+
+The paired isolated Pegasus implementation preserves canonical order intent during
+status merges. Authenticated `GET /swap/:id` can recover a completed legacy
+OpenOcean bare-symbol projection only from fresh catalog contract/mint evidence
+matching the retained hash, chain, addresses, amounts and terminal status. This
+does not repair stored rows or imply that those changes are deployed. Missing or
+conflicting evidence remains unresolved. Requested versus provider-realized input
+amounts with genuinely different precision need a separate contract decision.
+
+The development Etherscan configuration can still leave the local wallet-history
+row pending. Source receipt success must not establish cross-chain swap completion.
+The existing EVM history format has no durable receipt-failure field; adding a
+complete RPC-only confirmation/failure reconciliation path is deferred for that
+bounded history-model decision. No credentials are required for these synthetic
+regressions, and they do not repair any live trade or wallet profile.
+
+## Local execution bridge
+
+The existing Python bridge remains quote-only by default. To opt in to creation,
+status and source-hash notification, run manually with the existing server-side
+credential file:
+
+```sh
+python3 scripts/pegaroute_quote_proxy.py \
+  --upstream http://127.0.0.1:4000 --port 4003 \
+  --key-file /path/to/existing/server-side-key-file --allow-execution
+```
+
+Use an available port; ports 4001 and 4002 were Docker-owned at the last check.
+Cake and the bridge must agree on `PEGAROUTE_API_BASE_URL=http://127.0.0.1:4003`.
+Provider credentials never enter the app. The opt-in bridge binds only loopback,
+uses a fixed loopback upstream, rejects redirects, and allows only:
+
+- `GET /quote`
+- `POST /swap`
+- `GET /swap/:id`
+- `POST /swap/:id/txhash`
+
+With the configured local development checkout, build using the existing runner:
+
+```sh
+PEGAROUTE_API_BASE_URL=http://127.0.0.1:4003 \
+  bash scripts/macos/run_pegaroute_dev.sh --build-only
+```
+
+The uncommitted runner uses a disposable snapshot and the existing native stubs.
+Each launch gets a fresh profile and development bundle ID to match the in-memory
+credential store: set a PIN and create or restore a wallet for that process session. ZEC
+requires a build with Cake's Zcash backend enabled; the current local generated
+facade is disabled and ZEC verification uses a mock. Funded swaps
+require separate live validation.
+
+## Broadcast and notification
+
+### ERC20 approval stages
+
+`PegarouteApprovalFlow` ports Swaps.xyz's allowance/reset/approve ordering using
+Cake's existing EVM methods. Ethereum USDT with a nonzero insufficient allowance
+first requires a reset to zero. Each reset, approval and final swap has its own
+normal confirmation and fee display; transaction preparation never broadcasts.
+Signed approval bytes must match the bound chain, signer, token, spender and exact
+units. This also detects a wrong token selected by Cake's symbol-based builder.
+
+The additive SQLite `PegarouteApproval` table is created on first approval use for
+both new and existing installations. Its trade/step key records the actual hash
+before submission. Successful transaction receipts advance the stage; allowance
+is checked again before constructing the swap with a fresh nonce. Receipt polling
+is bounded to roughly 30 seconds. Reopening the same trade reconciles a pending
+hash and retains completed stages. Failed/aborted stages stop that order, and
+ambiguous submissions are never automatically resubmitted. Replacement/cancel
+transactions and automatic retry of failed approvals are outside this increment.
+
+Approval hashes stay out of `Trade.txId`, the funding lifecycle and Pegaroute's
+source-hash endpoint. Approval starts and final funding check one another inside
+SQLite transactions, preventing separately prepared screens from racing stages.
+
+The lifecycle persists a funding-started identity before commit and prevents a
+second funding commit, including from separately prepared instances. ZEC's local
+trade-keyed attempt marker is distinct from the network transaction ID: only the
+real ID returned during commit is saved in `Trade.txId` and notified afterward.
+ZEC refresh errors after a successful broadcast do not turn into another payment.
+Solana IDs are derived from the first signature and compared case-sensitively;
+other deposits use Cake's actual transaction IDs. Notification
+validates both Pegasus's stable transaction ID and the actual source hash. A
+legacy `submitted` acknowledgement is **not** treated as persisted acceptance;
+an authenticated status poll must return the same source hash. Callback failures
+preserve successful local broadcast and failed/pending callback state. No worker
+or automatic funding retry is added.
+
+The reviewed Pegasus `177d6891` source has the basic quote/create/status/txhash endpoints
+needed by this flow. The isolated upstream commits `7c8a0001` (immutable hash
+registration) and `b295a81d` (creation-attempt recovery) are not deployed and are
+not prerequisites for this increment. The stable legacy hash endpoint can
+acknowledge without proving persistence, hence status verification. Recovery of
+a creation POST whose response was lost remains deferred; Cake blocks provider
+fallback after that ambiguous POST.
+
+## Retained and deferred work
+
+Existing token catalogs, receive-amount estimator, binding envelopes, migrations,
+BTC/XMR/THOR/Maya handler seams, and lifecycle/store tests are retained. Funding
+rejects token calls with extra native value, unsupported
+memos, private routes, hardware/UR, send-all and external funding.
+THOR/Maya contract memo metadata and calldata are trusted and bound together.
+Fixed-rate execution, independent contract-effect validation, creation recovery,
+callback outbox/retry UI are deferred.
+
+The approval/reset blocker is now implemented through the existing Cake flow.
+Provider-specific permit or other multi-transaction instructions beyond standard
+ERC20 approval and the existing USDT reset case remain unsupported.
+Supplied Solana transactions currently require Base58 encoding; the broader
+Pegasus contract also permits Base64/hex. Encoding conversion remains a follow-up.
+
+Validation is offline: mocked HTTP, in-memory SQLite and synthetic test keys.
+No real order creation, real-wallet signing, funding, broadcasting or native
+backend build was performed for this increment.
+
+Expanded verification with Flutter 3.41.9: **384 tests passed** across `test/exchange`,
+`test/view_model/send_view_model_commit_test.dart` and
+`test/new-ui/widgets/swap_page/pegaroute_providers_settings_test.dart`.
+Coverage includes synthetic native transfers/calls on all five EVM networks,
+ETH → USDC contract instructions, ERC20 deposits with 6/18 decimals, SQLite
+restoration/callbacks, altered signed instructions, wallet/network switches,
+supplied expiry, approvals across all five EVM networks, USDT reset/approval/swap
+restoration, pending/failed receipts, lost broadcast response, persistence failure,
+approval/funding races, signed-approval mismatches, wallet switches and separate
+confirmation state transitions, sufficient-allowance token calls,
+all eight deposit wallet types, SPL mint/decimal persistence, ZEC post-ID/refresh
+failures, truthful callback/status identities, supplied Solana legacy/v0 messages,
+preference changes, route ranking and duplicate-commit prevention. Synthetic provider/network combinations exercise
+plumbing without claiming live market availability. The local bridge is unchanged;
+its earlier six mocked tests passed. No app rebuild was performed in this increment.
+Targeted source/test analysis passed with no errors or warnings; existing
+informational style lints remain. Protected-file checksums and `git diff --check` passed.
+
+Flutter reports existing missing `assets/new-ui/` directories while preparing
+the test bundle; the test suite completes successfully without asset changes.

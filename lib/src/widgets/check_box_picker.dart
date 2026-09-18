@@ -107,12 +107,14 @@ class CheckBoxPickerState extends State<CheckBoxPicker> {
     final item = items[index];
 
     return GestureDetector(
-      onTap: () {
-        bool newValue = !item.value;
-        item.value = newValue;
-        widget.onChanged(index, newValue);
-        setState(() {});
-      },
+      onTap: item.isDisabled
+          ? null
+          : () {
+              bool newValue = !item.value;
+              item.value = newValue;
+              widget.onChanged(index, newValue);
+              setState(() {});
+            },
       child: Container(
         height: 55,
         color: Theme.of(context).colorScheme.surfaceContainer,
@@ -124,15 +126,17 @@ class CheckBoxPickerState extends State<CheckBoxPicker> {
               gradientBackground: true,
               borderColor: Theme.of(context).colorScheme.outlineVariant,
               iconColor: Theme.of(context).colorScheme.onPrimary,
-              onChanged: (bool? value) {
-                if (value == null) {
-                  return;
-                }
+              onChanged: item.isDisabled
+                  ? null
+                  : (bool? value) {
+                      if (value == null) {
+                        return;
+                      }
 
-                item.value = value;
-                widget.onChanged(index, value);
-                setState(() {});
-              },
+                      item.value = value;
+                      widget.onChanged(index, value);
+                      setState(() {});
+                    },
             ),
             SizedBox(width: 16),
             widget.displayItem?.call(item) ??

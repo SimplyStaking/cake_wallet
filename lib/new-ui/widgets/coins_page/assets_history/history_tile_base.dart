@@ -6,6 +6,7 @@ class HistoryTileBase extends StatelessWidget {
     super.key,
     this.title,
     this.titleWidget,
+    this.subtitle,
     required this.date,
     this.amount,
     required this.leadingIcon,
@@ -25,6 +26,7 @@ class HistoryTileBase extends StatelessWidget {
 
   final String? title;
   final Widget? titleWidget;
+  final String? subtitle;
   final String date;
   final String? amount;
   final Widget? amountWidget;
@@ -94,59 +96,76 @@ class HistoryTileBase extends StatelessWidget {
               vertical: 12,
               horizontal: 12,
             ),
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.center,
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
               children: [
-                Padding(
-                  padding: const EdgeInsets.only(right: 10),
-                  child: SizedBox(
-                    height: 36,
-                    width: 36,
-                    child: leadingIcon,
-                  ),
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.center,
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Padding(
+                      padding: const EdgeInsets.only(right: 10),
+                      child: SizedBox(
+                        height: 36,
+                        width: 36,
+                        child: leadingIcon,
+                      ),
+                    ),
+                    Expanded(
+                      child: Padding(
+                        padding: EdgeInsets.only(right: 4),
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                if (title != null)
+                                  Text(title!,
+                                      style:
+                                          TextStyle(color: Theme.of(context).colorScheme.onSurface))
+                                else if (titleWidget != null)
+                                  titleWidget!,
+                                Text(date,
+                                    style: TextStyle(
+                                        color: Theme.of(context).colorScheme.onSurfaceVariant)),
+                              ],
+                            ),
+                            Column(
+                              crossAxisAlignment: CrossAxisAlignment.end,
+                              children: [
+                                if (amount != null)
+                                  Text(amount!,
+                                      style: TextStyle(
+                                          color: primaryTextColor ??
+                                              Theme.of(context).colorScheme.onSurface))
+                                else if (amountWidget != null)
+                                  amountWidget!,
+                                if (amountFiat != null)
+                                  Text(amountFiat!,
+                                      style: TextStyle(
+                                          color: Theme.of(context).colorScheme.onSurfaceVariant))
+                                else if (amountFiatWidget != null)
+                                  amountFiatWidget!
+                              ],
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
-                Expanded(
-                  child: Padding(
-                    padding: EdgeInsets.only(right: 4),
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            if (title != null)
-                              Text(title!,
-                                  style: TextStyle(color: Theme.of(context).colorScheme.onSurface))
-                            else if (titleWidget != null)
-                              titleWidget!,
-                            Text(date,
-                                style: TextStyle(
-                                    color: Theme.of(context).colorScheme.onSurfaceVariant)),
-                          ],
-                        ),
-                        Column(
-                          crossAxisAlignment: CrossAxisAlignment.end,
-                          children: [
-                            if (amount != null)
-                              Text(amount!,
-                                  style: TextStyle(
-                                      color: primaryTextColor ??
-                                          Theme.of(context).colorScheme.onSurface))
-                            else if (amountWidget != null)
-                              amountWidget!,
-                            if (amountFiat != null)
-                              Text(amountFiat!,
-                                  style: TextStyle(
-                                      color: Theme.of(context).colorScheme.onSurfaceVariant))
-                            else if (amountFiatWidget != null)
-                              amountFiatWidget!
-                          ],
-                        ),
-                      ],
+                if (subtitle != null)
+                  Padding(
+                    padding: const EdgeInsets.only(left: 46, top: 4),
+                    child: Text(
+                      subtitle!,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(color: Theme.of(context).colorScheme.onSurfaceVariant),
                     ),
                   ),
-                ),
               ],
             ),
           ),

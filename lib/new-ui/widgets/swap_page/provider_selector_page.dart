@@ -14,10 +14,14 @@ class ProviderSelectorPage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final decentralizedProviders =
-        exchangeViewModel.selectedProviders.where((item) => !item.description.isCentralized);
-    final centralizedProviders =
-        exchangeViewModel.selectedProviders.where((item) => item.description.isCentralized);
+    final providers = [
+      ...exchangeViewModel.selectedProviders,
+      ...exchangeViewModel.providerList.where((provider) =>
+          !provider.isAvailable && !exchangeViewModel.selectedProviders.contains(provider)),
+    ];
+    final decentralizedProviders = providers.where((item) => !item.description.isCentralized);
+    final centralizedProviders = providers.where((item) => item.description.isCentralized);
+    final unavailableColor = Theme.of(context).colorScheme.onSurfaceVariant.withOpacity(0.5);
 
     return Column(
       children: [
@@ -65,23 +69,43 @@ class ProviderSelectorPage extends StatelessWidget {
                         ],
                       S.of(context).decentralized: decentralizedProviders
                           .map((item) => ListItemRegularRow(
-                              iconPath: item.description.image,
-                              keyValue: item.title,
-                              label: item.title,
-                              onTap: () {
-                                exchangeViewModel.setForcedProvider(item);
-                                Navigator.of(context).pop();
-                              }))
+                                iconPath: item.description.image,
+                                iconColor: item.isAvailable ? null : unavailableColor,
+                                keyValue: item.title,
+                                label: item.title,
+                                subtitle: item.isAvailable
+                                    ? null
+                                    : S.of(context).buy_provider_unavailable,
+                                subtitleColor: item.isAvailable ? null : unavailableColor,
+                                foregroundColor: item.isAvailable ? null : unavailableColor,
+                                showArrow: item.isAvailable,
+                                onTap: item.isAvailable
+                                    ? () {
+                                        exchangeViewModel.setForcedProvider(item);
+                                        Navigator.of(context).pop();
+                                      }
+                                    : null,
+                              ))
                           .toList(),
                       S.of(context).centralized: centralizedProviders
                           .map((item) => ListItemRegularRow(
-                              iconPath: item.description.image,
-                              keyValue: item.title,
-                              label: item.title,
-                              onTap: () {
-                                exchangeViewModel.setForcedProvider(item);
-                                Navigator.of(context).pop();
-                              }))
+                                iconPath: item.description.image,
+                                iconColor: item.isAvailable ? null : unavailableColor,
+                                keyValue: item.title,
+                                label: item.title,
+                                subtitle: item.isAvailable
+                                    ? null
+                                    : S.of(context).buy_provider_unavailable,
+                                subtitleColor: item.isAvailable ? null : unavailableColor,
+                                foregroundColor: item.isAvailable ? null : unavailableColor,
+                                showArrow: item.isAvailable,
+                                onTap: item.isAvailable
+                                    ? () {
+                                        exchangeViewModel.setForcedProvider(item);
+                                        Navigator.of(context).pop();
+                                      }
+                                    : null,
+                              ))
                           .toList(),
                     },
                   ),

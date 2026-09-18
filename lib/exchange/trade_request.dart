@@ -5,6 +5,7 @@ class TradeRequest {
       {required this.fromCurrency,
       required this.toCurrency,
       required this.toAddress,
+      required this.senderAddress,
       required this.refundAddress,
       required this.fromAmount,
       this.toAmount = '',
@@ -14,6 +15,7 @@ class TradeRequest {
   final CryptoCurrency fromCurrency;
   final CryptoCurrency toCurrency;
   final String toAddress;
+  final String senderAddress;
   final String refundAddress;
   final String fromAmount;
   final String toAmount;
