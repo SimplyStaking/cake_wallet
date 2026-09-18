@@ -1008,9 +1008,9 @@ abstract class ExchangeViewModelBase extends WalletChangeListenerViewModel with 
     final from = depositCurrency;
     final to = receiveCurrency;
     final fixedRate = isFixedRateMode;
-    final amount =
-        double.tryParse(isFixedRateMode ? _receiveAmount.toString() : _depositAmount.toString()) ??
-            initialAmountByAssets(isFixedRateMode ? receiveCurrency : depositCurrency);
+    final amountString = fixedRate ? _receiveAmount.toString() : _depositAmount.toString();
+    final parsedAmount = double.tryParse(amountString);
+    final amount = parsedAmount ?? initialAmountByAssets(fixedRate ? to : from);
 
     final validProvidersForAmount = _tradeAvailableProviders.where((provider) {
       if (!selectedProviders.contains(provider) || !providerList.contains(provider)) return false;
@@ -1039,14 +1039,18 @@ abstract class ExchangeViewModelBase extends WalletChangeListenerViewModel with 
       _providers.map(
         (element) async {
           try {
-            return await element
-                .fetchRate(
+            final rate = element is PegarouteExchangeProvider && !fixedRate
+                ? element.fetchSendRate(
+                    from: from,
+                    to: to,
+                    amount: parsedAmount == null ? amount.toString() : amountString)
+                : element.fetchRate(
                     from: from,
                     to: to,
                     amount: amount,
                     isFixedRateMode: fixedRate,
-                    isReceiveAmount: fixedRate)
-                .timeout(const Duration(seconds: 7));
+                    isReceiveAmount: fixedRate);
+            return await rate.timeout(const Duration(seconds: 7));
           } catch (_) {
             return 0.0;
           }

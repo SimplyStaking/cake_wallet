@@ -571,6 +571,68 @@ void main() {
         S.current.none_of_selected_providers_can_exchange);
   });
 
+  test('Pegaroute quotes retain exact Money amounts and skip precision-failed routes', () async {
+    final quote = jsonDecode(File('test/exchange/fixtures/pegaroute/quote.json').readAsStringSync())
+        as Map<String, dynamic>;
+    quote['expiresAt'] = '2099-01-01T00:00:00.000Z';
+    final route = Map<String, dynamic>.from((quote['routes'] as List).first as Map)
+      ..['provider'] = 'instaswap'
+      ..['minAmount'] = null
+      ..['expectedOutput'] = '7';
+    final amounts = <String>[];
+    var allFailed = false;
+    var posts = 0;
+    final provider = PegarouteExchangeProvider(
+        apiClient: PegarouteApiClient(
+      configuration: const PegarouteConfiguration(baseUrl: 'https://fixture.invalid'),
+      get: (uri, headers) async {
+        amounts.add(uri.queryParameters['amount']!);
+        return very_insecure_http_do_not_use.Response(
+            jsonEncode({
+              ...quote,
+              'routes': allFailed ? <Object>[] : [route],
+              'warnings': [
+                for (final failed in ['openocean', if (allFailed) 'instaswap'])
+                  {
+                    'provider': failed,
+                    'code': 'AMOUNT_PRECISION_EXCEEDED',
+                    'message': 'Source amount exceeds provider precision.',
+                    'userMessage': 'Too many decimal places.',
+                    'details': {'maxAmountDecimals': 8},
+                  },
+              ],
+            }),
+            200);
+      },
+      post: (_, __, ___) async {
+        posts++;
+        throw StateError('Precision failures must not create an order');
+      },
+    ));
+    final viewModel = await _viewModel([provider]);
+    for (final amount in ['0.1', '0.123456789123456789']) {
+      amounts.clear();
+      await viewModel.changeDepositAmount(amount: amount, isCanonical: true);
+      expect(amounts, [amount]);
+      expect(viewModel.bestRateProvider, same(provider));
+      expect(viewModel.noProviderForPair, isFalse);
+      expect(viewModel.receiveAmount, isNotEmpty);
+    }
+
+    allFailed = true;
+    amounts.clear();
+    await viewModel.calculateBestRate();
+    expect(amounts, ['0.123456789123456789']);
+    expect(viewModel.bestRateProvider, isNull);
+    expect(viewModel.noProviderForPair, isTrue);
+    expect(viewModel.receiveAmount, isEmpty);
+    await viewModel.createTrade();
+    expect((viewModel.tradeState as TradeIsCreatedFailure).error,
+        S.current.none_of_selected_providers_can_exchange);
+    expect(posts, 0);
+    expect(amounts, ['0.123456789123456789']);
+  });
+
   test('a missing 1-unit Pegaroute limit does not suppress actual-amount discovery', () async {
     final quote = jsonDecode(File('test/exchange/fixtures/pegaroute/quote.json').readAsStringSync())
         as Map<String, dynamic>;

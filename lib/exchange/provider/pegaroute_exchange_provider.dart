@@ -198,13 +198,32 @@ class PegarouteExchangeProvider extends ExchangeProvider {
         ))
             .rate;
       }
+      return fetchSendRate(from: from, to: to, amount: _decimalAmount(amount));
+    } catch (error) {
+      _logQuoteFailure(error);
+      return 0;
+    }
+  }
+
+  /// Keep the wallet's exact send amount through the quote request. Only the
+  /// returned presentation rate uses floating-point arithmetic.
+  Future<double> fetchSendRate({
+    required CryptoCurrency from,
+    required CryptoCurrency to,
+    required String amount,
+  }) async {
+    final numericAmount = double.tryParse(amount);
+    if (numericAmount == null || numericAmount <= 0 || !numericAmount.isFinite) return 0;
+    final assets = _quoteAssets(from, to);
+    if (assets == null) return 0;
+    try {
       final quote = await _apiClient.quote(
         PegarouteQuoteRequest(
           fromChain: assets.first.chain,
           fromToken: assets.first.token,
           toChain: assets.last.chain,
           toToken: assets.last.token,
-          amount: _decimalAmount(amount),
+          amount: amount,
         ),
       );
       var bestOutput = 0.0;
@@ -214,7 +233,7 @@ class PegarouteExchangeProvider extends ExchangeProvider {
         final output = double.tryParse(route.expectedOutput);
         if (output != null && output.isFinite && output > bestOutput) bestOutput = output;
       }
-      return bestOutput == 0 ? 0 : bestOutput / amount;
+      return bestOutput == 0 ? 0 : bestOutput / numericAmount;
     } catch (error) {
       _logQuoteFailure(error);
       return 0;
