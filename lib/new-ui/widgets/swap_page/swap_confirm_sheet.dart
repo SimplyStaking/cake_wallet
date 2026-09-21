@@ -1,16 +1,19 @@
 import 'dart:async';
 
+import 'package:cake_wallet/core/execution_state.dart';
 import 'package:cake_wallet/core/utilities.dart';
 import 'package:cake_wallet/entities/new_ui_entities/list_item/list_item_regular_row.dart';
 import 'package:cake_wallet/exchange/exchange_provider_description.dart';
 import 'package:cake_wallet/exchange/trade_execution_dispatcher.dart';
 import 'package:cake_wallet/exchange/provider/pegaroute/pegaroute_provider_label.dart';
+import 'package:cake_wallet/exchange/provider/pegaroute/pegaroute_preparation_retry.dart';
 import 'package:cake_wallet/generated/i18n.dart';
 import 'package:cake_wallet/new-ui/widgets/new_primary_button.dart';
 import 'package:cake_wallet/new-ui/widgets/receive_page/receive_top_bar.dart';
 import 'package:cake_wallet/new-ui/widgets/send_page/send_confirm_bottom_widget.dart';
 import 'package:cake_wallet/new-ui/widgets/send_page/send_confirm_sheet.dart';
 import 'package:cake_wallet/new-ui/widgets/swap_page/swap_modal_header.dart';
+import 'package:cake_wallet/new-ui/widgets/swap_page/pegaroute_preparation_retry_button.dart';
 import 'package:cake_wallet/new-ui/widgets/swap_page/swap_send_external_modal.dart';
 import 'package:cake_wallet/routes.dart';
 import 'package:cake_wallet/src/screens/connect_device/connect_device_page.dart';
@@ -291,8 +294,26 @@ class SwapTransactionDetails extends StatelessWidget {
                           text: S.of(context).continue_text,
                           color: Theme.of(context).colorScheme.primary,
                           textColor: Theme.of(context).colorScheme.onPrimary)
-                      : SendConfirmBottomWidget(
-                          sendViewModel: exchangeTradeViewModel.sendViewModel),
+                      : Observer(builder: (_) {
+                          final send = exchangeTradeViewModel.sendViewModel;
+                          final state = send.state;
+                          return Column(
+                            children: [
+                              SendConfirmBottomWidget(sendViewModel: send),
+                              if (exchangeTradeViewModel.trade.provider ==
+                                      ExchangeProviderDescription.pegaroute &&
+                                  state is FailureState)
+                                PegaroutePreparationRetryButton(
+                                  key: ObjectKey(state),
+                                  readAction: () => pegaroutePreparationRetryAction(
+                                    trade: exchangeTradeViewModel.trade,
+                                    wallet: send.wallet,
+                                  ),
+                                  onRetry: exchangeTradeViewModel.confirmSending,
+                                ),
+                            ],
+                          );
+                        }),
                 ),
               ],
             ),

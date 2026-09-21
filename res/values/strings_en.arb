@@ -266,6 +266,8 @@
   "contact_support": "Contact Support",
   "contacts": "Contacts",
   "continue_text": "Continue",
+  "pegaroute_retry_preparation": "Retry preparation",
+  "pegaroute_check_approval": "Check approval",
   "continue_to_swap": "Continue to Swap",
   "contract_address": "Contract Address",
   "contract_warning": "This contract address has been flagged as potentially fraudulent. Please proceed with caution.",

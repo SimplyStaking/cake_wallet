@@ -24,6 +24,7 @@ import 'package:cake_wallet/exchange/provider/pegaroute/pegaroute_execution_life
 import 'package:cake_wallet/exchange/provider/pegaroute/pegaroute_native_eth.dart';
 import 'package:cake_wallet/exchange/provider/pegaroute/pegaroute_provider_preferences.dart';
 import 'package:cake_wallet/exchange/provider/pegaroute/pegaroute_provider_label.dart';
+import 'package:cake_wallet/exchange/provider/pegaroute/pegaroute_preparation_retry.dart';
 import 'package:cake_wallet/exchange/provider/pegaroute/pegaroute_trusted_execution.dart';
 import 'package:cake_wallet/exchange/provider/pegaroute/pegaroute_currency_mapper.dart';
 import 'package:cake_wallet/exchange/provider/pegaroute_exchange_provider.dart';
@@ -213,6 +214,7 @@ class _Evm implements EVM {
   BigInt? allowance = BigInt.zero;
   bool? receipt = true;
   final approvalAmounts = <BigInt>[];
+  final receiptHashes = <String>[];
   TransactionWrongBalanceException? approvalBalanceError;
   void Function()? duringReceipt;
   @override
@@ -228,6 +230,7 @@ class _Evm implements EVM {
 
   @override
   Future<bool?> getTransactionReceipt(WalletBase wallet, String txHash) async {
+    receiptHashes.add(txHash);
     duringReceipt?.call();
     return receipt;
   }
@@ -1468,6 +1471,137 @@ void main() {
       expect(wallet.broadcasts, 1);
     });
   }
+  test('same-sheet retry prepares the original order after a no-submission failure', () async {
+    final trade = await create();
+    wallet.mutation = 'to';
+    expect(await dispatcher.prepare(wallet: wallet, trade: trade), isNull);
+    expect(await pegaroutePreparationRetryAction(trade: trade, wallet: wallet),
+        PegaroutePreparationRetryAction.retryPreparation);
+    expect(wallet.broadcasts, 0);
+    wallet.mutation = null;
+    final payment = (await dispatcher.prepare(wallet: wallet, trade: trade))!;
+    expect(wallet.broadcasts, 0); // Retry only prepares; the swiper still owns commit.
+    expect(calls, ['GET /quote', 'POST /swap']);
+    await payment.commit();
+    await expectLater(payment.commit(), throwsA(isA<PegarouteBindingException>()));
+    expect(wallet.broadcasts, 1);
+  });
+
+  for (final state in ['broadcasting', 'broadcastUnknown', 'broadcastAborted', 'broadcasted']) {
+    test('same-sheet retry never authorizes funding lifecycle $state', () async {
+      final trade = await create();
+      final execution = const PegarouteExecutionBindingValidator().validatePersisted(trade: trade);
+      final store = PegarouteExecutionLifecycleStore();
+      final hash = '0x${'ab' * 32}';
+      await store.beforeBroadcast(
+          execution: execution, executionHash: hash, tradeInternalId: trade.internalId);
+      if (state == 'broadcastUnknown') {
+        await store.onBroadcastUnknown(
+            execution: execution, executionHash: hash, tradeInternalId: trade.internalId);
+      } else if (state == 'broadcastAborted') {
+        await store.onBroadcastAborted(
+            execution: execution, executionHash: hash, tradeInternalId: trade.internalId);
+      } else if (state == 'broadcasted') {
+        await store.onBroadcasted(
+            execution: execution, executionHash: hash, tradeInternalId: trade.internalId);
+      }
+      // The screen still holds the stale, apparently unfunded Trade object.
+      expect(trade.executionLifecycleJson, isNull);
+      await expectLater(
+          pegaroutePreparationRetryAction(trade: trade, wallet: wallet), throwsA(anything));
+      expect(wallet.builds, 0);
+      expect(wallet.broadcasts, 0);
+    });
+  }
+
+  for (final mutation in ['amount', 'recipient', 'wallet', 'execution', 'failed', 'refund']) {
+    test('same-sheet retry rejects changed $mutation evidence', () async {
+      final trade = await create();
+      switch (mutation) {
+        case 'amount':
+          trade.amount = '2';
+        case 'recipient':
+          trade.payoutAddress = 'changed';
+        case 'wallet':
+          runInAction(() => wallet.selectedChain.value = 56);
+        case 'execution':
+          await database.update(Trade.tableName, {'executionJson': '${trade.executionJson} '});
+        case 'failed':
+          await database.update(Trade.tableName, {'stateRaw': 'failed'});
+        case 'refund':
+          await database.update(Trade.tableName, {'isRefund': 1});
+      }
+      await expectLater(
+          pegaroutePreparationRetryAction(trade: trade, wallet: wallet), throwsA(anything));
+      expect(wallet.builds, 0);
+    });
+  }
+
+  test('same-sheet retry rejects replacement of the original persisted trade', () async {
+    final trade = await create();
+    await database.update(Trade.tableName, {'tradeId': trade.internalId + 1});
+    expect(await pegaroutePreparationRetryAction(trade: trade, wallet: wallet), isNull);
+  });
+
+  test('same-sheet retry does not invent a deadline from quote TTL', () async {
+    final trade = await create(); // Provider deposit expiry is absent.
+    expect(
+        await pegaroutePreparationRetryAction(
+            trade: trade, wallet: wallet, clock: () => DateTime.utc(2100)),
+        PegaroutePreparationRetryAction.retryPreparation);
+    expect(wallet.builds, 0);
+  });
+
+  for (final providerExpiry in [false, true]) {
+    test('same-sheet retry respects the exact supplied expiry boundary ($providerExpiry)',
+        () async {
+      if (providerExpiry) {
+        swap['provider']['details']['instaswapSwapLite']['expiresAt'] = '2099-01-01T00:00:00Z';
+      } else {
+        contractRoute('thorchain'); // Route expiry is 2099-01-01.
+      }
+      final trade = await create();
+      expect(
+          await pegaroutePreparationRetryAction(
+              trade: trade, wallet: wallet, clock: () => DateTime.utc(2098, 12, 31, 23, 59, 59)),
+          PegaroutePreparationRetryAction.retryPreparation);
+      await expectLater(
+          pegaroutePreparationRetryAction(
+              trade: trade, wallet: wallet, clock: () => DateTime.utc(2099)),
+          throwsA(isA<PegarouteBindingException>()));
+      expect(wallet.builds, 0);
+    });
+  }
+
+  test('same-sheet confirmed approval continuation still rechecks current allowance', () async {
+    approvalRoute();
+    final trade = await create();
+    final approval = (await dispatcher.prepare(wallet: wallet, trade: trade))!;
+    await approval.commit();
+    expect(await pegaroutePreparationRetryAction(trade: trade, wallet: wallet),
+        PegaroutePreparationRetryAction.continuePreparation);
+    (evm as _Evm).allowance = BigInt.zero;
+    await expectLater(dispatcher.prepare(wallet: wallet, trade: trade),
+        throwsA(isA<TradeExecutionPrerequisiteException>()));
+    expect(wallet.broadcasts, 1);
+    expect((await Trade.getByTradeId(trade.id))!.txId, isNull);
+    expect(calls, ['GET /quote', 'POST /swap']);
+  });
+
+  test('same-sheet retry blocks failed, aborted or unrecognized approval evidence', () async {
+    approvalRoute();
+    final trade = await create();
+    final approval = (await dispatcher.prepare(wallet: wallet, trade: trade))!;
+    await approval.commit();
+    for (final state in ['failed', 'aborted', 'invalid']) {
+      await database.update('PegarouteApproval', {'state': state});
+      expect(await pegaroutePreparationRetryAction(trade: trade, wallet: wallet), isNull);
+    }
+    await database.update('PegarouteApproval', {'state': 'pending', 'transactionHash': ''});
+    expect(await pegaroutePreparationRetryAction(trade: trade, wallet: wallet), isNull);
+    expect(wallet.broadcasts, 1);
+  });
+
   test('approval gas shortage survives guarded preparation without signing or swap funding',
       () async {
     approvalRoute();
@@ -1485,6 +1619,8 @@ void main() {
         await PegarouteApprovalFlow.store.read(const PegarouteExecutionBindingValidator()
             .validatePersisted(trade: trade, wallet: wallet)),
         isEmpty);
+    expect(await pegaroutePreparationRetryAction(trade: trade, wallet: wallet),
+        PegaroutePreparationRetryAction.retryPreparation);
   });
 
   test('approval-required order is saved before preparing a separately confirmed approval',
@@ -1569,8 +1705,11 @@ void main() {
     await expectLater(first.commit(), throwsA(isA<TradeExecutionPrerequisiteException>()));
     await expectLater(duplicate.commit(), throwsA(isA<TradeExecutionPrerequisiteException>()));
     final restored = (await Trade.getByTradeId(trade.id))!;
+    expect(await pegaroutePreparationRetryAction(trade: restored, wallet: wallet),
+        PegaroutePreparationRetryAction.checkApproval);
     await expectLater(dispatcher.prepare(wallet: wallet, trade: restored),
         throwsA(isA<TradeExecutionPrerequisiteException>()));
+    expect(api.receiptHashes, everyElement(first.id));
     expect(wallet.broadcasts, 1);
     expect(restored.txId, isNull);
     expect(restored.executionLifecycleJson, isNull);
@@ -1593,6 +1732,8 @@ void main() {
     };
     await expectLater(approval.commit(), throwsA(isA<TradeExecutionPrerequisiteException>()));
     expect((await database.query('PegarouteApproval')).single['transactionHash'], approval.id);
+    expect(await pegaroutePreparationRetryAction(trade: trade, wallet: wallet),
+        PegaroutePreparationRetryAction.checkApproval);
     wallet.duringBroadcast = null;
     final payment =
         (await dispatcher.prepare(wallet: wallet, trade: (await Trade.getByTradeId(trade.id))!))!;

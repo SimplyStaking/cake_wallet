@@ -8,6 +8,7 @@ import 'package:cake_wallet/exchange/exchange_provider_description.dart';
 import 'package:cake_wallet/exchange/trade.dart';
 import 'package:cake_wallet/generated/i18n.dart';
 import 'package:cake_wallet/new-ui/widgets/swap_page/swap_confirm_sheet.dart';
+import 'package:cake_wallet/new-ui/widgets/swap_page/pegaroute_preparation_retry_button.dart';
 import 'package:cake_wallet/themes/core/theme_store.dart';
 import 'package:cake_wallet/view_model/exchange/exchange_trade_view_model.dart';
 import 'package:cake_wallet/view_model/exchange/exchange_view_model.dart';
@@ -91,6 +92,8 @@ void main() {
         await tester.pumpAndSettle();
         final navigator = nested ? inner.currentState! : root.currentState!;
         expect(find.byType(SwapConfirmSheet), findsOneWidget);
+        // Failure actions are wired into the actual sheet, not an orphan widget.
+        expect(find.byType(PegaroutePreparationRetryButton), findsOneWidget);
         if (closing == 'error close') {
           const breakdown = 'You do not have enough ETH to send this amount.\n\n'
               'Amount: 0.0005 ETH\n'
