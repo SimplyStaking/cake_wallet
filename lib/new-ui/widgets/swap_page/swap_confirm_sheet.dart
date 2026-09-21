@@ -1,17 +1,25 @@
+import 'dart:async';
+
+import 'package:cake_wallet/core/execution_state.dart';
 import 'package:cake_wallet/core/utilities.dart';
 import 'package:cake_wallet/entities/new_ui_entities/list_item/list_item_regular_row.dart';
 import 'package:cake_wallet/exchange/exchange_provider_description.dart';
+import 'package:cake_wallet/exchange/trade_execution_dispatcher.dart';
+import 'package:cake_wallet/exchange/provider/pegaroute/pegaroute_provider_label.dart';
+import 'package:cake_wallet/exchange/provider/pegaroute/pegaroute_preparation_retry.dart';
 import 'package:cake_wallet/generated/i18n.dart';
 import 'package:cake_wallet/new-ui/widgets/new_primary_button.dart';
 import 'package:cake_wallet/new-ui/widgets/receive_page/receive_top_bar.dart';
 import 'package:cake_wallet/new-ui/widgets/send_page/send_confirm_bottom_widget.dart';
 import 'package:cake_wallet/new-ui/widgets/send_page/send_confirm_sheet.dart';
 import 'package:cake_wallet/new-ui/widgets/swap_page/swap_modal_header.dart';
+import 'package:cake_wallet/new-ui/widgets/swap_page/pegaroute_preparation_retry_button.dart';
 import 'package:cake_wallet/new-ui/widgets/swap_page/swap_send_external_modal.dart';
 import 'package:cake_wallet/routes.dart';
 import 'package:cake_wallet/src/screens/connect_device/connect_device_page.dart';
 import 'package:cake_wallet/src/widgets/new_list_row/new_list_section.dart';
 import 'package:cake_wallet/view_model/exchange/exchange_trade_view_model.dart';
+import 'package:cake_wallet/exchange/trade_external_funding_policy.dart';
 import 'package:cake_wallet/view_model/exchange/exchange_view_model.dart';
 import 'package:cake_wallet/view_model/send/send_view_model_state.dart';
 import 'package:cw_core/amount/money.dart';
@@ -42,6 +50,8 @@ class SwapConfirmSheet extends StatefulWidget {
 }
 
 class _SwapConfirmSheetState extends State<SwapConfirmSheet> {
+  late final ReactionDisposer _stateReaction;
+  Timer? _dismissTimer;
   void beginSend() async {
     final sendVM = widget.exchangeTradeViewModel.sendViewModel;
 
@@ -80,57 +90,65 @@ class _SwapConfirmSheetState extends State<SwapConfirmSheet> {
       beginSend();
     }
 
-    reaction((context) => widget.exchangeTradeViewModel.sendViewModel.state, (state) {
+    _stateReaction = reaction((_) => widget.exchangeTradeViewModel.sendViewModel.state, (state) {
       if (state is TransactionCommitted) {
-        Future.delayed(const Duration(seconds: 2), () {
-          if (mounted) Navigator.of(context).pop();
+        _dismissTimer ??= Timer(const Duration(seconds: 2), () {
+          if (mounted && ModalRoute.of(context)?.isCurrent == true) {
+            Navigator.of(context).pop();
+          }
         });
       }
     });
   }
 
   @override
+  void dispose() {
+    _dismissTimer?.cancel();
+    _stateReaction();
+    widget.exchangeTradeViewModel.timer?.cancel();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
-    return PopScope(
-        onPopInvokedWithResult: (didPop, result) {
-          Navigator.of(context, rootNavigator: true).pop();
-        },
-        child: Container(
-          decoration: BoxDecoration(
-            color: Theme.of(context).colorScheme.surface,
-            borderRadius: BorderRadius.vertical(top: Radius.circular(30)),
-          ),
-          child: SafeArea(
-            child: Observer(
-              builder: (_) {
-                final commited =
-                    widget.exchangeTradeViewModel.sendViewModel.state is TransactionCommitted;
-                return Stack(
-                  fit: StackFit.loose,
-                  children: [
-                    Positioned.fill(
-                        child: AnimatedSlide(
-                      offset: commited ? Offset.zero : const Offset(1, 0),
-                      duration: const Duration(milliseconds: 300),
-                      curve: Curves.easeOutCubic,
-                      child: const TransactionCommitedScreen(),
-                    )),
-                    AnimatedSlide(
-                      offset: commited ? const Offset(-1, 0) : Offset.zero,
-                      duration: const Duration(milliseconds: 300),
-                      curve: Curves.easeOutCubic,
-                      child: SwapTransactionDetails(
-                        exchangeViewModel: widget.exchangeViewModel,
-                        exchangeTradeViewModel: widget.exchangeTradeViewModel,
-                        receiveAmount: widget.receiveAmount,
-                      ),
+    return Container(
+      decoration: BoxDecoration(
+        color: Theme.of(context).colorScheme.surface,
+        borderRadius: BorderRadius.vertical(top: Radius.circular(30)),
+      ),
+      child: SafeArea(
+        child: Observer(
+          builder: (_) {
+            final commited =
+                widget.exchangeTradeViewModel.sendViewModel.state is TransactionCommitted;
+            return Stack(
+              fit: StackFit.loose,
+              children: [
+                Positioned.fill(
+                    child: AnimatedSlide(
+                  offset: commited ? Offset.zero : const Offset(1, 0),
+                  duration: const Duration(milliseconds: 300),
+                  curve: Curves.easeOutCubic,
+                  child: const TransactionCommitedScreen(),
+                )),
+                AnimatedSlide(
+                  offset: commited ? const Offset(-1, 0) : Offset.zero,
+                  duration: const Duration(milliseconds: 300),
+                  curve: Curves.easeOutCubic,
+                  child: SingleChildScrollView(
+                    child: SwapTransactionDetails(
+                      exchangeViewModel: widget.exchangeViewModel,
+                      exchangeTradeViewModel: widget.exchangeTradeViewModel,
+                      receiveAmount: widget.receiveAmount,
                     ),
-                  ],
-                );
-              },
-            ),
-          ),
-        ));
+                  ),
+                ),
+              ],
+            );
+          },
+        ),
+      ),
+    );
   }
 }
 
@@ -169,6 +187,15 @@ class SwapTransactionDetails extends StatelessWidget {
                 Observer(
                   builder: (_) => NewListSections(showHeader: true, sections: {
                     S.of(context).send: [
+                      if (tradeExecutionPrerequisiteDescription(
+                              exchangeTradeViewModel.sendViewModel.pendingTransaction)
+                          case final String approval)
+                        ListItemRegularRow(
+                          showArrow: false,
+                          keyValue: 'pegaroute approval',
+                          label: S.of(context).approve_tokens,
+                          trailingText: approval,
+                        ),
                       ListItemRegularRow(
                         showArrow: false,
                         keyValue: "send value",
@@ -232,7 +259,7 @@ class SwapTransactionDetails extends StatelessWidget {
                           keyValue: "provider",
                           onTap: () => Clipboard.setData(
                               ClipboardData(text: exchangeTradeViewModel.trade.id)),
-                          label: exchangeTradeViewModel.trade.provider.title,
+                          label: tradeProviderDisplayName(exchangeTradeViewModel.trade),
                           iconPath: exchangeTradeViewModel.trade.provider.image,
                           trailingIconPath: "assets/new-ui/copy.svg",
                           trailingText: exchangeTradeViewModel.trade.id.toString().length > 18
@@ -260,14 +287,33 @@ class SwapTransactionDetails extends StatelessWidget {
                 ),
                 Padding(
                   padding: const EdgeInsets.only(bottom: 8.0),
-                  child: exchangeViewModel.isSendFromExternal
+                  child: exchangeViewModel.isSendFromExternal &&
+                          TradeExternalFundingPolicy.canUse(exchangeTradeViewModel.trade)
                       ? NewPrimaryButton(
                           onPressed: () => _showExternalSendModal(context),
                           text: S.of(context).continue_text,
                           color: Theme.of(context).colorScheme.primary,
                           textColor: Theme.of(context).colorScheme.onPrimary)
-                      : SendConfirmBottomWidget(
-                          sendViewModel: exchangeTradeViewModel.sendViewModel),
+                      : Observer(builder: (_) {
+                          final send = exchangeTradeViewModel.sendViewModel;
+                          final state = send.state;
+                          return Column(
+                            children: [
+                              SendConfirmBottomWidget(sendViewModel: send),
+                              if (exchangeTradeViewModel.trade.provider ==
+                                      ExchangeProviderDescription.pegaroute &&
+                                  state is FailureState)
+                                PegaroutePreparationRetryButton(
+                                  key: ObjectKey(state),
+                                  readAction: () => pegaroutePreparationRetryAction(
+                                    trade: exchangeTradeViewModel.trade,
+                                    wallet: send.wallet,
+                                  ),
+                                  onRetry: exchangeTradeViewModel.confirmSending,
+                                ),
+                            ],
+                          );
+                        }),
                 ),
               ],
             ),
@@ -278,7 +324,7 @@ class SwapTransactionDetails extends StatelessWidget {
   }
 
   void _showExternalSendModal(BuildContext context) {
-    if (context.mounted) {
+    if (context.mounted && TradeExternalFundingPolicy.canUse(exchangeTradeViewModel.trade)) {
       showMaterialModalBottomSheet(
           context: context,
           builder: (context) {

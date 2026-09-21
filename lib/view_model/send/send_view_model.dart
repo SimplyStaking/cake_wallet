@@ -22,17 +22,19 @@ import 'package:cake_wallet/entities/fiat_currency.dart';
 import 'package:cake_wallet/entities/preferences_key.dart';
 import 'package:cake_wallet/entities/template.dart';
 import 'package:cake_wallet/entities/transaction_description.dart';
+import 'package:cake_wallet/entities/transaction_wrong_balance_message.dart';
 import 'package:cake_wallet/entities/wallet_contact.dart';
 import 'package:cake_wallet/evm/evm.dart';
 import 'package:cake_wallet/exchange/exchange_provider_description.dart';
 import 'package:cake_wallet/exchange/provider/exchange_provider.dart';
 import 'package:cake_wallet/exchange/provider/jupiter_exchange_provider.dart';
 import 'package:cake_wallet/exchange/provider/near_Intents_exchange_provider.dart';
-import 'package:cake_wallet/exchange/provider/pegaroute_exchange_provider.dart';
 import 'package:cake_wallet/solana/solana.dart';
 import 'package:cake_wallet/exchange/provider/swapsxyz_exchange_provider.dart';
 import 'package:cake_wallet/exchange/provider/thorchain_exchange.provider.dart';
 import 'package:cake_wallet/exchange/trade.dart';
+import 'package:cake_wallet/exchange/trade_execution.dart';
+import 'package:cake_wallet/exchange/trade_execution_dispatcher.dart';
 import 'package:cake_wallet/exchange/trade_state.dart';
 import 'package:cake_wallet/generated/i18n.dart';
 import 'package:cake_wallet/monero/monero.dart';
@@ -100,6 +102,7 @@ abstract class SendViewModelBase extends WalletChangeListenerViewModel with Stor
   }
 
   UnspentCoinsListViewModel unspentCoinsListViewModel;
+  final TradeExecutionDispatcher tradeExecutionDispatcher;
 
   SendViewModelBase(
     this._appStore,
@@ -113,6 +116,7 @@ abstract class SendViewModelBase extends WalletChangeListenerViewModel with Stor
     this.unspentCoinsListViewModel,
     this.feesViewModel, {
     this.coinTypeToSpendFrom = UnspentCoinType.nonMweb,
+    this.tradeExecutionDispatcher = const EmptyTradeExecutionDispatcher(),
   })  : state = InitialExecutionState(),
         currencies = _appStore.wallet!.balance.keys.toList(),
         selectedCryptoCurrency = coinTypeToSpendFrom == UnspentCoinType.lightning
@@ -151,6 +155,18 @@ abstract class SendViewModelBase extends WalletChangeListenerViewModel with Stor
   // Store trade and provider references for post-commit updates (e.g., Jupiter trade ID update)
   Trade? _currentTrade;
   ExchangeProvider? _currentProvider;
+  bool _pegarouteCommitInFlight = false;
+
+  @visibleForTesting
+  void setPendingTransactionContextForTesting({
+    required PendingTransaction transaction,
+    Trade? trade,
+    ExchangeProvider? provider,
+  }) {
+    pendingTransaction = transaction;
+    _currentTrade = trade;
+    _currentProvider = provider;
+  }
 
   @observable
   ExecutionState state;
@@ -696,6 +712,37 @@ abstract class SendViewModelBase extends WalletChangeListenerViewModel with Stor
     try {
       if (!(state is IsExecutingState)) state = IsExecutingState();
 
+      // A Pegaroute order must never fall through to an unbound ordinary send.
+      if (trade?.provider == ExchangeProviderDescription.pegaroute &&
+          (trade?.executionJson?.isNotEmpty != true ||
+              wallet.isHardwareWallet ||
+              ocpRequest != null ||
+              outputs.any((output) => output.sendAll))) {
+        state = FailureState('Pegaroute execution is unavailable');
+        return null;
+      }
+
+      if (trade?.executionJson != null && trade!.executionJson!.isNotEmpty) {
+        late final TradeExecution execution;
+        try {
+          execution = TradeExecution.fromJsonString(trade.executionJson!);
+        } catch (_) {
+          state = FailureState('Invalid trade execution');
+          return null;
+        }
+        if (!tradeExecutionDispatcher.supports(execution)) {
+          state = FailureState('Unsupported trade execution');
+          return null;
+        }
+        pendingTransaction = await tradeExecutionDispatcher.prepare(wallet: wallet, trade: trade);
+        if (pendingTransaction == null) {
+          state = FailureState('Unable to prepare trade execution');
+          return null;
+        }
+        state = ExecutedSuccessfullyState();
+        return pendingTransaction;
+      }
+
       if (wallet.isHardwareWallet) {
         if (walletType == WalletType.monero) {
           _ledgerTxStateTimer = Timer.periodic(Duration(seconds: 1), (timer) {
@@ -1003,14 +1050,17 @@ abstract class SendViewModelBase extends WalletChangeListenerViewModel with Stor
     }
   }
 
-  Future<void> _handleOcpRequest() async {
-    if (OpenCryptoPayService.requiresClientCommit(selectedCryptoCurrency)) {
-      await pendingTransaction!.commit();
+  Future<void> _handleOcpRequest(
+      {bool commitClient = true, PendingTransaction? transaction}) async {
+    final transactionToCommit = transaction ?? pendingTransaction!;
+
+    if (commitClient && OpenCryptoPayService.requiresClientCommit(selectedCryptoCurrency)) {
+      await transactionToCommit.commit();
     }
 
     await _ocpService.commitOpenCryptoPayRequest(
-      pendingTransaction!.hex,
-      txId: pendingTransaction!.id,
+      transactionToCommit.hex,
+      txId: transactionToCommit.id,
       request: ocpRequest!,
       asset: selectedCryptoCurrency,
     );
@@ -1030,39 +1080,159 @@ abstract class SendViewModelBase extends WalletChangeListenerViewModel with Stor
       throw Exception("Pending transaction doesn't exist. It should not be happened.");
     }
 
+    final isPegaroute = _currentTrade?.provider == ExchangeProviderDescription.pegaroute;
+    if (isPegaroute && _pegarouteCommitInFlight) return;
+
+    final capturedPendingTransaction = pendingTransaction!;
+    final commitAmount = isPegaroute ? capturedPendingTransaction.amount : null;
+    final commitFee = isPegaroute ? capturedPendingTransaction.fee : null;
+    final commitWallet = isPegaroute ? wallet : null;
+    final commitChainId = commitWallet?.chainId;
+    final commitWalletAddress = commitWallet?.walletAddresses.primaryAddress;
+    final commitWalletName = commitWallet?.name;
+    final commitTrade = _currentTrade;
+    final commitProvider = _currentProvider;
+    final depositAddress = isPegaroute ? _currentTrade?.inputAddress : null;
+    final depositNote = isPegaroute ? outputs.map((output) => output.note).join('\n').trim() : null;
+    final pendingForCommit =
+        isPegaroute ? () => capturedPendingTransaction : () => pendingTransaction!;
+
+    if (isPegaroute) _pegarouteCommitInFlight = true;
+
+    var commitBoundaryEstablished = false;
     try {
+      if (isPegaroute && ocpRequest != null) {
+        throw Exception('Pegaroute external payment execution is unavailable');
+      }
       state = wallet.isHardwareWallet && walletType == WalletType.monero
           ? IsAwaitingDeviceResponseState()
           : TransactionCommitting();
 
+      if (isPegaroute &&
+          tradeExecutionPrerequisiteDescription(capturedPendingTransaction) != null) {
+        try {
+          await capturedPendingTransaction.commit();
+          if (!identical(wallet, commitWallet) || !identical(_currentTrade, commitTrade)) {
+            throw StateError('The active swap changed after approval');
+          }
+          // Approval is not swap funding. Prepare the next step with a fresh
+          // nonce and leave it on the normal confirmation screen.
+          await createTransaction(provider: commitProvider, trade: commitTrade);
+        } finally {
+          _pegarouteCommitInFlight = false;
+        }
+        return;
+      }
+
       if (ocpRequest != null) {
-        await _handleOcpRequest();
-      } else if (pendingTransaction!.shouldCommitUR()) {
+        if (OpenCryptoPayService.requiresClientCommit(selectedCryptoCurrency)) {
+          if (isPegaroute) {
+            await pendingForCommit().commit();
+            commitBoundaryEstablished = true;
+            state = TransactionCommitted();
+            await _handleOcpRequest(
+              commitClient: false,
+              transaction: pendingForCommit(),
+            );
+          } else {
+            await pendingForCommit().commit();
+            commitBoundaryEstablished = true;
+            state = TransactionCommitted();
+            await _handleOcpRequest(
+              commitClient: false,
+              transaction: pendingForCommit(),
+            );
+          }
+        } else {
+          await _handleOcpRequest();
+        }
+      } else if (pendingForCommit().shouldCommitUR()) {
+        if (isPegaroute) {
+          throw Exception('Pegaroute UR commit is unavailable');
+        }
         await _commitUR(context);
       } else {
-        await pendingTransaction!.commit();
+        await pendingForCommit().commit();
+        if (isPegaroute) commitBoundaryEstablished = true;
       }
 
       state = TransactionCommitted();
+    } catch (e) {
+      if (!commitBoundaryEstablished) {
+        state = FailureState(translateErrorMessage(e, wallet.type, wallet.currency));
 
+        final failedSignature = e is JupiterSwapFailedException ? e.signature : "";
+
+        if (!isPegaroute) {
+          await _updateSolanaTrade(signature: failedSignature, isSuccess: false);
+        }
+        if (isPegaroute) _pegarouteCommitInFlight = false;
+        return;
+      }
+      _logPostCommitError(e);
+    }
+
+    try {
+      if (isPegaroute) {
+        if (identical(wallet, commitWallet) && commitWallet!.chainId == commitChainId) {
+          if (isEVMWallet) {
+            commitWallet.transactionHistory.addOne(evm!.getTransactionInfo(
+              id: capturedPendingTransaction.evmTxHashFromRawHex!,
+              height: 0,
+              amount: commitAmount!,
+              fee: commitFee!,
+              tokenSymbol: commitAmount.currency.symbol.toUpperCase(),
+              exponent: commitAmount.currency.decimals,
+              contractAddress: commitAmount.currency is Erc20Token
+                  ? (commitAmount.currency as Erc20Token).contractAddress
+                  : null,
+              from: commitWalletAddress,
+              to: depositAddress,
+              direction: TransactionDirection.outgoing,
+              isPending: true,
+              date: DateTime.now(),
+              confirmations: 0,
+              chainId: commitChainId!,
+            ));
+            Future.delayed(const Duration(seconds: 4), () async {
+              if (!identical(wallet, commitWallet) || commitWallet.chainId != commitChainId) return;
+              try {
+                await Future.wait([
+                  commitWallet.updateTransactionsHistory(),
+                  commitWallet.updateBalance() as Future<void>,
+                ]);
+              } catch (error) {
+                _logPostCommitError(error);
+              }
+            });
+          }
+        }
+        await transactionDescriptionBox.add(TransactionDescription(
+          id: '${capturedPendingTransaction.id}_$commitWalletAddress',
+          recipientAddress: _settingsStore.shouldSaveRecipientAddress ? depositAddress ?? '' : null,
+          transactionNote: depositNote ?? '',
+        ));
+        final sharedPreferences = await SharedPreferences.getInstance();
+        await sharedPreferences.setString(
+            PreferencesKey.backgroundSyncLastTrigger(commitWalletName!),
+            DateTime.now().add(const Duration(minutes: 1)).toIso8601String());
+        return;
+      }
       if (_currentTrade != null) {
         final provider = _currentTrade!.provider;
         if (provider == ExchangeProviderDescription.swapsXyz) {
-          registerSwapsXyzTransaction(_currentTrade!);
-        }
-        if (provider == ExchangeProviderDescription.pegaRoute) {
-          registerPegaRouteTxHash(_currentTrade!);
+          await registerSwapsXyzTransaction(_currentTrade!);
         }
       }
 
-      await _updateSolanaTrade(signature: pendingTransaction!.id, isSuccess: true);
+      await _updateSolanaTrade(signature: pendingForCommit().id, isSuccess: true);
 
       if (walletType == WalletType.solana) {
         Future.delayed(Duration(seconds: 1), () async {
           try {
             await solana!.pollForTransaction(
               wallet,
-              pendingTransaction!.id,
+              pendingForCommit().id,
               initialDelay: const Duration(seconds: 1),
               maxRetries: 5,
             );
@@ -1150,10 +1320,10 @@ abstract class SendViewModelBase extends WalletChangeListenerViewModel with Stor
             );
 
         wallet.transactionHistory.addOne(evm!.getTransactionInfo(
-          id: pendingTransaction!.evmTxHashFromRawHex!,
+          id: pendingForCommit().evmTxHashFromRawHex!,
           height: 0,
           amount: outputs.first.cryptoAmountMoney,
-          fee: pendingTransaction!.fee,
+          fee: pendingForCommit().fee,
           tokenSymbol: selectedCryptoCurrency.title,
           direction: TransactionDirection.outgoing,
           isPending: true,
@@ -1166,20 +1336,20 @@ abstract class SendViewModelBase extends WalletChangeListenerViewModel with Stor
 
       if (walletType == WalletType.solana) {
         wallet.transactionHistory.addOne(solana!.getTransactionInfo(
-          id: pendingTransaction!.id,
+          id: pendingForCommit().id,
           blockTime: DateTime.now(),
           to: "",
           from: "",
           direction: TransactionDirection.outgoing,
-          amount: pendingTransaction!.amount,
+          amount: pendingForCommit().amount,
           isPending: true,
-          fee: pendingTransaction!.fee,
+          fee: pendingForCommit().fee,
         ));
       }
 
       if (walletType == WalletType.tron) {
         wallet.transactionHistory.addOne(tron!.getTransactionInfo(
-          id: pendingTransaction!.id,
+          id: pendingForCommit().id,
           blockTime: DateTime.now(),
           direction: TransactionDirection.outgoing,
           amount: outputs.first.cryptoAmountMoney,
@@ -1188,19 +1358,21 @@ abstract class SendViewModelBase extends WalletChangeListenerViewModel with Stor
         ));
       }
 
-      if (pendingTransaction!.id.isNotEmpty) {
-        _addTransactionDescription();
+      if (pendingForCommit().id.isNotEmpty) {
+        await _addTransactionDescription(transaction: isPegaroute ? pendingForCommit() : null);
       }
       final sharedPreferences = await SharedPreferences.getInstance();
       await sharedPreferences.setString(PreferencesKey.backgroundSyncLastTrigger(wallet.name),
           DateTime.now().add(Duration(minutes: 1)).toIso8601String());
     } catch (e) {
-      state = FailureState(translateErrorMessage(e, wallet.type, wallet.currency));
-
-      final failedSignature = e is JupiterSwapFailedException ? e.signature : "";
-
-      await _updateSolanaTrade(signature: failedSignature, isSuccess: false);
+      _logPostCommitError(e);
+    } finally {
+      if (isPegaroute) _pegarouteCommitInFlight = false;
     }
+  }
+
+  void _logPostCommitError(Object error) {
+    printV('Post-commit bookkeeping failed (${error.runtimeType})');
   }
 
   /// Update Jupiter trade with relevant details after transaction is committed
@@ -1219,7 +1391,9 @@ abstract class SendViewModelBase extends WalletChangeListenerViewModel with Stor
   @action
   Future<void> updateWalletBalance() async => await wallet.updateBalance();
 
-  Future<void> _addTransactionDescription() async {
+  Future<void> _addTransactionDescription({PendingTransaction? transaction}) async {
+    final transactionToDescribe = transaction ?? pendingTransaction!;
+
     String address = outputs.fold('', (acc, value) {
       final canonical = value.extractedAddress.trim().isNotEmpty
           ? value.extractedAddress.trim()
@@ -1243,7 +1417,7 @@ abstract class SendViewModelBase extends WalletChangeListenerViewModel with Stor
       final txhistory = monero!.getTransactionHistory(wallet);
       tx = txhistory.transactions.values.last;
     }
-    final descriptionKey = '${pendingTransaction!.id}_${wallet.walletAddresses.primaryAddress}';
+    final descriptionKey = '${transactionToDescribe.id}_${wallet.walletAddresses.primaryAddress}';
     _settingsStore.shouldSaveRecipientAddress
         ? await transactionDescriptionBox.add(TransactionDescription(
             id: descriptionKey,
@@ -1559,11 +1733,14 @@ abstract class SendViewModelBase extends WalletChangeListenerViewModel with Stor
       return errorMessage;
     }
     if (isEVMWallet || walletType == WalletType.haven) {
+      if (error is TransactionWrongBalanceException) {
+        return transactionWrongBalanceMessage(error);
+      }
       if (errorMessage.contains('gas required exceeds allowance')) {
         return S.current.gas_exceeds_allowance;
       }
 
-      if (errorMessage.contains('insufficient funds')) {
+      if (errorMessage.toLowerCase().contains('insufficient funds')) {
         final feeCurrency = switch (walletType) {
           WalletType.bsc => "BNB",
           WalletType.polygon => "POL",
@@ -1584,6 +1761,30 @@ abstract class SendViewModelBase extends WalletChangeListenerViewModel with Stor
         // Handle parsing errors (couldn't parse the error message)
         if (parsedErrorMessageResult.error != null) {
           return S.current.insufficient_funds_for_tx;
+        }
+
+        // The node's have/want values are exact base units. Reuse the funding
+        // message for a simple shortfall, keeping queued-cost errors below on
+        // their existing path when their overshot includes other transactions.
+        final nativeCurrency = switch (walletType) {
+          WalletType.bsc => CryptoCurrency.bnb,
+          WalletType.polygon => CryptoCurrency.maticpoly,
+          WalletType.base => CryptoCurrency.baseEth,
+          WalletType.arbitrum => CryptoCurrency.arbEth,
+          _ => CryptoCurrency.eth,
+        };
+        final available = Money.tryParse(parsedErrorMessageResult.balanceWei ?? '', nativeCurrency,
+            isBaseUnit: true);
+        final required = Money.tryParse(parsedErrorMessageResult.txCostWei ?? '', nativeCurrency,
+            isBaseUnit: true);
+        if (available != null &&
+            required != null &&
+            !available.isNegative &&
+            required > available &&
+            (required - available).amount ==
+                BigInt.tryParse(parsedErrorMessageResult.overshotWei ?? '')) {
+          return transactionWrongBalanceMessage(TransactionWrongBalanceException(nativeCurrency,
+              requiredBalance: required, availableBalance: available));
         }
 
         // Handle successfully parsed errors with specific values
@@ -1728,33 +1929,7 @@ abstract class SendViewModelBase extends WalletChangeListenerViewModel with Stor
         printV('SwapsXyz: transaction register: success');
       }
     } catch (e) {
-      printV('registerSwapsXyzTransaction error: $e');
-    }
-  }
-
-  Future<void> registerPegaRouteTxHash(Trade trade) async {
-    try {
-      final txHash =
-          pendingTransaction?.evmTxHashFromRawHex ?? pendingTransaction?.id ?? trade.txId ?? '';
-
-      if (txHash.isEmpty) {
-        printV('PegaRoute: txHash submission: skipped (txHash empty)');
-        return;
-      }
-
-      printV('PegaRoute: attempting to submit txHash: tradeId = ${trade.id}, txHash = $txHash');
-
-      final submitted = await PegaRouteExchangeProvider.submitTxHash(id: trade.id, txHash: txHash);
-
-      if (submitted) {
-        trade.txId = txHash;
-        await trade.save();
-        printV('PegaRoute: txHash submission: success');
-      } else {
-        printV('PegaRoute: txHash submission: failed');
-      }
-    } catch (e) {
-      printV('registerPegaRouteTxHash error: $e');
+      _logPostCommitError(e);
     }
   }
 

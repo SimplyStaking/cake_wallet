@@ -3,9 +3,11 @@ import 'package:cake_wallet/di.dart';
 import 'package:cake_wallet/entities/new_ui_entities/list_item/list_Item_checkbox.dart';
 import 'package:cake_wallet/entities/new_ui_entities/list_item/list_item_selector.dart';
 import 'package:cake_wallet/exchange/provider/exchange_provider.dart';
+import 'package:cake_wallet/exchange/provider/pegaroute_exchange_provider.dart';
 import 'package:cake_wallet/generated/i18n.dart';
 import 'package:cake_wallet/new-ui/widgets/receive_page/receive_top_bar.dart';
 import 'package:cake_wallet/new-ui/widgets/swap_page/trocador_providers_settings.dart';
+import 'package:cake_wallet/new-ui/widgets/swap_page/pegaroute_providers_settings.dart';
 import 'package:cake_wallet/src/widgets/alert_with_one_action.dart';
 import 'package:cake_wallet/src/widgets/new_list_row/new_list_section.dart';
 import 'package:cake_wallet/utils/show_pop_up.dart';
@@ -73,7 +75,9 @@ class ProviderOptionsPage extends StatelessWidget {
                           children: [
                             GestureDetector(
                               onTap: () {
-                                for (final provider in decentralizedProviders) {
+                                for (final provider in decentralizedProviders.where(
+                                  (provider) => provider.isAvailable,
+                                )) {
                                   _switchProviderStatus(provider, true, context);
                                 }
                               },
@@ -103,10 +107,26 @@ class ProviderOptionsPage extends StatelessWidget {
                           updateCheckboxValue: (key, val) {},
                           sections: {
                             S.of(context).decentralized: decentralizedProviders.map((item) {
+                              final unavailable = !item.isAvailable;
                               return ListItemCheckbox(
                                   iconPath: item.description.image,
                                   keyValue: item.title,
                                   label: item.title,
+                                  showArrow: item is PegarouteExchangeProvider,
+                                  onTap: item is PegarouteExchangeProvider
+                                      ? () => _openPegarouteProvidersPage(context)
+                                      : null,
+                                  subtitle: unavailable
+                                      ? S.of(context).buy_provider_unavailable
+                                      : item is PegarouteExchangeProvider
+                                          ? S.of(context).manage_providers
+                                          : null,
+                                  subtitleColor: unavailable
+                                      ? Theme.of(context)
+                                          .colorScheme
+                                          .onSurfaceVariant
+                                          .withOpacity(0.5)
+                                      : null,
                                   value: exchangeViewModel.selectedProviders.contains(item),
                                   onChanged: (val) {
                                     _switchProviderStatus(item, val, context);
@@ -125,7 +145,9 @@ class ProviderOptionsPage extends StatelessWidget {
                           children: [
                             GestureDetector(
                               onTap: () {
-                                for (final provider in centralizedProviders) {
+                                for (final provider in centralizedProviders.where(
+                                  (provider) => provider.isAvailable,
+                                )) {
                                   _switchProviderStatus(provider, true, context);
                                 }
                               },
@@ -157,16 +179,25 @@ class ProviderOptionsPage extends StatelessWidget {
                               updateCheckboxValue: (key, val) {},
                               sections: {
                                 S.of(context).centralized: centralizedProviders.map((item) {
+                                  final unavailable = !item.isAvailable;
                                   return ListItemCheckbox(
                                       iconPath: item.description.image,
                                       keyValue: item.title,
                                       label: item.title,
-                                      showArrow: item.title == "Trocador",
+                                      showArrow: item.isAvailable && item.title == "Trocador",
                                       value: exchangeViewModel.selectedProviders.contains(item),
-                                      subtitle: item.title == "Trocador"
-                                          ? S.of(context).manage_providers
+                                      subtitle: unavailable
+                                          ? S.of(context).buy_provider_unavailable
+                                          : item.title == "Trocador"
+                                              ? S.of(context).manage_providers
+                                              : null,
+                                      subtitleColor: unavailable
+                                          ? Theme.of(context)
+                                              .colorScheme
+                                              .onSurfaceVariant
+                                              .withOpacity(0.5)
                                           : null,
-                                      onTap: item.title == "Trocador"
+                                      onTap: item.isAvailable && item.title == "Trocador"
                                           ? () {
                                               _openTrocadorProvidersPage(context);
                                             }
@@ -198,11 +229,11 @@ class ProviderOptionsPage extends StatelessWidget {
   }
 
   void _switchProviderStatus(ExchangeProvider provider, bool status, BuildContext context) {
-    if (!provider.isAvailable) {
+    if (!provider.isAvailable && status) {
       showPopUp<void>(
           builder: (BuildContext popUpContext) => AlertWithOneAction(
               alertTitle: 'Error',
-              alertContent: 'The exchange is blocked in your region.',
+              alertContent: S.of(context).buy_provider_unavailable,
               buttonText: S.of(context).ok,
               buttonAction: () => Navigator.of(context).pop()),
           context: context);
@@ -224,5 +255,16 @@ class ProviderOptionsPage extends StatelessWidget {
                 child: TrocadorProvidersSettings(
               trocadorProvidersViewModel: vm,
             ))));
+  }
+
+  void _openPegarouteProvidersPage(BuildContext context) {
+    Navigator.of(context).push(CupertinoPageRoute(
+      builder: (_) => Material(
+        child: PegarouteProvidersSettings(
+          preferences: exchangeViewModel.pegarouteProviderPreferences,
+          decentralizedOnly: () => exchangeViewModel.forceDecentralizedExchanges,
+        ),
+      ),
+    ));
   }
 }

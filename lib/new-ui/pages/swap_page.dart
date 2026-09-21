@@ -379,13 +379,12 @@ class _NewSwapPageState extends State<NewSwapPage> {
               : Debounce(const Duration(milliseconds: 500));
 
           _depositAmountDebounce.run(() {
-            widget.exchangeViewModel.calculateBestRate();
+            widget.exchangeViewModel.isReceiveAmountEntered = false;
+            widget.exchangeViewModel.isFixedRateMode = false;
             if (depositAmountController.text != widget.exchangeViewModel.depositAmount &&
                 depositAmountController.text != S.of(context).all) {
               widget.exchangeViewModel.changeDepositAmount(amount: depositAmountController.text);
             }
-            widget.exchangeViewModel.isReceiveAmountEntered = false;
-            widget.exchangeViewModel.isFixedRateMode = false;
             if (receiveKey.currentState != null &&
                 !receiveKey.currentState!.amountFocusNode.hasFocus) {
               receiveKey.currentState!.updateFiatAmount();
@@ -401,10 +400,9 @@ class _NewSwapPageState extends State<NewSwapPage> {
       receiveAmountController.addListener(() {
         if (receiveAmountController.text != widget.exchangeViewModel.receiveAmount) {
           _receiveAmountDebounce.run(() {
-            widget.exchangeViewModel.calculateBestRate();
-            widget.exchangeViewModel.changeReceiveAmount(amount: receiveAmountController.text);
             widget.exchangeViewModel.isReceiveAmountEntered = true;
             widget.exchangeViewModel.enableFixedRateMode();
+            widget.exchangeViewModel.changeReceiveAmount(amount: receiveAmountController.text);
             if (!depositKey.currentState!.amountFocusNode.hasFocus) {
               depositKey.currentState!.updateFiatAmount();
             }
@@ -921,6 +919,8 @@ class _NewSwapPageState extends State<NewSwapPage> {
   }
 
   bool _swapButtonDisabled() {
+    if (widget.exchangeViewModel.isFetchingRate) return true;
+
     if (widget.exchangeViewModel.selectedProviders.isEmpty) {
       return true;
     }
@@ -958,7 +958,30 @@ class SwapProviderPreview extends StatelessWidget {
             return const SizedBox.shrink();
           }
 
-          final provider = exchangeViewModel.forcedProvider ?? exchangeViewModel.providerDisplay;
+          if (exchangeViewModel.noProviderForPair && !exchangeViewModel.isFetchingRate) {
+            return Container(
+              width: double.infinity,
+              constraints: const BoxConstraints(minHeight: 48),
+              alignment: Alignment.centerLeft,
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Theme.of(context).colorScheme.surfaceContainer,
+                borderRadius: BorderRadius.circular(16),
+              ),
+              child: Text(
+                S.of(context).none_of_selected_providers_can_exchange,
+                key: const ValueKey('swap_provider_unavailable'),
+                style: TextStyle(
+                  fontSize: 14,
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                ),
+              ),
+            );
+          }
+
+          final provider = exchangeViewModel.isFetchingRate
+              ? null
+              : exchangeViewModel.forcedProvider ?? exchangeViewModel.providerDisplay;
           final rate = exchangeViewModel.forcedProvider == null
               ? exchangeViewModel.bestRate
               : exchangeViewModel.forcedProviderRate;

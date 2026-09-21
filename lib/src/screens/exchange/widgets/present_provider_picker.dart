@@ -79,7 +79,7 @@ class PresentProviderPicker extends StatelessWidget {
               (e) => CheckBoxItem(
                 e.title,
                 exchangeViewModel.selectedProviders.contains(e),
-                isDisabled: !exchangeViewModel.providerList.contains(e),
+                isDisabled: !e.isAvailable,
               ),
             )
             .toList(),
@@ -89,7 +89,7 @@ class PresentProviderPicker extends StatelessWidget {
             showPopUp<void>(
                 builder: (BuildContext popUpContext) => AlertWithOneAction(
                     alertTitle: 'Error',
-                    alertContent: 'The exchange is blocked in your region.',
+                    alertContent: S.of(context).buy_provider_unavailable,
                     buttonText: S.of(context).ok,
                     buttonAction: () => Navigator.of(context).pop()),
                 context: context);

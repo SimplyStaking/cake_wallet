@@ -180,6 +180,7 @@ class TransactionsPage extends StatelessWidget {
                                             .pushNamed(Routes.tradeDetails, arguments: trade),
                                         swapState: trade.state,
                                         provider: trade.provider,
+                                        providerDisplayName: item.providerDisplayName,
                                         title: "$tradeFrom → $tradeTo",
                                         fromSymbol: dashboardViewModel.appStore.amountParsingProxy
                                             .getCryptoSymbol(tradeFrom),

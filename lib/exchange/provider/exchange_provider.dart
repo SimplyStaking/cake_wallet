@@ -17,9 +17,17 @@ abstract class ExchangeProvider {
 
   bool get supportsFixedRate;
 
+  /// Can estimate a source amount for a receive target without promising a
+  /// guaranteed fixed rate or exact-output order. Independent of fixed rate.
+  bool get supportsReceiveAmountEstimate => false;
+
   bool get supportsOnionAddress => false;
 
   bool get supportsMemoOrDestinationTag => true;
+
+  /// True only when a successful return proves the provider has already
+  /// created recoverable server-side state.
+  bool get createsOrderBeforeReturning => false;
 
   @override
   String toString() => title;
