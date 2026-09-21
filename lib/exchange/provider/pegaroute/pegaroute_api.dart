@@ -10,8 +10,8 @@ import 'package:cw_core/utils/proxy_wrapper.dart';
 import 'pegaroute_configuration.dart';
 import 'pegaroute_execution_binding.dart';
 
-// Pegaroute contract baseline: 177d6891aada4659ca9d24cf3de8cb336ce31442.
-// This references reviewed upstream source, not the version of a running proxy.
+// Pegaroute contract baseline: v0.5.3.
+// This references the upstream contract target, not the version of a running proxy.
 
 typedef PegarouteGet = Future<very_insecure_http_do_not_use.Response> Function(
     Uri uri, Map<String, String> headers);

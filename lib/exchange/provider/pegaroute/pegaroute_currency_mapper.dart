@@ -61,9 +61,8 @@ class PegarouteCurrencyMapper {
     'THOR': 'RUNE',
   };
 
-  // Cake asset intersection rechecked against src/catalog/pegaroute.json at
-  // 177d6891aada4659ca9d24cf3de8cb336ce31442. Unknown user tokens must not be
-  // synthesized into request IDs.
+  // Cake asset intersection catalog reference: src/catalog/pegaroute.json at
+  // v0.5.3. Unknown user tokens must not be synthesized into request IDs.
   static const _catalogAssets = <String>{
     'ETH/ETH',
     'BSC/BNB',

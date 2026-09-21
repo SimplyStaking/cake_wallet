@@ -2,15 +2,17 @@
 
 Synthetic payloads, originally audited against Pegasus main
 `74e2cd8d9dbb71f0b5cd29bd5193d0182346dd34` (2026-09-09).
-Current compatibility baseline:
+Current contract target: `v0.5.3`.
+Last compatibility review:
 `177d6891aada4659ca9d24cf3de8cb336ce31442` (2026-09-14).
+The version-reference update does not constitute a new fixture audit.
 They are mocked codec inputs, not executable offers or live captures.
 
 Authoritative sources: `src/server/openapi/schemas.ts`,
 `src/server/swaps/{schemas,handlers,mappers,execution}.ts`,
 `src/shared/private-mode.ts`, and `docs/integrators/` at the current baseline.
 
-The baseline refresh checks the quote/create/status/hash contract changes and
+The previous baseline review checked the quote/create/status/hash contract changes and
 the 102 mapped Cake asset identities. Existing status regressions cover canonical
 OpenOcean asset identities, ticker-only rejection, and retained funding bindings;
 the upstream fix adds no creation-attempt API or historical-record recovery.

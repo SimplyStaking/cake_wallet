@@ -1,9 +1,9 @@
 # Pegaroute wallet execution
 
-Contract baseline: Pegasus source **`177d6891`**
-(`177d6891aada4659ca9d24cf3de8cb336ce31442`, based on main `6156b8b8`).
-This hardcoded reference identifies the reviewed integration contract, not a
+Contract baseline: Pegasus **`v0.5.3`**.
+This hardcoded reference identifies the integration contract target, not a
 running server revision. Update it when adopting upstream contract changes.
+The version-reference update does not establish new compatibility or live testing.
 
 This baseline includes the provider-local OpenOcean status correction: canonical
 contract/mint identities and the requested recipient survive status monitoring;
@@ -208,8 +208,8 @@ an authenticated status poll must return the same source hash. Callback failures
 preserve successful local broadcast and failed/pending callback state. No worker
 or automatic funding retry is added.
 
-The reviewed Pegasus `177d6891` source has the basic quote/create/status/txhash endpoints
-needed by this flow. The isolated upstream commits `7c8a0001` (immutable hash
+The previously reviewed Pegasus `177d6891` source established the basic
+quote/create/status/txhash endpoints needed by this flow. The isolated upstream commits `7c8a0001` (immutable hash
 registration) and `b295a81d` (creation-attempt recovery) are not deployed and are
 not prerequisites for this increment. The stable legacy hash endpoint can
 acknowledge without proving persistence, hence status verification. Recovery of
