@@ -229,27 +229,6 @@ final class PegarouteQuoteRequest {
   final String? refundAddress;
   final PegaroutePrivateValue? privateValue;
 
-  factory PegarouteQuoteRequest.fromIntent({
-    required String fromChain,
-    required String fromToken,
-    required String toChain,
-    required String toToken,
-    required String amount,
-    required PegarouteAddressIntent intent,
-    PegaroutePrivateValue? privateValue,
-  }) =>
-      PegarouteQuoteRequest(
-        fromChain: fromChain,
-        fromToken: fromToken,
-        toChain: toChain,
-        toToken: toToken,
-        amount: amount,
-        destinationAddress: intent.destinationAddress,
-        senderAddress: intent.senderAddress,
-        refundAddress: intent.refundAddress,
-        privateValue: privateValue,
-      );
-
   Map<String, String> toQuery() => {
         ..._requestQuery(
           fromChain: fromChain,
@@ -265,35 +244,8 @@ final class PegarouteQuoteRequest {
       };
 }
 
-class PegarouteAddressIntent {
-  PegarouteAddressIntent({
-    required String destinationAddress,
-    required String senderAddress,
-    String? refundAddress,
-  })  : destinationAddress = destinationAddress.trim(),
-        senderAddress = senderAddress.trim(),
-        refundAddress = _normalizeRefund(senderAddress.trim(), refundAddress) {
-    if (this.destinationAddress.isEmpty || this.senderAddress.isEmpty) {
-      throw const PegarouteCodecException('destination and sender are required');
-    }
-  }
-
-  final String destinationAddress;
-  final String senderAddress;
-  final String? refundAddress;
-
-  static String? _normalizeRefund(String sender, String? refund) {
-    final normalized = refund?.trim();
-    if (normalized == null || normalized == sender) return null;
-    if (normalized.isEmpty) {
-      throw const PegarouteCodecException('refundAddress must not be blank');
-    }
-    return normalized;
-  }
-}
-
 final class PegarouteSwapRequest {
-  factory PegarouteSwapRequest({
+  PegarouteSwapRequest({
     required String fromChain,
     required String fromToken,
     required String toChain,
@@ -304,134 +256,46 @@ final class PegarouteSwapRequest {
     String? refundAddress,
     String? quoteId,
     String? routeProvider,
-    double? slippageTolerance,
-    bool? streaming,
-  }) =>
-      PegarouteSwapRequest._(
-        fromChain: fromChain,
-        fromToken: fromToken,
-        toChain: toChain,
-        toToken: toToken,
-        amount: amount,
-        destinationAddress: destinationAddress,
-        senderAddress: senderAddress,
-        refundAddress: refundAddress,
-        quoteId: quoteId,
-        routeProvider: routeProvider,
-        slippageTolerance: slippageTolerance,
-        streaming: streaming,
-      );
-
-  PegarouteSwapRequest._({
-    required String fromChain,
-    required String fromToken,
-    required String toChain,
-    required String toToken,
-    required String amount,
-    required String destinationAddress,
-    required String senderAddress,
-    String? refundAddress,
-    String? quoteId,
-    String? routeProvider,
-    double? slippageTolerance,
-    bool? streaming,
   })  : fromChain = _requiredRequestId(fromChain, 'fromChain'),
         fromToken = _requiredRequestId(fromToken, 'fromToken'),
         toChain = _requiredRequestId(toChain, 'toChain'),
         toToken = _requiredRequestId(toToken, 'toToken'),
         amount = _positiveAmount(amount),
-        destinationAddress = _optionalRequestId(destinationAddress, 'destinationAddress'),
-        senderAddress = _normalizeRequestSender(senderAddress),
+        destinationAddress = _requiredRequestId(destinationAddress, 'destinationAddress'),
+        senderAddress = _requiredRequestId(senderAddress, 'senderAddress'),
         refundAddress = _normalizeRequestRefund(
           fromChain,
           _normalizeRequestSender(senderAddress),
           refundAddress,
         ),
         quoteId = _optionalRequestId(quoteId, 'quoteId'),
-        routeProvider = _optionalRequestId(routeProvider, 'routeProvider'),
-        slippageTolerance = slippageTolerance,
-        streaming = streaming {
-    if (destinationAddress.trim().isEmpty || senderAddress.trim().isEmpty) {
-      throw const PegarouteCodecException('destination and sender are required for swap');
-    }
-    final slippage = slippageTolerance;
-    if (slippage != null && (!slippage.isFinite || slippage < 0 || slippage > 1)) {
-      throw const PegarouteCodecException('slippageTolerance must be between 0 and 1');
-    }
-  }
+        routeProvider = _optionalRequestId(routeProvider, 'routeProvider');
 
   final String fromChain;
   final String fromToken;
   final String toChain;
   final String toToken;
   final String amount;
-  final String? destinationAddress;
-  final String? senderAddress;
+  final String destinationAddress;
+  final String senderAddress;
   final String? refundAddress;
   final String? quoteId;
   final String? routeProvider;
-  final double? slippageTolerance;
-  final bool? streaming;
-
-  factory PegarouteSwapRequest.fromIntent({
-    required String fromChain,
-    required String fromToken,
-    required String toChain,
-    required String toToken,
-    required String amount,
-    required PegarouteAddressIntent intent,
-    String? quoteId,
-    String? routeProvider,
-    double? slippageTolerance,
-    bool? streaming,
-  }) =>
-      PegarouteSwapRequest(
-        fromChain: fromChain,
-        fromToken: fromToken,
-        toChain: toChain,
-        toToken: toToken,
-        amount: amount,
-        destinationAddress: intent.destinationAddress,
-        senderAddress: intent.senderAddress,
-        refundAddress: intent.refundAddress,
-        quoteId: quoteId,
-        routeProvider: routeProvider,
-        slippageTolerance: slippageTolerance,
-        streaming: streaming,
-      );
-
-  Map<String, String> toQuery() => _requestQuery(
-        fromChain: fromChain,
-        fromToken: fromToken,
-        toChain: toChain,
-        toToken: toToken,
-        amount: amount,
-        destinationAddress: destinationAddress,
-        senderAddress: senderAddress,
-        refundAddress: refundAddress,
-      );
 
   Map<String, dynamic> toJson() => {
-        ..._validatedSwapFields(),
+        ..._requestQuery(
+          fromChain: fromChain,
+          fromToken: fromToken,
+          toChain: toChain,
+          toToken: toToken,
+          amount: amount,
+          destinationAddress: destinationAddress,
+          senderAddress: senderAddress,
+          refundAddress: refundAddress,
+        ),
         if (quoteId != null) 'quoteId': quoteId,
         if (routeProvider != null) 'routeProvider': routeProvider,
-        if (slippageTolerance != null) ..._validatedSlippage(),
-        if (streaming != null) 'streaming': streaming,
       };
-
-  Map<String, dynamic> _validatedSwapFields() {
-    final query = toQuery();
-    for (final key in const ['destinationAddress', 'senderAddress']) {
-      if (!query.containsKey(key)) throw PegarouteCodecException('$key is required for swap');
-    }
-    final result = <String, dynamic>{...query};
-    return result;
-  }
-
-  Map<String, dynamic> _validatedSlippage() {
-    final value = slippageTolerance!;
-    return {'slippageTolerance': value};
-  }
 }
 
 /// Validate once at construction. Final value types cannot change before encoding.
@@ -1595,15 +1459,6 @@ final class PegarouteValidatedSwapResult {
       _origin == client.configuration.origin;
 }
 
-Map<String, String> _nonEmpty(Map<String, String?> values) => Map.fromEntries(
-      values.entries.where((entry) {
-        if (entry.value != null && entry.value!.trim().isEmpty) {
-          throw PegarouteCodecException('${entry.key} must not be blank');
-        }
-        return entry.value != null;
-      }).map((entry) => MapEntry(entry.key, entry.value!)),
-    );
-
 Map<String, String> _requestQuery({
   required String fromChain,
   required String fromToken,
@@ -1617,20 +1472,17 @@ Map<String, String> _requestQuery({
   if (refundAddress != null && senderAddress == null) {
     throw const PegarouteCodecException('refundAddress requires senderAddress');
   }
-  final result = _nonEmpty({
+  // Both final request types validate and normalize their fields at construction.
+  return {
     'fromChain': fromChain,
     'fromToken': fromToken,
     'toChain': toChain,
     'toToken': toToken,
     'amount': amount,
-    'destinationAddress': destinationAddress,
-    'senderAddress': senderAddress,
-    'refundAddress': refundAddress,
-  });
-  for (final key in const ['fromChain', 'fromToken', 'toChain', 'toToken', 'amount']) {
-    if (!result.containsKey(key)) throw PegarouteCodecException('$key is required');
-  }
-  return result;
+    if (destinationAddress != null) 'destinationAddress': destinationAddress,
+    if (senderAddress != null) 'senderAddress': senderAddress,
+    if (refundAddress != null) 'refundAddress': refundAddress,
+  };
 }
 
 Map<String, dynamic> _object(Object? value) {

@@ -266,29 +266,16 @@ void main() {
   });
 
   test('uses identical normalized sender and refund intent in requests', () {
-    final intent = PegarouteAddressIntent(
-      destinationAddress: ' destination ',
-      senderAddress: ' sender ',
-      refundAddress: ' refund ',
-    );
-    final quote = PegarouteQuoteRequest.fromIntent(
-      fromChain: 'ETH',
-      fromToken: 'ETH',
-      toChain: 'BTC',
-      toToken: 'BTC',
-      amount: '1',
-      intent: intent,
-    );
-    final swap = PegarouteSwapRequest.fromIntent(
-      fromChain: 'ETH',
-      fromToken: 'ETH',
-      toChain: 'BTC',
-      toToken: 'BTC',
-      amount: '1',
-      intent: intent,
-    );
-    expect(swap.toJson()['senderAddress'], quote.toQuery()['senderAddress']);
-    expect(swap.toJson()['refundAddress'], quote.toQuery()['refundAddress']);
+    final quote = PegarouteQuoteRequest(fromChain: 'ETH', fromToken: 'ETH',
+        toChain: 'BTC', toToken: 'BTC', amount: '1',
+        destinationAddress: ' destination ', senderAddress: ' sender ', refundAddress: ' refund ');
+    final swap = PegarouteSwapRequest(fromChain: 'ETH', fromToken: 'ETH',
+        toChain: 'BTC', toToken: 'BTC', amount: '1',
+        destinationAddress: ' destination ', senderAddress: ' sender ', refundAddress: ' refund ');
+    final expected = {'fromChain': 'ETH', 'fromToken': 'ETH', 'toChain': 'BTC', 'toToken': 'BTC',
+      'amount': '1', 'destinationAddress': 'destination', 'senderAddress': 'sender', 'refundAddress': 'refund'};
+    expect(quote.toQuery(), expected);
+    expect(swap.toJson(), expected);
   });
 
   test('public-only swaps omit the retired private JSON body field', () {
@@ -301,7 +288,9 @@ void main() {
       destinationAddress: 'destination',
       senderAddress: 'sender',
     );
-    expect(request.toJson().containsKey('private'), isFalse);
+    expect(request.toJson().keys, isNot(contains('private')));
+    expect(request.toJson().keys, isNot(contains('slippageTolerance')));
+    expect(request.toJson().keys, isNot(contains('streaming')));
   });
 
   test('decodes canonical private modes and preserves the warning audit trail', () {
@@ -363,25 +352,29 @@ void main() {
     expect(uris, hasLength(count));
   });
 
-  test('omits a refund address equivalent to the normalized sender', () {
-    final intent = PegarouteAddressIntent(
-      destinationAddress: ' destination ',
-      senderAddress: ' sender ',
-      refundAddress: 'sender',
-    );
-    expect(intent.refundAddress, isNull);
+  test('quote refunds still require a sender', () {
+    final request = PegarouteQuoteRequest(fromChain: 'ETH', fromToken: 'ETH',
+        toChain: 'BTC', toToken: 'BTC', amount: '1', refundAddress: 'refund');
+    expect(request.toQuery, throwsA(isA<PegarouteCodecException>()));
   });
 
-  test('does not turn a blank custom refund intent into refund-to-sender', () {
-    for (final refund in ['', '   ']) {
-      expect(
-        () => PegarouteAddressIntent(
-          destinationAddress: 'destination',
-          senderAddress: 'sender',
-          refundAddress: refund,
-        ),
-        throwsA(isA<PegarouteCodecException>()),
-      );
+  test('blank request fields cannot become omitted intent', () {
+    for (final blank in ['', '   ']) {
+      for (final create in <Object Function()>[
+        () => PegarouteQuoteRequest(fromChain: blank, fromToken: 'ETH',
+            toChain: 'BTC', toToken: 'BTC', amount: '1'),
+        () => PegarouteQuoteRequest(fromChain: 'ETH', fromToken: 'ETH',
+            toChain: 'BTC', toToken: 'BTC', amount: '1', senderAddress: 'sender', refundAddress: blank),
+        () => PegarouteSwapRequest(fromChain: 'ETH', fromToken: 'ETH',
+            toChain: 'BTC', toToken: 'BTC', amount: '1', destinationAddress: 'destination',
+            senderAddress: 'sender', refundAddress: blank),
+        () => PegarouteSwapRequest(fromChain: 'ETH', fromToken: 'ETH',
+            toChain: 'BTC', toToken: 'BTC', amount: '1', destinationAddress: blank, senderAddress: 'sender'),
+        () => PegarouteSwapRequest(fromChain: 'ETH', fromToken: 'ETH',
+            toChain: 'BTC', toToken: 'BTC', amount: '1', destinationAddress: 'destination', senderAddress: blank),
+      ]) {
+        expect(create, throwsA(isA<PegarouteCodecException>()));
+      }
     }
   });
 
