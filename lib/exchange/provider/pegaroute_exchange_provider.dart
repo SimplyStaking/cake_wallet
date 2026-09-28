@@ -20,7 +20,6 @@ import "pegaroute/pegaroute_configuration.dart";
 import "pegaroute/pegaroute_currency_mapper.dart";
 import "pegaroute/pegaroute_execution_terms.dart";
 import "pegaroute/pegaroute_provider_preferences.dart";
-import "pegaroute/pegaroute_receive_amount_estimator.dart";
 import "pegaroute/pegaroute_trade_record.dart";
 import "pegaroute/pegaroute_trade_store.dart";
 
@@ -32,8 +31,7 @@ typedef PegarouteRequest = Future<Map<String, dynamic>> Function(
 class PegaRouteExchangeProvider extends ExchangeProvider {
   PegaRouteExchangeProvider({PegarouteRequest? request, PegarouteApiClient? apiClient,
       PegarouteConfiguration? configuration, PegarouteTradeStore? store,
-      this.providerPreferences, this.decentralizedOnly,
-      this.receiveEstimatePolicy = const PegarouteReceiveEstimatePolicy(), DateTime Function()? quoteClock})
+      this.providerPreferences, this.decentralizedOnly, DateTime Function()? quoteClock})
       : _quoteClock = quoteClock ?? DateTime.now,
         apiClient = apiClient ?? PegarouteApiClient(configuration: configuration, clock: quoteClock,
           get: request == null ? null : (uri, headers) async =>
@@ -47,7 +45,6 @@ class PegaRouteExchangeProvider extends ExchangeProvider {
   final PegarouteTradeStore store;
   final PegarouteProviderPreferences? providerPreferences;
   final bool Function()? decentralizedOnly;
-  final PegarouteReceiveEstimatePolicy receiveEstimatePolicy;
   final DateTime Function() _quoteClock;
   final Map<String, String> _selectedRoutes = {};
   final Map<String, Set<String>> _tokens = {};
@@ -66,8 +63,6 @@ class PegaRouteExchangeProvider extends ExchangeProvider {
 
   @override
   bool get supportsFixedRate => false;
-
-  bool get supportsReceiveAmountEstimate => isAvailable;
 
   @override
   ExchangeProviderDescription get description => ExchangeProviderDescription.pegaRoute;
@@ -197,11 +192,9 @@ class PegaRouteExchangeProvider extends ExchangeProvider {
   @override
   Future<double> fetchRate({required CryptoCurrency from, required CryptoCurrency to,
       required double amount, required bool isFixedRateMode, required bool isReceiveAmount}) async {
-    if (!amount.isFinite || amount <= 0 || isFixedRateMode) return 0;
+    if (!amount.isFinite || amount <= 0 || isFixedRateMode || isReceiveAmount) return 0;
     try {
       final decimal = Decimal.parse(amount.toString()).toString();
-      if (isReceiveAmount) return (await estimateReceiveAmount(
-          from: from, to: to, receiveAmount: decimal)).rate;
       return fetchRateExact(from: from, to: to, amount: decimal);
     } catch (_) { return 0; }
   }
@@ -227,28 +220,6 @@ class PegaRouteExchangeProvider extends ExchangeProvider {
       }
       return 0;
     } catch (_) { return 0; }
-  }
-
-  /// A bounded forward-quote estimate, never an exact-output funding authority.
-  Future<PegarouteReceiveAmountEstimate> estimateReceiveAmount({required CryptoCurrency from,
-      required CryptoCurrency to, required String receiveAmount, String? initialSourceAmount,
-      String? maxSourceAmount, PegarouteAddressIntent? intent, PegaroutePrivateValue? privateValue}) async {
-    final source = _mapper.map(from);
-    final destination = _mapper.map(to);
-    if (!isAvailable || !PegarouteCurrencyMapper.quoteSourceChains.contains(source.chain) ||
-        !supportsPair(from, to)) throw const PegarouteUnavailableException();
-    try {
-      PegarouteAssetIdentity.validateMetadata(from);
-      PegarouteAssetIdentity.validateMetadata(to);
-    } on FormatException {
-      throw const PegarouteReceiveEstimateException(PegarouteReceiveEstimateFailure.invalidMetadata);
-    }
-    await _catalog(source, destination);
-    return PegarouteReceiveAmountEstimator(apiClient: apiClient, policy: receiveEstimatePolicy,
-        clock: _quoteClock,
-        isRouteAllowed: (route) => _enabled(route.provider) && PegarouteCapabilityGate.quote(source, route))
-        .estimate(from: from, to: to, receiveAmount: receiveAmount, initialSourceAmount: initialSourceAmount,
-            maxSourceAmount: maxSourceAmount, intent: intent, privateValue: privateValue);
   }
 
   static int _compareOutput(String a, String b) {

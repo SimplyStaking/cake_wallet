@@ -132,20 +132,15 @@ void main() {
     expect(PegarouteProviderPreferences(storage).isEnabled('instaswap'), false);
   });
 
-  test('decentralized-only limits and receive estimation include enabled Instaswap', () async {
+  test('decentralized-only quote limits include enabled Instaswap', () async {
     decentralizedOnly = true;
     await preferences.setEnabled('openocean', false);
     await preferences.setEnabled('thorchain', false);
     expect(await rate(), 12);
     expect(quoteLimits!.min, 0.005);
-    final estimate = await provider.estimateReceiveAmount(
-        from: CryptoCurrency.eth, to: CryptoCurrency.usdc, receiveAmount: '12');
-    expect(estimate.provider, 'instaswap');
     await preferences.setEnabled('instaswap', false);
     expect(await rate(), 0);
     expect(quoteLimits, isNull);
-    await expectLater(provider.estimateReceiveAmount(
-        from: CryptoCurrency.eth, to: CryptoCurrency.usdc, receiveAmount: '12'), throwsA(anything));
   });
 
   test('a provider disabled while HTTP is pending cannot supply the returned rate', () async {
@@ -220,12 +215,18 @@ void main() {
     });
   }
 
-  test('receive estimation uses the same enabled-provider choices', () async {
-    await preferences.setEnabled('instaswap', false);
-    await preferences.setEnabled('openocean', false);
-    final estimate = await provider.estimateReceiveAmount(
-        from: CryptoCurrency.eth, to: CryptoCurrency.usdc, receiveAmount: '10');
-    expect(estimate.provider, 'thorchain');
-    expect(estimate.sourceAmount.display, '1');
+  test('receive-amount requests return no rate without network access', () async {
+    final offline = PegaRouteExchangeProvider(
+      configuration: const PegarouteConfiguration(baseUrl: 'https://fixture.invalid'),
+      request: (_, __, ___, ____) async => fail('Receive requests must not use the network'),
+    );
+    expect(offline.supportsFixedRate, isFalse);
+    expect(await offline.fetchRate(from: CryptoCurrency.eth, to: CryptoCurrency.usdc,
+        amount: 1, isFixedRateMode: false, isReceiveAmount: true), 0);
+    expect(await offline.fetchRate(from: CryptoCurrency.eth, to: CryptoCurrency.usdc,
+        amount: 1, isFixedRateMode: true, isReceiveAmount: false), 0);
+    // The legacy forward-rate entry point remains available.
+    expect(await provider.fetchRate(from: CryptoCurrency.eth, to: CryptoCurrency.usdc,
+        amount: 1, isFixedRateMode: false, isReceiveAmount: false), 12);
   });
 }
