@@ -200,9 +200,8 @@ class PegarouteTradeRecord {
     PegarouteExecutionTerms.validateExecution(execution: wire, sourceChain: source,
         sourceToken: from.token, nativeToken: from.nativeToken, walletChainId: trade.chainId,
         sourceAmount: trade.amount, sourceDecimals: sourceDecimals);
-    PegarouteExecutionTerms.validatePersistedTerms(route: reviewed, execution: wire,
-        sourceChain: source, sourceAmount: trade.amount, providerDepositAddress: null,
-        providerDepositAmountExact: null, providerDepositExpiry: null);
+    PegarouteExecutionTerms.validateReviewedExecution(route: reviewed, execution: wire,
+        sourceChain: source);
     final claim = _value['attempt'];
     if (claim != null && (claim is! Map || claim.length != 2 ||
         !claim.containsKey('hash') || !_nonce(claim['id']) ||

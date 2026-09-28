@@ -1963,4 +1963,3 @@ bool _validCalldata(String? value) {
   final hex = value.substring(2);
   return hex.length.isEven && RegExp(r'^[0-9a-fA-F]+$').hasMatch(hex);
 }
-

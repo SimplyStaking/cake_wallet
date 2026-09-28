@@ -38,10 +38,23 @@ class PegarouteExecutionTerms {
         throw const PegarouteCodecException('provider deposit address changed');
       }
     }
+    validateReviewedExecution(route: route, execution: execution, sourceChain: sourceChain,
+        providerDepositAddress: details?.depositAddress);
+  }
+
+  /// Check reviewed targets, memos and spenders at creation and each store read.
+  /// API-only deposit details are checked by validateProviderDetails above.
+  static void validateReviewedExecution({
+    required Map<String, dynamic> route,
+    required PegarouteExecution execution,
+    required String sourceChain,
+    String? providerDepositAddress,
+  }) {
+    if (_trustedSolanaSerialized(route, execution)) return;
     final expectedTarget = _expectedTarget(
       route,
       execution,
-      providerDepositAddress: details?.depositAddress,
+      providerDepositAddress: providerDepositAddress,
     );
     if (expectedTarget == null ||
         execution.to == null ||
@@ -57,66 +70,6 @@ class PegarouteExecutionTerms {
       if (!(route['provider'] == 'openocean' && router == null) &&
           (router is! String || !sameAddress(sourceChain, execution.approval!.spender, router))) {
         throw const PegarouteCodecException('approval spender is not reviewed');
-      }
-    }
-  }
-
-  static void validatePersistedTerms({
-    required Map<String, dynamic> route,
-    required PegarouteExecution execution,
-    required String sourceChain,
-    required String sourceAmount,
-    required String? providerDepositAddress,
-    required String? providerDepositAmountExact,
-    required DateTime? providerDepositExpiry,
-  }) {
-    if (_trustedSolanaSerialized(route, execution)) {
-      if (providerDepositAddress != null ||
-          providerDepositAmountExact != null ||
-          providerDepositExpiry != null) {
-        throw const PegarouteCodecException('Serialized Solana order has deposit metadata');
-      }
-      return;
-    }
-    if (providerDepositAddress == null &&
-        (providerDepositAmountExact != null || providerDepositExpiry != null)) {
-      throw const PegarouteCodecException('provider deposit details are incomplete');
-    }
-    if (providerDepositAddress != null) {
-      if (execution.to == null ||
-          !sameAddress(sourceChain, execution.to!, providerDepositAddress)) {
-        throw const PegarouteCodecException('persisted provider deposit target changed');
-      }
-      final inbound = route['inboundAddress'];
-      if (inbound is String &&
-          inbound.isNotEmpty &&
-          !sameAddress(sourceChain, providerDepositAddress, inbound)) {
-        throw const PegarouteCodecException('persisted provider deposit address changed');
-      }
-    }
-    final expectedTarget = _expectedTarget(
-      route,
-      execution,
-      providerDepositAddress: providerDepositAddress,
-    );
-    if (expectedTarget == null ||
-        execution.to == null ||
-        !sameAddress(sourceChain, execution.to!, expectedTarget)) {
-      throw const PegarouteCodecException('persisted execution destination is not reviewed');
-    }
-    final routeMemo = route['memo'];
-    if ((routeMemo != null && routeMemo is! String) || execution.memo != routeMemo) {
-      throw const PegarouteCodecException('persisted execution memo is not reviewed');
-    }
-    if (providerDepositAmountExact != null &&
-        !pegarouteSameAmount(providerDepositAmountExact, sourceAmount)) {
-      throw const PegarouteCodecException('persisted provider deposit amount changed');
-    }
-    if (execution.approval != null) {
-      final router = route['router'];
-      if (!(route['provider'] == 'openocean' && router == null) &&
-          (router is! String || !sameAddress(sourceChain, execution.approval!.spender, router))) {
-        throw const PegarouteCodecException('persisted approval spender is not reviewed');
       }
     }
   }
