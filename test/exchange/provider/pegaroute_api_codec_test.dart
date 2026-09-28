@@ -222,13 +222,26 @@ void main() {
     }
   });
 
-  test('decodes nested status, refund, and streaming contracts', () {
+  test('decodes order status and refund evidence', () {
     final status = PegarouteStatusResponse.fromJson(json.decode(_fixture('status_refund.json')));
     expect(status.internalStatus, 'refunded');
     expect(status.input.refundAddress, isNotNull);
     expect(status.refund, isNull);
     expect(status.output.txHash, 'output-hash-fixture');
-    expect(status.affiliateFeeBreakdown!.pegasusNetUsd, '0.01');
+  });
+
+  test('unused status metadata does not replace order or refund fields', () {
+    final value = json.decode(_fixture('status_refund.json')) as Map<String, dynamic>;
+    const unused = ['fees', 'timestamps', 'affiliateFeeBreakdown', 'error', 'streamingProgress'];
+    for (final field in unused) { value.remove(field); }
+    expect(PegarouteStatusResponse.fromJson(value).internalStatus, 'refunded');
+    for (final field in unused) { value[field] = {'futureMetadata': true}; }
+    final status = PegarouteStatusResponse.fromJson(value);
+    expect(status.internalStatus, 'refunded');
+    expect(status.refund, isNull);
+    expect(status.output.txHash, 'output-hash-fixture');
+    value.remove('refund');
+    expect(() => PegarouteStatusResponse.fromJson(value), throwsA(isA<PegarouteCodecException>()));
   });
 
   test('preserves structured retry metadata but drops arbitrary diagnostic details', () {
@@ -598,7 +611,7 @@ void main() {
     expect(() => PegarouteQuoteResponse.fromJson(quote), throwsA(isA<PegarouteCodecException>()));
 
     final status = json.decode(_fixture('status_refund.json')) as Map<String, dynamic>;
-    (status['timestamps'] as Map<String, dynamic>)['completed'] = null;
+    (status['output'] as Map<String, dynamic>)['amount'] = null;
     expect(() => PegarouteStatusResponse.fromJson(status), throwsA(isA<PegarouteCodecException>()));
 
     final statusProvider = json.decode(_fixture('status_refund.json')) as Map<String, dynamic>;
@@ -628,22 +641,6 @@ void main() {
     expect(
       () => PegarouteStatusResponse.fromJson(snapshot),
       throwsA(isA<PegarouteCodecException>()),
-    );
-
-    expect(
-      () => PegarouteStreamingProgress.fromJson({
-        'completedSubSwaps': 1,
-        'totalSubSwaps': 2,
-        'partialRefund': null,
-      }),
-      throwsA(isA<PegarouteCodecException>()),
-    );
-    expect(
-      PegarouteStreamingProgress.fromJson({
-        'completedSubSwaps': 1,
-        'totalSubSwaps': 2,
-      }).partialRefund,
-      isNull,
     );
 
     expect(

@@ -1053,45 +1053,6 @@ class PegarouteOpenOceanDex {
   final String? dexCode;
 }
 
-class PegarouteAffiliateFeeBreakdown {
-  const PegarouteAffiliateFeeBreakdown({
-    required this.configuredPegasusShareBps,
-    required this.configuredIntegratorFeeBps,
-    required this.providerAffiliateCapBps,
-    required this.effectiveAffiliateFeeBps,
-    required this.realizedPegasusFeeBps,
-    required this.realizedIntegratorFeeBps,
-    required this.feeSource,
-    this.pegasusNetBps,
-    this.pegasusNetUsd,
-  });
-
-  factory PegarouteAffiliateFeeBreakdown.fromJson(Object? value) {
-    final map = _object(value);
-    return PegarouteAffiliateFeeBreakdown(
-      configuredPegasusShareBps: _requiredNum(map, 'configuredPegasusShareBps'),
-      configuredIntegratorFeeBps: _requiredNum(map, 'configuredIntegratorFeeBps'),
-      providerAffiliateCapBps: _requiredNum(map, 'providerAffiliateCapBps'),
-      effectiveAffiliateFeeBps: _requiredNum(map, 'effectiveAffiliateFeeBps'),
-      realizedPegasusFeeBps: _requiredNum(map, 'realizedPegasusFeeBps'),
-      realizedIntegratorFeeBps: _requiredNum(map, 'realizedIntegratorFeeBps'),
-      feeSource: _requiredString(map, 'feeSource'),
-      pegasusNetBps: _optionalNum(map, 'pegasusNetBps'),
-      pegasusNetUsd: _optionalString(map, 'pegasusNetUsd'),
-    );
-  }
-
-  final num configuredPegasusShareBps;
-  final num configuredIntegratorFeeBps;
-  final num providerAffiliateCapBps;
-  final num effectiveAffiliateFeeBps;
-  final num realizedPegasusFeeBps;
-  final num realizedIntegratorFeeBps;
-  final String feeSource;
-  final num? pegasusNetBps;
-  final String? pegasusNetUsd;
-}
-
 class PegarouteFees {
   const PegarouteFees({
     this.affiliate,
@@ -1390,37 +1351,8 @@ class PegarouteRefund {
   final String? completedAt;
 }
 
-class PegarouteStreamingProgress {
-  const PegarouteStreamingProgress({
-    required this.completedSubSwaps,
-    required this.totalSubSwaps,
-    this.lastSubSwapTimestamp,
-    this.partialOutput,
-    this.partialRefund,
-  });
-
-  factory PegarouteStreamingProgress.fromJson(Object? value) {
-    final map = _object(value);
-    final hasPartialRefund = map.containsKey('partialRefund');
-    if (hasPartialRefund && map['partialRefund'] == null) {
-      throw const PegarouteCodecException('partialRefund must be an object');
-    }
-    return PegarouteStreamingProgress(
-      completedSubSwaps: _requiredNum(map, 'completedSubSwaps'),
-      totalSubSwaps: _requiredNum(map, 'totalSubSwaps'),
-      lastSubSwapTimestamp: _optionalString(map, 'lastSubSwapTimestamp'),
-      partialOutput: _optionalString(map, 'partialOutput'),
-      partialRefund: hasPartialRefund ? _partialRefund(map['partialRefund']) : null,
-    );
-  }
-
-  final num completedSubSwaps;
-  final num totalSubSwaps;
-  final String? lastSubSwapTimestamp;
-  final String? partialOutput;
-  final Map<String, dynamic>? partialRefund;
-}
-
+// Decode only status fields used for order binding, progress, and refund display.
+// Unused service metadata cannot authorize a payment or replace refund evidence.
 class PegarouteStatusResponse {
   const PegarouteStatusResponse({
     required this.transactionId,
@@ -1428,13 +1360,8 @@ class PegarouteStatusResponse {
     required this.internalStatus,
     required this.input,
     required this.output,
-    required this.fees,
-    required this.timestamps,
     required this.route,
-    this.affiliateFeeBreakdown,
-    this.error,
     this.refund,
-    this.streamingProgress,
     this.execution,
     this.provider,
   });
@@ -1457,9 +1384,7 @@ class PegarouteStatusResponse {
     }.contains(internalStatus)) {
       throw const PegarouteCodecException('internalStatus is invalid');
     }
-    final errorValue = _requiredNullableValue(map, 'error');
     final refundValue = _requiredNullableValue(map, 'refund');
-    final progressValue = _requiredNullableValue(map, 'streamingProgress');
     final route = PegarouteRoute.fromRouteInfoJson(map['route']);
     final provider =
         map.containsKey('provider') ? PegarouteProviderInfo.fromJson(map['provider']) : null;
@@ -1472,16 +1397,8 @@ class PegarouteStatusResponse {
       internalStatus: internalStatus,
       input: PegarouteStatusInput.fromJson(map['input']),
       output: PegarouteStatusOutput.fromJson(map['output']),
-      fees: PegarouteFees.fromJson(map['fees']),
-      timestamps: PegarouteStatusTimestamps.fromJson(map['timestamps']),
       route: route,
-      affiliateFeeBreakdown: map.containsKey('affiliateFeeBreakdown')
-          ? PegarouteAffiliateFeeBreakdown.fromJson(map['affiliateFeeBreakdown'])
-          : null,
-      error: errorValue == null ? null : PegarouteApiTransactionError.fromJson(errorValue),
       refund: refundValue == null ? null : PegarouteRefund.fromJson(refundValue),
-      streamingProgress:
-          progressValue == null ? null : PegarouteStreamingProgress.fromJson(progressValue),
       execution:
           map.containsKey('execution') ? PegarouteExecution.fromJson(map['execution']) : null,
       provider: provider,
@@ -1493,39 +1410,10 @@ class PegarouteStatusResponse {
   final String internalStatus;
   final PegarouteStatusInput input;
   final PegarouteStatusOutput output;
-  final PegarouteFees fees;
-  final PegarouteStatusTimestamps timestamps;
   final PegarouteRoute route;
-  final PegarouteAffiliateFeeBreakdown? affiliateFeeBreakdown;
-  final PegarouteApiTransactionError? error;
   final PegarouteRefund? refund;
-  final PegarouteStreamingProgress? streamingProgress;
   final PegarouteExecution? execution;
   final PegarouteProviderInfo? provider;
-}
-
-class PegarouteStatusTimestamps {
-  const PegarouteStatusTimestamps({
-    required this.created,
-    this.submitted,
-    this.confirmed,
-    this.completed,
-  });
-
-  factory PegarouteStatusTimestamps.fromJson(Object? value) {
-    final map = _object(value);
-    return PegarouteStatusTimestamps(
-      created: _requiredString(map, 'created'),
-      submitted: _optionalString(map, 'submitted'),
-      confirmed: _optionalString(map, 'confirmed'),
-      completed: _optionalString(map, 'completed'),
-    );
-  }
-
-  final String created;
-  final String? submitted;
-  final String? confirmed;
-  final String? completed;
 }
 
 class PegarouteStatusInput {
@@ -1654,30 +1542,6 @@ class PegarouteCatalogToken {
 
   final String id;
   final String symbol;
-}
-
-class PegarouteApiTransactionError {
-  const PegarouteApiTransactionError({
-    required this.code,
-    required this.message,
-    required this.userMessage,
-    this.provider,
-  });
-
-  factory PegarouteApiTransactionError.fromJson(Object? value) {
-    final map = _object(value);
-    return PegarouteApiTransactionError(
-      code: _requiredString(map, 'code'),
-      message: _requiredString(map, 'message'),
-      userMessage: _requiredString(map, 'userMessage'),
-      provider: _optionalString(map, 'provider'),
-    );
-  }
-
-  final String code;
-  final String message;
-  final String userMessage;
-  final String? provider;
 }
 
 /// A one-use POST capability for this client's exact public quote intent.
@@ -2153,14 +2017,6 @@ int? _optionalInt(Map<String, dynamic> map, String key) {
   final value = map[key];
   if (value is! int) throw PegarouteCodecException('$key must be a non-null integer');
   return value;
-}
-
-Map<String, dynamic> _partialRefund(Object? value) {
-  final map = _object(value);
-  _requiredString(map, 'amount');
-  _requiredString(map, 'chain');
-  _requiredString(map, 'token');
-  return map;
 }
 
 Map<String, dynamic> _resolvedFee(Object? value) {
