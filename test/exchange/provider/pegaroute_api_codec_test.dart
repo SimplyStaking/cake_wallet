@@ -9,6 +9,7 @@ import 'package:http/http.dart' as very_insecure_http_do_not_use;
 // not funding eligibility; real provider/store/wallet callers test that seam.
 String _fixture(String name) => File('test/exchange/fixtures/pegaroute/$name').readAsStringSync();
 Map<String, dynamic> _amount() => {'display': '1', 'baseUnits': '1'};
+const _unsupportedFamilies = {'cosmos', 'sui', 'xrp', 'near', 'hypercore', 'cardano'};
 
 List<Map<String, dynamic>> _executionVariants() => [
       {
@@ -653,11 +654,21 @@ void main() {
     );
   });
 
-  test('wire execution variants round trip without granting funding capability', () {
-    for (final value in _executionVariants()) {
+  test('retained wire variants round trip without granting funding capability', () {
+    for (final value in _executionVariants().where((v) => !_unsupportedFamilies.contains(v['family']))) {
       final decoded = PegarouteExecution.fromJson(value);
       final restored = PegarouteExecution.fromJson(decoded.toJson());
-      expect(restored.toJson(), decoded.toJson());
+      expect(restored.toJson(), value);
     }
   });
+
+  for (final family in _unsupportedFamilies) {
+    test('rejects unsupported $family execution at the codec boundary', () {
+      for (final value in _executionVariants().where((v) => v['family'] == family)) {
+        expect(() => PegarouteExecution.fromJson(value), throwsA(isA<PegarouteCodecException>()));
+        expect(() => PegarouteExecution(family: family, mode: value['mode'] as String),
+            throwsA(isA<PegarouteCodecException>()));
+      }
+    });
+  }
 }

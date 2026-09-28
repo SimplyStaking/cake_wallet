@@ -521,8 +521,6 @@ class PegarouteExecution {
     PegarouteEvmApproval? approval,
     PegarouteTokenAmount? amount,
     PegarouteTokenAmount? transferAmount,
-    String? asset,
-    int? assetDecimals,
     String? serializedTransaction,
     String? encoding,
     PegarouteTokenAmount? minOut,
@@ -541,8 +539,6 @@ class PegarouteExecution {
       approval: approval,
       amount: amount,
       transferAmount: transferAmount,
-      asset: asset,
-      assetDecimals: assetDecimals,
       serializedTransaction: serializedTransaction,
       encoding: encoding,
       minOut: minOut,
@@ -565,8 +561,6 @@ class PegarouteExecution {
     this.approval,
     this.amount,
     this.transferAmount,
-    this.asset,
-    this.assetDecimals,
     this.serializedTransaction,
     this.encoding,
     this.minOut,
@@ -601,47 +595,19 @@ class PegarouteExecution {
         memo: _requiredNullableString(map, 'memo'),
         gasRate: _requiredNullableString(map, 'gasRate'),
       );
-    } else if (family == 'cosmos') {
+    } else if (family == 'solana' && mode == 'serialized-tx') {
       execution = PegarouteExecution(
         family: family,
         mode: mode,
-        to: _requiredString(map, 'to'),
-        amount: PegarouteTokenAmount.fromJson(map['amount']),
-        memo: _requiredNullableString(map, 'memo'),
-        asset: mode == 'msg-deposit' ? _requiredString(map, 'asset') : null,
-        assetDecimals: mode == 'msg-deposit' ? _requiredNonnegativeInt(map, 'assetDecimals') : null,
+        serializedTransaction: _requiredString(map, 'serializedTransaction'),
+        encoding: _requiredString(map, 'encoding'),
+        minOut: _requiredNullableTokenAmount(map, 'minOut'),
       );
-    } else if (family == 'solana' || family == 'sui') {
-      if (mode == 'serialized-tx') {
-        execution = PegarouteExecution(
-          family: family,
-          mode: mode,
-          serializedTransaction: _requiredString(map, 'serializedTransaction'),
-          encoding: family == 'solana' ? _requiredString(map, 'encoding') : null,
-          minOut: _requiredNullableTokenAmount(map, 'minOut'),
-        );
-      } else {
-        execution = PegarouteExecution(
-          family: family,
-          mode: mode,
-          to: _requiredString(map, 'to'),
-          amount: PegarouteTokenAmount.fromJson(map['amount']),
-          memo: _requiredNullableString(map, 'memo'),
-        );
-      }
-    } else if (const {'xrp', 'tron', 'near', 'hypercore', 'cardano'}.contains(family)) {
+    } else if (const {'solana', 'tron', 'other'}.contains(family)) {
       execution = PegarouteExecution(
         family: family,
         mode: mode,
-        to: _requiredString(map, 'to'),
-        amount: PegarouteTokenAmount.fromJson(map['amount']),
-        memo: _requiredNullableString(map, 'memo'),
-      );
-    } else if (family == 'other') {
-      execution = PegarouteExecution(
-        family: family,
-        mode: mode,
-        chain: _requiredString(map, 'chain'),
+        chain: family == 'other' ? _requiredString(map, 'chain') : null,
         to: _requiredString(map, 'to'),
         amount: PegarouteTokenAmount.fromJson(map['amount']),
         memo: _requiredNullableString(map, 'memo'),
@@ -665,8 +631,6 @@ class PegarouteExecution {
   final PegarouteEvmApproval? approval;
   final PegarouteTokenAmount? amount;
   final PegarouteTokenAmount? transferAmount;
-  final String? asset;
-  final int? assetDecimals;
   final String? serializedTransaction;
   final String? encoding;
   final PegarouteTokenAmount? minOut;
@@ -679,8 +643,6 @@ class PegarouteExecution {
     if (family == 'evm') {
       if (chain != null ||
           amount != null ||
-          asset != null ||
-          assetDecimals != null ||
           serializedTransaction != null ||
           minOut != null ||
           gasRate != null) {
@@ -716,33 +678,12 @@ class PegarouteExecution {
           gasLimit != null ||
           approval != null ||
           transferAmount != null ||
-          asset != null ||
-          assetDecimals != null ||
           serializedTransaction != null ||
           minOut != null) _invalid('UTXO execution fields');
       _requireTransfer();
       return;
     }
-    if (family == 'cosmos' && (mode == 'bank-send' || mode == 'msg-deposit')) {
-      if (chainId != null ||
-          chain != null ||
-          data != null ||
-          value != null ||
-          gasLimit != null ||
-          approval != null ||
-          transferAmount != null ||
-          serializedTransaction != null ||
-          minOut != null ||
-          gasRate != null) _invalid('Cosmos execution fields');
-      _requireTransfer();
-      if (mode == 'msg-deposit' &&
-          (asset == null || asset!.isEmpty || assetDecimals == null || assetDecimals! < 0)) {
-        _invalid('Cosmos deposit asset');
-      }
-      return;
-    }
-    if ((const {'solana', 'sui', 'xrp', 'tron', 'near', 'hypercore', 'cardano'}.contains(family) ||
-            family == 'other') &&
+    if (const {'solana', 'tron', 'other'}.contains(family) &&
         mode == 'deposit-transfer') {
       if (chainId != null ||
           data != null ||
@@ -750,8 +691,6 @@ class PegarouteExecution {
           gasLimit != null ||
           approval != null ||
           transferAmount != null ||
-          asset != null ||
-          assetDecimals != null ||
           serializedTransaction != null ||
           minOut != null ||
           gasRate != null ||
@@ -760,7 +699,7 @@ class PegarouteExecution {
       if (family == 'other' && (chain == null || chain!.isEmpty)) _invalid('deposit chain');
       return;
     }
-    if ((family == 'solana' || family == 'sui') && mode == 'serialized-tx') {
+    if (family == 'solana' && mode == 'serialized-tx') {
       if (chainId != null ||
           chain != null ||
           to != null ||
@@ -771,15 +710,13 @@ class PegarouteExecution {
           approval != null ||
           amount != null ||
           transferAmount != null ||
-          asset != null ||
-          assetDecimals != null ||
           gasRate != null) {
         _invalid('serialized execution fields');
       }
       if (serializedTransaction == null || serializedTransaction!.isEmpty) {
         _invalid('serialized transaction');
       }
-      if (!_validSerializedTransaction(family, serializedTransaction!, encoding)) {
+      if (!isValidPegarouteSolanaTransaction(serializedTransaction!, encoding)) {
         _invalid('serialized transaction encoding');
       }
       return;
@@ -812,30 +749,13 @@ class PegarouteExecution {
         'memo': memo,
         'gasRate': gasRate,
       },
-      if (family == 'cosmos') ...{
-        'to': to,
-        'amount': amount?.toJson(),
-        'memo': memo,
-        if (mode == 'msg-deposit') 'asset': asset,
-        if (mode == 'msg-deposit') 'assetDecimals': assetDecimals,
+      if (family == 'solana' && mode == 'serialized-tx') ...{
+        'serializedTransaction': serializedTransaction,
+        'encoding': encoding,
+        'minOut': minOut?.toJson(),
       },
-      if (family == 'solana' || family == 'sui')
-        if (mode == 'serialized-tx') ...{
-          'serializedTransaction': serializedTransaction,
-          if (family == 'solana') 'encoding': encoding,
-          'minOut': minOut?.toJson(),
-        } else ...{
-          'to': to,
-          'amount': amount?.toJson(),
-          'memo': memo,
-        },
-      if (const {'xrp', 'tron', 'near', 'hypercore', 'cardano'}.contains(family)) ...{
-        'to': to,
-        'amount': amount?.toJson(),
-        'memo': memo,
-      },
-      if (family == 'other') ...{
-        'chain': chain,
+      if (const {'solana', 'tron', 'other'}.contains(family) && mode == 'deposit-transfer') ...{
+        if (family == 'other') 'chain': chain,
         'to': to,
         'amount': amount?.toJson(),
         'memo': memo,
@@ -862,22 +782,10 @@ Set<String> _executionKeys(String family, String mode) {
   if (family == 'utxo' && mode == 'payment-with-memo') {
     return const {'family', 'mode', 'to', 'amount', 'memo', 'gasRate'};
   }
-  if (family == 'cosmos' && mode == 'bank-send') {
-    return const {'family', 'mode', 'to', 'amount', 'memo'};
+  if (family == 'solana' && mode == 'serialized-tx') {
+    return const {'family', 'mode', 'serializedTransaction', 'minOut', 'encoding'};
   }
-  if (family == 'cosmos' && mode == 'msg-deposit') {
-    return const {'family', 'mode', 'to', 'amount', 'memo', 'asset', 'assetDecimals'};
-  }
-  if ((family == 'solana' || family == 'sui') && mode == 'serialized-tx') {
-    return {
-      'family',
-      'mode',
-      'serializedTransaction',
-      'minOut',
-      if (family == 'solana') 'encoding'
-    };
-  }
-  if ((const {'solana', 'sui', 'xrp', 'tron', 'near', 'hypercore', 'cardano'}).contains(family) &&
+  if (const {'solana', 'tron'}.contains(family) &&
       mode == 'deposit-transfer') {
     return const {'family', 'mode', 'to', 'amount', 'memo'};
   }
@@ -2006,12 +1914,6 @@ int _requiredInt(Map<String, dynamic> map, String key) {
   return value;
 }
 
-int _requiredNonnegativeInt(Map<String, dynamic> map, String key) {
-  final value = _requiredInt(map, key);
-  if (value < 0) throw PegarouteCodecException('$key must be nonnegative');
-  return value;
-}
-
 int? _optionalInt(Map<String, dynamic> map, String key) {
   if (!map.containsKey(key)) return null;
   final value = map[key];
@@ -2062,10 +1964,3 @@ bool _validCalldata(String? value) {
   return hex.length.isEven && RegExp(r'^[0-9a-fA-F]+$').hasMatch(hex);
 }
 
-bool _validSerializedTransaction(String family, String value, String? encoding) {
-  if (value.trim() != value || value.isEmpty) return false;
-  if (family == 'solana') {
-    return isValidPegarouteSolanaTransaction(value, encoding);
-  }
-  return RegExp(r'^[A-Za-z0-9+/]+={0,2}$').hasMatch(value) && value.length % 4 == 0;
-}

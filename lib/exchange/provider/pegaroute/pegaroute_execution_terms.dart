@@ -207,12 +207,6 @@ class PegarouteExecutionTerms {
       throw const PegarouteCodecException('opaque execution chain changed');
     }
     _requireAmount(execution.amount, sourceAmount, expectedBaseUnits);
-    if (execution.family == 'cosmos' &&
-        sourceChain == 'THOR' &&
-        execution.mode == 'msg-deposit' &&
-        execution.asset != 'THOR.RUNE') {
-      throw const PegarouteCodecException('Cosmos asset is not bound');
-    }
   }
 
   static void _requireAmount(PegarouteTokenAmount? amount, String display, String baseUnits) {
