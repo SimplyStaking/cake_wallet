@@ -654,6 +654,39 @@ void main() {
     );
   });
 
+  test('amount constructors and decoders reject the same invalid values', () {
+    for (final pair in [('1e2', '100'), ('-1', '1'), ('01', '1'), ('1', '-1'),
+      ('1', '1.0'), ('', '1'), ('1', '')]) {
+      expect(() => PegarouteTokenAmount(display: pair.$1, baseUnits: pair.$2),
+          throwsA(isA<PegarouteCodecException>()));
+      expect(() => PegarouteTokenAmount.fromJson({'display': pair.$1, 'baseUnits': pair.$2}),
+          throwsA(isA<PegarouteCodecException>()));
+    }
+    final amount = PegarouteTokenAmount(display: '1.000000000000000001', baseUnits: '1000000000000000001');
+    final json = amount.toJson()..['display'] = '2';
+    expect(amount.display, '1.000000000000000001');
+    expect(json['display'], '2');
+  });
+
+  test('direct execution construction checks the wire fields', () {
+    final amount = PegarouteTokenAmount(display: '1', baseUnits: '1');
+    for (final create in <PegarouteExecution Function()>[
+      () => PegarouteExecution(family: 'evm', mode: 'native-transfer', chainId: 1,
+          to: 'target', value: amount, data: '0x01'),
+      () => PegarouteExecution(family: 'utxo', mode: 'payment-with-memo',
+          to: 'target', amount: amount, chainId: 1),
+      () => PegarouteExecution(family: 'solana', mode: 'serialized-tx',
+          serializedTransaction: 'invalid!', encoding: 'base64'),
+    ]) {
+      expect(create, throwsA(isA<PegarouteCodecException>()));
+    }
+    final wire = _executionVariants().first;
+    final execution = PegarouteExecution.fromJson(wire);
+    wire['data'] = '0x00';
+    execution.toJson()['data'] = '0x11';
+    expect(execution.toJson()['data'], '0xabcdef');
+  });
+
   test('Instaswap retains deposit terms and ignores unused display metadata', () {
     final value = <String, dynamic>{'txid': 'reference', 'depositAddress': 'address',
       'depositAmountExact': '1.000000000000000001', 'expiresAt': '2099-01-01T00:00:00Z',

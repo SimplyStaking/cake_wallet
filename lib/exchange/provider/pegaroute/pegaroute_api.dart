@@ -434,58 +434,38 @@ final class PegarouteSwapRequest {
   }
 }
 
-class PegarouteTokenAmount {
-  factory PegarouteTokenAmount({required String display, required String baseUnits}) {
-    final amount = PegarouteTokenAmount._(display: display, baseUnits: baseUnits);
-    amount.validate();
-    return amount;
-  }
-
-  const PegarouteTokenAmount._({required this.display, required this.baseUnits});
-
-  factory PegarouteTokenAmount.fromJson(Object? value) {
-    final map = _object(value);
-    final display = _requiredString(map, 'display');
-    final baseUnits = _requiredString(map, 'baseUnits');
-    if (!RegExp(r'^[0-9]+$').hasMatch(baseUnits)) {
-      throw const PegarouteCodecException('baseUnits must be an unsigned decimal string');
-    }
-    if (!_isDecimal(display)) throw const PegarouteCodecException('display must be decimal');
-    return PegarouteTokenAmount(display: display, baseUnits: baseUnits);
-  }
-
-  final String display;
-  final String baseUnits;
-
-  void validate() {
+/// Validate once at construction. Final value types cannot change before encoding.
+final class PegarouteTokenAmount {
+  PegarouteTokenAmount({required this.display, required this.baseUnits}) {
     if (!RegExp(r'^[0-9]+$').hasMatch(baseUnits) || !_isDecimal(display)) {
       throw const PegarouteCodecException('invalid token amount');
     }
   }
 
-  Map<String, String> toJson() {
-    validate();
-    return {'display': display, 'baseUnits': baseUnits};
+  factory PegarouteTokenAmount.fromJson(Object? value) {
+    final map = _object(value);
+    return PegarouteTokenAmount(
+      display: _requiredString(map, 'display'),
+      baseUnits: _requiredString(map, 'baseUnits'),
+    );
   }
+
+  final String display;
+  final String baseUnits;
+
+  Map<String, String> toJson() => {'display': display, 'baseUnits': baseUnits};
 }
 
-class PegarouteEvmApproval {
-  factory PegarouteEvmApproval({
-    required String spender,
-    required String tokenAddress,
-    required PegarouteTokenAmount amount,
+final class PegarouteEvmApproval {
+  PegarouteEvmApproval({
+    required this.spender,
+    required this.tokenAddress,
+    required this.amount,
   }) {
     if (spender.isEmpty || tokenAddress.isEmpty) {
       throw const PegarouteCodecException('approval addresses are required');
     }
-    return PegarouteEvmApproval._(spender: spender, tokenAddress: tokenAddress, amount: amount);
   }
-
-  const PegarouteEvmApproval._({
-    required this.spender,
-    required this.tokenAddress,
-    required this.amount,
-  });
 
   factory PegarouteEvmApproval.fromJson(Object? value) {
     final map = _object(value);
@@ -507,48 +487,8 @@ class PegarouteEvmApproval {
       };
 }
 
-class PegarouteExecution {
-  factory PegarouteExecution({
-    required String family,
-    required String mode,
-    int? chainId,
-    String? chain,
-    String? to,
-    String? data,
-    PegarouteTokenAmount? value,
-    String? gasLimit,
-    String? memo,
-    PegarouteEvmApproval? approval,
-    PegarouteTokenAmount? amount,
-    PegarouteTokenAmount? transferAmount,
-    String? serializedTransaction,
-    String? encoding,
-    PegarouteTokenAmount? minOut,
-    String? gasRate,
-  }) {
-    final execution = PegarouteExecution._(
-      family: family,
-      mode: mode,
-      chainId: chainId,
-      chain: chain,
-      to: to,
-      data: data,
-      value: value,
-      gasLimit: gasLimit,
-      memo: memo,
-      approval: approval,
-      amount: amount,
-      transferAmount: transferAmount,
-      serializedTransaction: serializedTransaction,
-      encoding: encoding,
-      minOut: minOut,
-      gasRate: gasRate,
-    );
-    execution.validate();
-    return execution;
-  }
-
-  PegarouteExecution._({
+final class PegarouteExecution {
+  PegarouteExecution({
     required this.family,
     required this.mode,
     this.chainId,
@@ -565,7 +505,9 @@ class PegarouteExecution {
     this.encoding,
     this.minOut,
     this.gasRate,
-  });
+  }) {
+    _validate();
+  }
 
   factory PegarouteExecution.fromJson(Object? value) {
     final map = _object(value);
@@ -615,7 +557,6 @@ class PegarouteExecution {
     } else {
       throw const PegarouteCodecException('unsupported execution family');
     }
-    execution.validate();
     return execution;
   }
 
@@ -636,7 +577,7 @@ class PegarouteExecution {
   final PegarouteTokenAmount? minOut;
   final String? gasRate;
 
-  void validate() {
+  void _validate() {
     if (encoding != null && (family != 'solana' || mode != 'serialized-tx')) {
       _invalid('encoding outside Solana serialized execution');
     }
@@ -729,7 +670,6 @@ class PegarouteExecution {
   }
 
   Map<String, dynamic> toJson() {
-    validate();
     return {
       'family': family,
       'mode': mode,
