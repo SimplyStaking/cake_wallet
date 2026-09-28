@@ -310,45 +310,27 @@ void main() {
     }
   });
 
-  test('binds typed private intent independently of the GET query encoding', () async {
-    final uris = <Uri>[];
+  test('requests only public quotes and rejects a private route before POST', () async {
     final client = PegarouteApiClient(
       configuration: const PegarouteConfiguration(baseUrl: 'https://example.test'),
       get: (uri, headers) async {
-        uris.add(uri);
+        expect(uri.queryParameters.keys, isNot(contains('private')));
+        expect(uri.queryParameters.keys, isNot(contains('integrationId')));
         expect(headers, isEmpty);
         return very_insecure_http_do_not_use.Response(_fixture('quote_private_zk.json'), 200);
       },
+      post: (_, __, ___) async => fail('A private route must not reach POST'),
     );
-    for (final mode in [null, false, true, 'zk', 'future-mode']) {
-      final request = PegarouteQuoteRequest(
-        fromChain: 'ETH',
-        fromToken: 'ETH',
-        toChain: 'BTC',
-        toToken: 'BTC',
-        amount: '1',
-        privateValue: mode == null ? null : PegaroutePrivateValue(mode),
-      );
-      final quote = await client.quote(request);
-      expect(uris.last.queryParameters['private'], mode?.toString());
-      expect(json.decode(quote.requestJson)['private'], mode ?? false);
-      expect(uris.last.queryParameters.containsKey('integrationId'), isFalse);
-    }
-    final count = uris.length;
-    for (final mode in ['true', 'false', ' true ', ' false ', ' zk ']) {
-      await expectLater(
-        client.quote(PegarouteQuoteRequest(
-          fromChain: 'ETH',
-          fromToken: 'ETH',
-          toChain: 'BTC',
-          toToken: 'BTC',
-          amount: '1',
-          privateValue: PegaroutePrivateValue(mode),
-        )),
-        throwsA(isA<PegarouteCodecException>()),
-      );
-    }
-    expect(uris, hasLength(count));
+    final quote = await client.quote(PegarouteQuoteRequest(fromChain: 'ETH', fromToken: 'ETH',
+        toChain: 'BTC', toToken: 'BTC', amount: '1', senderAddress: 'sender', destinationAddress: 'payout'));
+    expect(json.decode(quote.requestJson)['private'], false);
+    final route = quote.response.routes.single;
+    expect(route.privateValue!.isEnabled, true);
+    expect(() => client.preflight(quote: quote, route: route,
+        request: PegarouteSwapRequest(fromChain: 'ETH', fromToken: 'ETH', toChain: 'BTC', toToken: 'BTC',
+          amount: '1', senderAddress: 'sender', destinationAddress: 'payout',
+          quoteId: quote.response.quoteId, routeProvider: route.provider)),
+        throwsA(isA<PegarouteCodecException>()));
   });
 
   test('quote refunds still require a sender', () {

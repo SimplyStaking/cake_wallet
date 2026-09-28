@@ -150,16 +150,6 @@ final class PegaroutePrivateValue {
 
   Object toJson() => value;
 
-  String toQueryValue() {
-    // The API trims query strings, then normalizes boolean spellings. Reject
-    // string modes that cannot survive transport with their identity intact.
-    final mode = value;
-    if (mode is String && (mode != mode.trim() || mode == 'true' || mode == 'false')) {
-      throw const PegarouteCodecException(
-          'private string mode is not canonical for query transport');
-    }
-    return value.toString();
-  }
 }
 
 final class PegarouteQuoteRequest {
@@ -172,7 +162,6 @@ final class PegarouteQuoteRequest {
     String? destinationAddress,
     String? senderAddress,
     String? refundAddress,
-    this.privateValue,
   })  : fromChain = _requiredRequestId(fromChain, 'fromChain'),
         fromToken = _requiredRequestId(fromToken, 'fromToken'),
         toChain = _requiredRequestId(toChain, 'toChain'),
@@ -194,21 +183,16 @@ final class PegarouteQuoteRequest {
   final String? destinationAddress;
   final String? senderAddress;
   final String? refundAddress;
-  final PegaroutePrivateValue? privateValue;
-
-  Map<String, String> toQuery() => {
-        ..._requestQuery(
-          fromChain: fromChain,
-          fromToken: fromToken,
-          toChain: toChain,
-          toToken: toToken,
-          amount: amount,
-          destinationAddress: destinationAddress,
-          senderAddress: senderAddress,
-          refundAddress: refundAddress,
-        ),
-        if (privateValue != null) 'private': privateValue!.toQueryValue(),
-      };
+  Map<String, String> toQuery() => _requestQuery(
+        fromChain: fromChain,
+        fromToken: fromToken,
+        toChain: toChain,
+        toToken: toToken,
+        amount: amount,
+        destinationAddress: destinationAddress,
+        senderAddress: senderAddress,
+        refundAddress: refundAddress,
+      );
 }
 
 final class PegarouteSwapRequest {
@@ -1150,8 +1134,8 @@ class PegarouteApiClient {
     final query = request.toQuery();
     final requestJson = json.encode({
       ...query,
-      // Bind the canonical typed intent, not its query-string representation.
-      'private': request.privateValue?.value ?? false,
+      // Cake requests public quotes only. The returned route must also be public.
+      'private': false,
     });
     final origin = _origin;
     final response = await _get(origin.replace(path: '/quote', queryParameters: query), _headers)
