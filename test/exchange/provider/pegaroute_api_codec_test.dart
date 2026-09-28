@@ -648,10 +648,29 @@ void main() {
       () => PegarouteInstaswapSnapshot.fromJson({
         'txid': 'fixture',
         'depositAddress': 'address',
-        'feeBreakdown': null,
+        'depositAmountExact': null,
       }),
       throwsA(isA<PegarouteCodecException>()),
     );
+  });
+
+  test('Instaswap retains deposit terms and ignores unused display metadata', () {
+    final value = <String, dynamic>{'txid': 'reference', 'depositAddress': 'address',
+      'depositAmountExact': '1.000000000000000001', 'expiresAt': '2099-01-01T00:00:00Z',
+      'feeBreakdown': null, 'estimatedOut': {}, 'estimatedOutUsd': [],
+      'depositAmount': 'rounded', 'depositAmountUsd': false, 'etaSeconds': null,
+      'depositTokenSymbol': 1, 'instructions': null};
+    final snapshot = PegarouteInstaswapSnapshot.fromJson(value);
+    expect(snapshot.txid, 'reference');
+    expect(snapshot.depositAddress, 'address');
+    expect(snapshot.depositAmountExact, '1.000000000000000001');
+    expect(snapshot.expiresAt, '2099-01-01T00:00:00Z');
+    value['expiresAt'] = null;
+    expect(PegarouteInstaswapSnapshot.fromJson(value).expiresAt, isNull);
+    value.remove('expiresAt');
+    expect(PegarouteInstaswapSnapshot.fromJson(value).expiresAt, isNull);
+    value['expiresAt'] = 1;
+    expect(() => PegarouteInstaswapSnapshot.fromJson(value), throwsA(isA<PegarouteCodecException>()));
   });
 
   test('retained wire variants round trip without granting funding capability', () {

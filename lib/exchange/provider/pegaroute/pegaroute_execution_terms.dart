@@ -28,8 +28,8 @@ class PegarouteExecutionTerms {
           !sameAddress(sourceChain, execution.to!, details.depositAddress)) {
         throw const PegarouteCodecException('provider deposit target changed');
       }
-      if (details.presentFields.contains('expiresAt')) {
-        _parseOptionalDateTime(details.expiresAt, 'provider deposit expiry');
+      if (details.expiresAt != null && DateTime.tryParse(details.expiresAt!) == null) {
+        throw const PegarouteCodecException('provider deposit expiry is invalid');
       }
       final inbound = route['inboundAddress'];
       if (inbound is String &&
@@ -216,18 +216,6 @@ class PegarouteExecutionTerms {
             BigInt.parse(
                 fraction.padRight(decimals, '0').isEmpty ? '0' : fraction.padRight(decimals, '0')))
         .toString();
-  }
-
-  static DateTime _parseDateTime(String value, String field) {
-    final parsed = DateTime.tryParse(value);
-    if (parsed == null) throw PegarouteCodecException('$field is invalid');
-    return parsed.toUtc();
-  }
-
-  static DateTime? _parseOptionalDateTime(Object? value, String field) {
-    if (value == null) return null;
-    if (value is! String) throw PegarouteCodecException('$field is invalid');
-    return _parseDateTime(value, field);
   }
 
   static bool sameAddress(String chain, String first, String second) {

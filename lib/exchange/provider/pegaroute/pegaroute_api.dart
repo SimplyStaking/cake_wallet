@@ -1111,109 +1111,29 @@ final class PegarouteProviderInfo {
   }
 }
 
+/// Only deposit identity, exact amount, and expiry affect the Cake order.
 final class PegarouteInstaswapSnapshot {
-  factory PegarouteInstaswapSnapshot({
-    required String txid,
-    required String depositAddress,
-    num? estimatedOut,
-    num? estimatedOutUsd,
-    num? depositAmount,
-    String? depositAmountExact,
-    num? depositAmountUsd,
-    List<PegarouteInstaswapFeeLine>? feeBreakdown,
-    num? etaSeconds,
-    String? depositTokenSymbol,
-    String? expiresAt,
-    String? instructions,
-    Set<String>? presentFields,
-  }) =>
-      PegarouteInstaswapSnapshot._(
-        txid: txid,
-        depositAddress: depositAddress,
-        estimatedOut: estimatedOut,
-        estimatedOutUsd: estimatedOutUsd,
-        depositAmount: depositAmount,
-        depositAmountExact: depositAmountExact,
-        depositAmountUsd: depositAmountUsd,
-        feeBreakdown: feeBreakdown == null ? null : List.unmodifiable(feeBreakdown),
-        etaSeconds: etaSeconds,
-        depositTokenSymbol: depositTokenSymbol,
-        expiresAt: expiresAt,
-        instructions: instructions,
-        presentFields: Set.unmodifiable(presentFields ?? const {}),
-      );
-
   const PegarouteInstaswapSnapshot._({
     required this.txid,
     required this.depositAddress,
-    this.estimatedOut,
-    this.estimatedOutUsd,
-    this.depositAmount,
     this.depositAmountExact,
-    this.depositAmountUsd,
-    this.feeBreakdown,
-    this.etaSeconds,
-    this.depositTokenSymbol,
     this.expiresAt,
-    this.instructions,
-    required this.presentFields,
   });
 
   factory PegarouteInstaswapSnapshot.fromJson(Object? value) {
     final map = _object(value);
-    return PegarouteInstaswapSnapshot(
+    return PegarouteInstaswapSnapshot._(
       txid: _requiredString(map, 'txid'),
       depositAddress: _requiredString(map, 'depositAddress'),
-      estimatedOut: _optionalNum(map, 'estimatedOut'),
-      estimatedOutUsd: _optionalNum(map, 'estimatedOutUsd'),
-      depositAmount: _optionalNum(map, 'depositAmount'),
       depositAmountExact: _optionalString(map, 'depositAmountExact'),
-      depositAmountUsd: _optionalNum(map, 'depositAmountUsd'),
-      feeBreakdown: map.containsKey('feeBreakdown')
-          ? List.unmodifiable(_list(map, 'feeBreakdown').map(PegarouteInstaswapFeeLine.fromJson))
-          : null,
-      etaSeconds: _optionalNum(map, 'etaSeconds'),
-      depositTokenSymbol: _optionalString(map, 'depositTokenSymbol'),
       expiresAt: _optionalNullableString(map, 'expiresAt'),
-      instructions: _optionalString(map, 'instructions'),
-      presentFields: map.keys.toSet(),
     );
   }
 
   final String txid;
   final String depositAddress;
-  final num? estimatedOut;
-  final num? estimatedOutUsd;
-  final num? depositAmount;
   final String? depositAmountExact;
-  final num? depositAmountUsd;
-  final List<PegarouteInstaswapFeeLine>? feeBreakdown;
-  final num? etaSeconds;
-  final String? depositTokenSymbol;
   final String? expiresAt;
-  final String? instructions;
-  final Set<String> presentFields;
-}
-
-final class PegarouteInstaswapFeeLine {
-  const PegarouteInstaswapFeeLine({this.type, this.name, this.amountUsd, this.asset, this.amount});
-
-  factory PegarouteInstaswapFeeLine.fromJson(Object? value) {
-    final map = _object(value);
-    return PegarouteInstaswapFeeLine(
-      type: _optionalString(map, 'type'),
-      name: _optionalString(map, 'name'),
-      amountUsd: _optionalNum(map, 'amountUsd'),
-      asset: _optionalString(map, 'asset'),
-      amount: _optionalNum(map, 'amount'),
-    );
-  }
-
-  final String? type;
-  final String? name;
-  final num? amountUsd;
-  final String? asset;
-  final num? amount;
 }
 
 class PegarouteRefund {
