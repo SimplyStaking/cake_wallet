@@ -1,486 +1,423 @@
 import "dart:convert";
+import 'package:decimal/decimal.dart';
 
-import "package:cake_wallet/.secrets.g.dart" as secrets;
+import "package:collection/collection.dart";
+import "package:http/http.dart" as very_insecure_http_do_not_use;
 import "package:cake_wallet/exchange/exchange_provider_description.dart";
 import "package:cake_wallet/exchange/limits.dart";
 import "package:cake_wallet/exchange/provider/exchange_provider.dart";
 import "package:cake_wallet/exchange/trade.dart";
-import "package:cake_wallet/exchange/trade_not_found_exception.dart";
 import "package:cake_wallet/exchange/trade_request.dart";
 import "package:cake_wallet/exchange/trade_state.dart";
-import "package:cake_wallet/utils/exchange_provider_logger.dart";
 import "package:cw_core/crypto_currency.dart";
-import "package:cw_core/erc20_token.dart";
-import "package:cw_core/spl_token.dart";
-import "package:cw_core/utils/print_verbose.dart";
-import "package:cw_core/utils/proxy_wrapper.dart";
+import "package:cw_core/amount/money.dart";
+import "package:cw_core/wallet_base.dart";
+import "pegaroute/pegaroute_api.dart";
+import "pegaroute/pegaroute_amount.dart";
+import "pegaroute/pegaroute_asset_identity.dart";
+import "pegaroute/pegaroute_capability_gate.dart";
+import "pegaroute/pegaroute_configuration.dart";
+import "pegaroute/pegaroute_currency_mapper.dart";
+import "pegaroute/pegaroute_execution_terms.dart";
+import "pegaroute/pegaroute_provider_preferences.dart";
+import "pegaroute/pegaroute_receive_amount_estimator.dart";
+import "pegaroute/pegaroute_trade_record.dart";
+import "pegaroute/pegaroute_trade_store.dart";
+
+export "pegaroute/pegaroute_api.dart" show PegarouteApiError, PegarouteSwapAttemptException;
+
+typedef PegarouteRequest = Future<Map<String, dynamic>> Function(
+    String method, Uri uri, Map<String, String> headers, String? body);
 
 class PegaRouteExchangeProvider extends ExchangeProvider {
-  PegaRouteExchangeProvider();
+  PegaRouteExchangeProvider({PegarouteRequest? request, PegarouteApiClient? apiClient,
+      PegarouteConfiguration? configuration, PegarouteTradeStore? store,
+      this.providerPreferences, this.decentralizedOnly,
+      this.receiveEstimatePolicy = const PegarouteReceiveEstimatePolicy(), DateTime Function()? quoteClock})
+      : _quoteClock = quoteClock ?? DateTime.now,
+        apiClient = apiClient ?? PegarouteApiClient(configuration: configuration, clock: quoteClock,
+          get: request == null ? null : (uri, headers) async =>
+              very_insecure_http_do_not_use.Response(jsonEncode(await request('GET', uri, headers, null)), 200),
+          post: request == null ? null : (uri, headers, body) async =>
+              very_insecure_http_do_not_use.Response(jsonEncode(await request('POST', uri, headers, body)),
+                  uri.path == '/swap' ? 202 : 200)),
+        store = store ?? PegarouteTradeStore();
 
-  static const apiKey = secrets.pegaRouteApiKey;
-  static const apiBaseUrl = "api.pegaroute.com";
-  static const quotePath = "/quote";
-  static const swapPath = "/swap";
-
-  static final Map<String, String> _headers = {"X-API-Key": apiKey};
+  final PegarouteApiClient apiClient;
+  final PegarouteTradeStore store;
+  final PegarouteProviderPreferences? providerPreferences;
+  final bool Function()? decentralizedOnly;
+  final PegarouteReceiveEstimatePolicy receiveEstimatePolicy;
+  final DateTime Function() _quoteClock;
+  final Map<String, String> _selectedRoutes = {};
+  final Map<String, Set<String>> _tokens = {};
+  Set<String>? _chains;
+  bool _creating = false;
+  static const _mapper = PegarouteCurrencyMapper();
 
   @override
-  String get title => "PegaRoute";
+  String get title => "Pegaroute";
 
   @override
-  bool get isAvailable => true;
+  bool get isAvailable => apiClient.configuration.isValid;
 
   @override
-  bool get isEnabled => true;
+  bool get isEnabled => isAvailable;
 
   @override
   bool get supportsFixedRate => false;
+
+  bool get supportsReceiveAmountEstimate => isAvailable;
 
   @override
   ExchangeProviderDescription get description => ExchangeProviderDescription.pegaRoute;
 
   @override
-  Future<bool> checkIsAvailable() async => true;
+  Future<bool> checkIsAvailable() async => isAvailable;
 
-  @override
-  Future<Limits?> fetchLimits({
-    required CryptoCurrency from,
-    required CryptoCurrency to,
-    required bool isFixedRateMode,
-  }) async {
-    final params = <String, String>{
-      "fromChain": _chainFor(from),
-      "fromToken": _tokenFor(from),
-      "toChain": _chainFor(to),
-      "toToken": _tokenFor(to),
-      "amount": "1",
-    };
+  static bool allowsExternal(ExchangeProviderDescription provider) =>
+      provider != ExchangeProviderDescription.pegaRoute;
 
-    final uri = Uri.https(apiBaseUrl, quotePath, params);
-    final response = await ProxyWrapper().get(clearnetUri: uri, headers: _headers);
-    final responseJSON = json.decode(response.body) as Map<String, dynamic>;
-
-    // All routes rejected the amount as too low; the error message may carry the minimum
-    if (response.statusCode == 400) {
-      final error = responseJSON["error"] as Map<String, dynamic>?;
-      final min = _extractAmount(error?["message"] as String? ?? "");
-      return Limits(min: min ?? 0, max: null);
-    }
-
-    if (response.statusCode != 200) {
-      throw Exception("Unexpected http status: ${response.statusCode}");
-    }
-
-    final routes = responseJSON["routes"] as List<dynamic>? ?? [];
-
-    double? min;
-    if (routes.isNotEmpty) {
-      min = _toDouble((routes.first as Map<String, dynamic>)["minAmount"]);
-    }
-
-    if (min == null) {
-      final warnings = responseJSON["warnings"] as List<dynamic>? ?? [];
-      for (final warning in warnings) {
-        final warningMap = warning as Map<String, dynamic>;
-        if (warningMap["code"] == "AMOUNT_TOO_LOW") {
-          min = _extractAmount(warningMap["message"] as String? ?? "");
-          if (min != null) break;
-        }
-      }
-    }
-
-    return Limits(min: min ?? 0, max: null);
-  }
-
-  @override
-  Future<double> fetchRate({
-    required CryptoCurrency from,
-    required CryptoCurrency to,
-    required double amount,
-    required bool isFixedRateMode,
-    required bool isReceiveAmount,
-  }) async {
+  static bool supportsPair(CryptoCurrency from, CryptoCurrency to) {
     try {
-      if (amount == 0) return 0.0;
+      final source = _mapper.map(from);
+      final destination = _mapper.map(to);
+      return PegarouteCurrencyMapper.quoteSourceChains.contains(source.chain) &&
+          (source.chain != destination.chain || source.token != destination.token);
+    } catch (_) { return false; }
+  }
 
-      // PegaRoute is float-only: quotes always take the source amount
-      final params = <String, String>{
-        "fromChain": _chainFor(from),
-        "fromToken": _tokenFor(from),
-        "toChain": _chainFor(to),
-        "toToken": _tokenFor(to),
-        "amount": amount.toString(),
-      };
+  static bool supportsWallet(WalletBase wallet, CryptoCurrency currency) {
+    try { return PegarouteCapabilityGate.source(wallet, _mapper.map(currency)) &&
+        sourceBalance(wallet, currency) != null; }
+    catch (_) { return false; }
+  }
 
-      final uri = Uri.https(apiBaseUrl, quotePath, params);
-      final response = await ProxyWrapper().get(clearnetUri: uri, headers: _headers);
+  static bool sameAsset(CryptoCurrency a, CryptoCurrency b) {
+    try { return a.decimals == b.decimals && _mapper.matchesCanonicalTuple(a, _mapper.map(b)); }
+    catch (_) { return false; }
+  }
 
-      final responseJSON = json.decode(response.body) as Map<String, dynamic>;
+  static Money? sourceBalance(WalletBase wallet, CryptoCurrency currency) {
+    final asset = _mapper.map(currency);
+    Money? result;
+    for (final entry in wallet.balance.entries) {
+      if (!_mapper.matchesCanonicalTuple(entry.key, asset)) continue;
+      final available = entry.value.available;
+      if (result != null || entry.key.decimals != currency.decimals ||
+          available.currency is! CryptoCurrency ||
+          (available.currency as CryptoCurrency).decimals != currency.decimals ||
+          !_mapper.matchesCanonicalTuple(available.currency as CryptoCurrency, asset)) return null;
+      result = available;
+    }
+    return result;
+  }
 
-      if (response.statusCode != 200) {
-        final error = responseJSON["error"] as Map<String, dynamic>?;
-        final message = error?["userMessage"] as String? ?? error?["message"] as String?;
+  // All four supported providers, including Instaswap, are decentralized.
+  // Explicit preferences still apply, including after asynchronous quote work.
+  bool _enabled(String provider) =>
+      PegarouteCapabilityGate.providers.contains(provider) &&
+      (providerPreferences?.isEnabled(provider) ?? true);
 
-        ExchangeProviderLogger.logError(
-          provider: description,
-          function: "fetchRate",
-          error: Exception(message ?? "Unknown error"),
-          stackTrace: StackTrace.current,
-          requestData: {
-            "from": from.title,
-            "to": to.title,
-            "amount": amount,
-            "isFixedRateMode": isFixedRateMode,
-            "isReceiveAmount": isReceiveAmount,
-            "params": params,
-            "url": uri.toString(),
-          },
-        );
+  String _key(CryptoCurrency from, CryptoCurrency to, String amount) {
+    final source = _mapper.map(from);
+    final destination = _mapper.map(to);
+    return '${source.chain}/${source.token}/${from.decimals}/${destination.chain}/${destination.token}/${to.decimals}/$amount';
+  }
 
-        throw Exception(message);
+  Future<void> _catalog(PegarouteAssetId source, PegarouteAssetId destination) async {
+    _chains ??= (await apiClient.chains()).chains.map((chain) => chain.id).toSet();
+    for (final asset in [source, destination]) {
+      if (!_chains!.contains(asset.chain)) throw StateError('Pegaroute chain unavailable');
+      if (!_tokens.containsKey(asset.chain)) {
+        final response = await apiClient.tokens(asset.chain);
+        if (response.chain != asset.chain) throw StateError('Catalog chain changed');
+        _tokens[asset.chain] = response.tokens.map((token) => token.id).toSet();
       }
-
-      final routes = responseJSON["routes"] as List<dynamic>? ?? [];
-      if (routes.isEmpty) return 0.0;
-
-      final expectedOutput = double.tryParse(
-            (routes.first as Map<String, dynamic>)["expectedOutput"]?.toString() ?? "",
-          ) ??
-          0.0;
-      final rate = expectedOutput / amount;
-
-      ExchangeProviderLogger.logSuccess(
-        provider: description,
-        function: "fetchRate",
-        requestData: {
-          "from": from.title,
-          "to": to.title,
-          "amount": amount,
-          "isFixedRateMode": isFixedRateMode,
-          "isReceiveAmount": isReceiveAmount,
-          "params": params,
-          "url": uri.toString(),
-        },
-        responseData: {
-          "rate": rate,
-          "statusCode": response.statusCode,
-          "responseJSON": responseJSON,
-        },
-      );
-
-      return rate;
-    } catch (e, s) {
-      ExchangeProviderLogger.logError(
-        provider: description,
-        function: "fetchRate",
-        error: e,
-        stackTrace: s,
-        requestData: {
-          "from": from.title,
-          "to": to.title,
-          "amount": amount,
-          "isFixedRateMode": isFixedRateMode,
-          "isReceiveAmount": isReceiveAmount,
-        },
-      );
-      printV(e.toString());
-      printV(s.toString());
-      return 0.0;
+      if (!_tokens[asset.chain]!.contains(asset.token)) throw StateError('Pegaroute asset unavailable');
     }
   }
 
+  Future<PegarouteValidatedQuote> _quote(CryptoCurrency from, CryptoCurrency to, String amount,
+      {TradeRequest? request, String? sender}) async {
+    PegarouteAssetIdentity.validateMetadata(from);
+    PegarouteAssetIdentity.validateMetadata(to);
+    final source = _mapper.map(from);
+    final destination = _mapper.map(to);
+    await _catalog(source, destination);
+    return apiClient.quote(PegarouteQuoteRequest(fromChain: source.chain, fromToken: source.token,
+        toChain: destination.chain, toToken: destination.token, amount: amount,
+        senderAddress: sender, destinationAddress: request?.toAddress,
+        refundAddress: request?.refundAddress));
+  }
+
+  PegarouteRoute _route(PegarouteValidatedQuote quote, PegarouteAssetId source,
+      {String? selected, void Function(Limits)? onLimits}) {
+    if (!_quoteClock().isBefore(DateTime.parse(quote.response.expiresAt))) throw StateError('Quote expired');
+    final supported = quote.response.routes.where((route) =>
+        (selected == null || route.provider == selected) && _enabled(route.provider) &&
+        PegarouteCapabilityGate.quote(source, route)).toList();
+    final routes = supported.where((route) {
+          final minimum = route.minAmount;
+          if (minimum == null) return true;
+          observationAmount(minimum);
+          return _compareOutput((jsonDecode(quote.requestJson) as Map)['amount'] as String, minimum) >= 0;
+        }).toList();
+    for (final route in routes) { observationAmount(route.expectedOutput, positive: true); }
+    routes.sort((a, b) => _compareOutput(b.expectedOutput, a.expectedOutput));
+    if (routes.isEmpty) {
+      double? minimum;
+      for (final value in [
+        ...supported.map((route) => PegarouteApiError.limit(route.minAmount)),
+        ...quote.response.warnings
+            .where((warning) => warning.code == 'AMOUNT_TOO_LOW' && _enabled(warning.provider))
+            .map((warning) => PegarouteApiError.minimum(
+                {'message': warning.message, 'userMessage': warning.userMessage})),
+      ].whereType<double>()) {
+        if (minimum == null || value < minimum) minimum = value;
+      }
+      if (minimum != null) onLimits?.call(Limits(min: minimum, max: null));
+      throw StateError('No supported Pegaroute route');
+    }
+    if (routes.where((route) => route.provider == routes.first.provider).length != 1) {
+      throw StateError('Ambiguous Pegaroute route');
+    }
+    return routes.first;
+  }
+
   @override
-  Future<Trade> createTrade({
-    required TradeRequest request,
-    required bool isFixedRateMode,
-    required bool isSendAll,
-  }) async {
-    final quoteParams = <String, String>{
-      "fromChain": _chainFor(request.fromCurrency),
-      "fromToken": _tokenFor(request.fromCurrency),
-      "toChain": _chainFor(request.toCurrency),
-      "toToken": _tokenFor(request.toCurrency),
-      "amount": request.fromAmount,
-    };
+  Future<Limits?> fetchLimits({required CryptoCurrency from, required CryptoCurrency to,
+      required bool isFixedRateMode}) async {
+    if (isFixedRateMode || !supportsPair(from, to) || !isAvailable ||
+        !PegarouteCapabilityGate.providers.any(_enabled)) return null;
+    // There is no pair-wide minimum. The current amount's quote supplies limits.
+    return Limits(min: 0, max: null);
+  }
 
-    final quoteUri = Uri.https(apiBaseUrl, quotePath, quoteParams);
-    final quoteResponse = await ProxyWrapper().get(clearnetUri: quoteUri, headers: _headers);
-    final quoteJSON = json.decode(quoteResponse.body) as Map<String, dynamic>;
+  @override
+  Future<double> fetchRate({required CryptoCurrency from, required CryptoCurrency to,
+      required double amount, required bool isFixedRateMode, required bool isReceiveAmount}) async {
+    if (!amount.isFinite || amount <= 0 || isFixedRateMode) return 0;
+    try {
+      final decimal = Decimal.parse(amount.toString()).toString();
+      if (isReceiveAmount) return (await estimateReceiveAmount(
+          from: from, to: to, receiveAmount: decimal)).rate;
+      return fetchRateExact(from: from, to: to, amount: decimal);
+    } catch (_) { return 0; }
+  }
 
-    if (quoteResponse.statusCode != 200) {
-      final error = quoteJSON["error"] as Map<String, dynamic>?;
-      final errorMessage = error?["userMessage"] as String? ??
-          error?["message"] as String? ??
-          "Unexpected http status: ${quoteResponse.statusCode}";
+  Future<double> fetchRateExact({required CryptoCurrency from, required CryptoCurrency to,
+      required String amount, void Function(Limits)? onLimits}) async {
+    if (!supportsPair(from, to) || !isAvailable) return 0;
+    _selectedRoutes.remove(_key(from, to, amount));
+    if (!PegarouteCapabilityGate.providers.any(_enabled)) return 0;
+    try {
+      if (BigInt.parse(PegarouteExecutionTerms.toBaseUnits(amount, from.decimals)) <= BigInt.zero) return 0;
+      final quote = await _quote(from, to, amount);
+      final route = _route(quote, _mapper.map(from), onLimits: onLimits);
+      final rate = double.parse(route.expectedOutput) / double.parse(amount);
+      if (!rate.isFinite || rate <= 0) return 0;
+      _selectedRoutes[_key(from, to, amount)] = route.provider;
+      onLimits?.call(Limits(min: PegarouteApiError.limit(route.minAmount) ?? 0, max: null));
+      return rate;
+    } on PegarouteApiError catch (error) {
+      if (error.code == 'AMOUNT_TOO_LOW' && error.minAmount != null &&
+          error.provider != null && _enabled(error.provider!)) {
+        onLimits?.call(Limits(min: error.minAmount, max: null));
+      }
+      return 0;
+    } catch (_) { return 0; }
+  }
 
-      ExchangeProviderLogger.logError(
-        provider: description,
-        function: "createTrade",
-        error: Exception(errorMessage),
-        stackTrace: StackTrace.current,
-        requestData: {
-          "from": request.fromCurrency.title,
-          "to": request.toCurrency.title,
-          "fromAmount": request.fromAmount,
-          "toAddress": request.toAddress,
-          "refundAddress": request.refundAddress,
-          "isFixedRateMode": isFixedRateMode,
-          "isSendAll": isSendAll,
-          "params": quoteParams,
-          "url": quoteUri.toString(),
-        },
-      );
-
-      throw Exception(errorMessage);
+  /// A bounded forward-quote estimate, never an exact-output funding authority.
+  Future<PegarouteReceiveAmountEstimate> estimateReceiveAmount({required CryptoCurrency from,
+      required CryptoCurrency to, required String receiveAmount, String? initialSourceAmount,
+      String? maxSourceAmount, PegarouteAddressIntent? intent, PegaroutePrivateValue? privateValue}) async {
+    final source = _mapper.map(from);
+    final destination = _mapper.map(to);
+    if (!isAvailable || !PegarouteCurrencyMapper.quoteSourceChains.contains(source.chain) ||
+        !supportsPair(from, to)) throw const PegarouteUnavailableException();
+    try {
+      PegarouteAssetIdentity.validateMetadata(from);
+      PegarouteAssetIdentity.validateMetadata(to);
+    } on FormatException {
+      throw const PegarouteReceiveEstimateException(PegarouteReceiveEstimateFailure.invalidMetadata);
     }
+    await _catalog(source, destination);
+    return PegarouteReceiveAmountEstimator(apiClient: apiClient, policy: receiveEstimatePolicy,
+        clock: _quoteClock,
+        isRouteAllowed: (route) => _enabled(route.provider) && PegarouteCapabilityGate.quote(source, route))
+        .estimate(from: from, to: to, receiveAmount: receiveAmount, initialSourceAmount: initialSourceAmount,
+            maxSourceAmount: maxSourceAmount, intent: intent, privateValue: privateValue);
+  }
 
-    final routes = quoteJSON["routes"] as List<dynamic>? ?? [];
-    if (routes.isEmpty) throw Exception("No routes available for this pair");
+  static int _compareOutput(String a, String b) {
+    final first = a.split('.');
+    final second = b.split('.');
+    final aPlaces = first.length == 1 ? 0 : first.last.length;
+    final bPlaces = second.length == 1 ? 0 : second.last.length;
+    return (BigInt.parse(first.join()) * BigInt.from(10).pow(bPlaces))
+        .compareTo(BigInt.parse(second.join()) * BigInt.from(10).pow(aPlaces));
+  }
 
-    final route = routes.first as Map<String, dynamic>;
-    final quoteId = quoteJSON["quoteId"] as String?;
+  @override
+  Future<Trade> createTrade({required TradeRequest request, required bool isFixedRateMode,
+      required bool isSendAll}) =>
+      Future.error(StateError('Pegaroute creation requires a bound Cake wallet'));
 
-    final body = <String, dynamic>{
-      "fromChain": _chainFor(request.fromCurrency),
-      "fromToken": _tokenFor(request.fromCurrency),
-      "toChain": _chainFor(request.toCurrency),
-      "toToken": _tokenFor(request.toCurrency),
-      "amount": request.fromAmount,
-      "destinationAddress": request.toAddress,
-      "senderAddress": request.refundAddress,
-      if (quoteId != null) "quoteId": quoteId,
-      if (route["provider"] != null) "routeProvider": route["provider"],
-    };
-
-    final uri = Uri.https(apiBaseUrl, swapPath);
-    final response = await ProxyWrapper().post(
-      clearnetUri: uri,
-      headers: {..._headers, "Content-Type": "application/json"},
-      body: json.encode(body),
-    );
-
-    if (response.statusCode != 202 && response.statusCode != 200) {
-      final responseJSON = json.decode(response.body) as Map<String, dynamic>;
-      final error = responseJSON["error"] as Map<String, dynamic>?;
-      final errorMessage = error?["userMessage"] as String? ??
-          error?["message"] as String? ??
-          "Unexpected http status: ${response.statusCode}";
-
-      ExchangeProviderLogger.logError(
-        provider: description,
-        function: "createTrade",
-        error: Exception(errorMessage),
-        stackTrace: StackTrace.current,
-        requestData: {
-          "from": request.fromCurrency.title,
-          "to": request.toCurrency.title,
-          "fromAmount": request.fromAmount,
-          "toAddress": request.toAddress,
-          "refundAddress": request.refundAddress,
-          "isFixedRateMode": isFixedRateMode,
-          "isSendAll": isSendAll,
-          "body": body,
-          "url": uri.toString(),
-        },
-      );
-
-      throw Exception(errorMessage);
-    }
-
-    final responseJSON = json.decode(response.body) as Map<String, dynamic>;
-    final id = responseJSON["transactionId"] as String;
-    // Current schema: execution (chain-family payload) + provider (reference/details);
-    // txParams is the legacy shape kept as fallback during their rollout.
-    final execution = responseJSON["execution"] as Map<String, dynamic>? ?? {};
-    final providerInfo = responseJSON["provider"] as Map<String, dynamic>? ?? {};
-    final txParams = responseJSON["txParams"] as Map<String, dynamic>? ?? {};
-    final inputAddress = execution["to"] as String? ?? txParams["to"] as String?;
-    final providerId =
-        providerInfo["referenceId"] as String? ?? txParams["providerReferenceId"] as String?;
-    final details = providerInfo["details"] as Map<String, dynamic>?;
-    final instaswapSwapLite = (details?["instaswapSwapLite"] ?? txParams["instaswapSwapLite"])
-        as Map<String, dynamic>?;
-    final expiresAtRaw = instaswapSwapLite?["expiresAt"] as String?;
-    final expiredAt = expiresAtRaw != null ? DateTime.tryParse(expiresAtRaw)?.toLocal() : null;
-    final receiveAmount = route["expectedOutput"]?.toString();
-
-    ExchangeProviderLogger.logSuccess(
-      provider: description,
-      function: "createTrade",
-      requestData: {
-        "from": request.fromCurrency.title,
-        "to": request.toCurrency.title,
-        "fromAmount": request.fromAmount,
-        "toAddress": request.toAddress,
-        "refundAddress": request.refundAddress,
-        "isFixedRateMode": isFixedRateMode,
-        "isSendAll": isSendAll,
-        "body": body,
-        "url": uri.toString(),
-      },
-      responseData: {
-        "id": id,
-        "inputAddress": inputAddress,
-        "providerId": providerId,
-        "receiveAmount": receiveAmount,
-        "statusCode": response.statusCode,
-        "responseJSON": responseJSON,
-      },
-    );
-
-    return Trade(
-      id: id,
-      from: request.fromCurrency,
-      to: request.toCurrency,
-      provider: description,
-      inputAddress: inputAddress,
-      refundAddress: request.refundAddress,
-      createdAt: DateTime.now(),
-      expiredAt: expiredAt,
-      amount: request.fromAmount,
-      receiveAmount: receiveAmount ?? request.toAmount,
-      state: TradeState.created,
-      payoutAddress: request.toAddress,
-      providerId: providerId,
-      isSendAll: isSendAll,
-    );
+  Future<Trade> createBoundTrade({required TradeRequest request, required String walletId,
+      required String sender, required int? chainId, required bool isFixedRateMode,
+      required bool isSendAll, required bool Function() isCurrent}) async {
+    if (_creating) throw StateError('Pegaroute creation already in progress');
+    _creating = true;
+    try {
+      if (!supportsPair(request.fromCurrency, request.toCurrency) || isFixedRateMode ||
+          request.isFixedRate || isSendAll || request.toAddressExtraId.isNotEmpty) {
+        throw StateError('Unsupported Pegaroute request');
+      }
+      final source = _mapper.map(request.fromCurrency);
+      final destination = _mapper.map(request.toCurrency);
+      if (PegarouteExecutionTerms.chainIdFor(source.chain) != chainId) throw StateError('Wrong source chain');
+      for (final value in [walletId, sender, request.toAddress, request.refundAddress]) {
+        if (value.isEmpty || value.trim() != value) throw StateError('Incomplete bound intent');
+      }
+      if (BigInt.parse(PegarouteExecutionTerms.toBaseUnits(request.fromAmount, request.fromCurrency.decimals)) <= BigInt.zero) {
+        throw StateError('Source principal must be positive');
+      }
+      final key = _key(request.fromCurrency, request.toCurrency, request.fromAmount);
+      final selected = _selectedRoutes[key];
+      if (selected == null) throw StateError('Exact quote required before creation');
+      if (!isCurrent()) throw StateError('Wallet or quote intent changed');
+      final quote = await _quote(request.fromCurrency, request.toCurrency, request.fromAmount,
+          request: request, sender: sender);
+      final reviewed = _route(quote, source, selected: selected);
+      final preflight = apiClient.preflight(quote: quote, route: reviewed,
+          request: PegarouteSwapRequest(fromChain: source.chain, fromToken: source.token,
+              toChain: destination.chain, toToken: destination.token, amount: request.fromAmount,
+              senderAddress: sender, destinationAddress: request.toAddress,
+              refundAddress: request.refundAddress, quoteId: quote.response.quoteId, routeProvider: selected));
+      if (!isCurrent()) throw StateError('Wallet or quote intent changed');
+      // Consume before POST; a transport, validation or persistence failure is not retry permission.
+      _selectedRoutes.remove(key);
+      final result = await apiClient.swap(preflight);
+      try {
+        final response = result.response;
+        if (!result.isBoundTo(apiClient) || response.provider.name != selected ||
+            response.providerType != reviewed.providerType ||
+            !PegarouteExecutionTerms.sameRouteEcho(PegarouteExecutionTerms.routeSnapshot(reviewed),
+                response.route, response.providerType, true) ||
+            !PegarouteCapabilityGate.execution(source, response.execution, selected, chainId) ||
+            !RegExp(r'^[a-zA-Z0-9_-]+$').hasMatch(response.transactionId)) {
+          throw StateError('Created route changed');
+        }
+        PegarouteExecutionTerms.validateProviderDetails(provider: response.provider,
+            route: PegarouteExecutionTerms.routeSnapshot(reviewed), execution: response.execution,
+            sourceChain: source.chain, sourceAmount: request.fromAmount);
+        var expiry = pegarouteRouteDeadline(reviewed.expiry);
+        final depositExpiry = response.provider.instaswapSwapLite?.expiresAt;
+        if (depositExpiry != null) {
+          final parsed = DateTime.parse(depositExpiry);
+          if (expiry == null || parsed.isBefore(expiry)) expiry = parsed;
+        }
+        final trade = Trade(id: response.transactionId, provider: description, state: TradeState.created,
+            from: request.fromCurrency, to: request.toCurrency, amount: request.fromAmount,
+            receiveAmount: response.route.expectedOutput, inputAddress: response.execution.to,
+            memo: response.execution.memo, payoutAddress: request.toAddress,
+            refundAddress: request.refundAddress, walletId: walletId, fromWalletAddress: sender,
+            chainId: chainId, providerName: selected, providerId: response.provider.referenceId,
+            createdAt: DateTime.now(), expiredAt: expiry);
+        observationAmount(trade.receiveAmount, positive: true);
+        trade.routerData = PegarouteTradeRecord.create(trade, execution: response.execution, route: reviewed).encode();
+        final saved = await store.create(trade);
+        if (!isCurrent() || !_enabled(selected)) throw StateError('Order saved for previous intent; do not repay');
+        return saved;
+      } catch (error) {
+        throw PegarouteSwapAttemptException(cause: error,
+            providerTransactionId: result.response.transactionId,
+            userMessage: 'Order creation may have completed. Automatic retry is disabled.');
+      }
+    } finally { _creating = false; }
   }
 
   @override
   Future<Trade> findTradeById({required String id}) async {
-    final uri = Uri.https(apiBaseUrl, "$swapPath/$id");
-    final response = await ProxyWrapper().get(clearnetUri: uri, headers: _headers);
-
-    if (response.statusCode == 404) throw TradeNotFoundException(id, provider: description);
-
-    if (response.statusCode != 200) {
-      throw Exception("Unexpected http status: ${response.statusCode}");
+    final captured = await store.read(id);
+    final record = PegarouteTradeRecord.read(captured);
+    final response = await apiClient.status(id);
+    final input = response.input;
+    final output = response.output;
+    if (response.transactionId != id ||
+        !PegarouteExecutionTerms.sameRouteEcho(record.route, response.route, null) ||
+        input.chain != record.source || input.token != record.sourceAsset.token ||
+        output.chain != record.destination || output.token != record.destinationAsset.token ||
+        input.address == null ||
+        !PegarouteExecutionTerms.sameAddress(record.source, input.address!, captured.fromWalletAddress!) ||
+        !_sameRefund(record.source, input.refundAddress, captured.refundAddress!, captured.fromWalletAddress!) ||
+        (input.providerReferenceSupplied && input.providerReferenceId != captured.providerId) ||
+        !PegarouteExecutionTerms.sameAddress(record.destination, output.address, captured.payoutAddress!) ||
+        record.sourceUnits(input.amount) != record.sourceUnits(captured.amount)) {
+      throw StateError('Provider status does not match bound order');
     }
-
-    final responseJSON = json.decode(response.body) as Map<String, dynamic>;
-    final internalStatus =
-        responseJSON["internalStatus"] as String? ?? responseJSON["status"] as String? ?? "";
-    final input = responseJSON["input"] as Map<String, dynamic>? ?? {};
-    final output = responseJSON["output"] as Map<String, dynamic>? ?? {};
-
-    final from = _parseCurrency(input["chain"] as String?, input["token"] as String?);
-    final to = _parseCurrency(output["chain"] as String?, output["token"] as String?);
-
-    return Trade(
-      id: id,
-      from: from,
-      to: to,
-      provider: description,
-      inputAddress: input["address"] as String?,
-      amount: input["amount"]?.toString() ?? "",
-      state: _tradeState(internalStatus),
-      outputTransaction: output["txHash"] as String?,
-      receiveAmount: output["amount"]?.toString(),
-      payoutAddress: output["address"] as String?,
-    );
-  }
-
-  /// Registers the broadcasted deposit tx hash with PegaRoute
-  /// (required to start provider-side monitoring). Never throws.
-  static Future<bool> submitTxHash({required String id, required String txHash}) async {
-    try {
-      final uri = Uri.https(apiBaseUrl, "$swapPath/$id/txhash");
-      final response = await ProxyWrapper().post(
-        clearnetUri: uri,
-        headers: {..._headers, "Content-Type": "application/json"},
-        body: json.encode({"txHash": txHash}),
-      );
-
-      if (response.statusCode < 200 || response.statusCode >= 300) {
-        printV("submitTxHash failed: ${response.statusCode} ${response.body}");
-        ExchangeProviderLogger.logError(
-          provider: ExchangeProviderDescription.pegaRoute,
-          function: "submitTxHash",
-          error: Exception("Unexpected http status: ${response.statusCode}"),
-          stackTrace: StackTrace.current,
-          requestData: {"id": id, "txHash": txHash},
-        );
-        return false;
+    if (response.provider != null && (response.provider!.name != captured.providerName ||
+        response.provider!.referenceId != captured.providerId)) throw StateError('Status provider changed');
+    if (response.execution != null && !const DeepCollectionEquality().equals(
+        response.execution!.toJson(), record.execution.toJson())) throw StateError('Status execution changed');
+    for (final details in [input.instaswapSwapLite, response.provider?.instaswapSwapLite]) {
+      if (details == null) continue;
+      if (details.txid != captured.providerId || details.depositAddress != captured.inputAddress ||
+          (details.depositAmountExact != null && !pegarouteSameAmount(details.depositAmountExact!, captured.amount))) {
+        throw StateError('Status provider deposit identity changed');
       }
+    }
+    const states = {'pending': ('created', 'pending'), 'submitted': ('confirming', 'executing'),
+      'executing': ('exchanging', 'executing'), 'confirming': ('sending', 'executing'),
+      'completed': ('success', 'success'), 'failed': ('failed', 'fail'), 'refunded': ('refunded', 'fail')};
+    final state = states[response.internalStatus];
+    if (state == null || response.status != state.$2) throw StateError('Inconsistent provider status');
+    if (output.amount != null) observationAmount(output.amount);
+    if (input.txHash != null) validateHash(input.txHash!, record.source);
+    if (output.txHash != null) validateHash(output.txHash!, record.destination);
+    final refund = response.refund;
+    Map<String, dynamic>? refundObservation;
+    if (refund != null) {
+      for (final value in [refund.amount, refund.originalAmount, refund.feeDeducted]) observationAmount(value);
+      if (refund.chain != record.source || refund.refundAddress.trim().isEmpty ||
+          refund.refundAddress.length > 512) throw StateError('Invalid refund observation');
+      // The reported return destination is an observation, not a replacement for
+      // the configured refund address in the immutable creation intent.
+      if (refund.txHash != null) validateHash(refund.txHash!, record.source);
+      refundObservation = {'status': refund.status, 'chain': refund.chain, 'amount': refund.amount,
+        'originalAmount': refund.originalAmount, 'feeDeducted': refund.feeDeducted,
+        'feeDescription': refund.feeDescription, 'refundAddress': refund.refundAddress,
+        if (refund.txHash != null) 'txHash': refund.txHash,
+        if (refund.completedAt != null) 'completedAt': refund.completedAt};
+    }
+    // Provider writes reload/merge claims and approvals atomically; callers must not generic-save this result.
+    return store.observe(captured, state: state.$1, sourceHash: input.txHash,
+        outputHash: output.txHash, receiveAmount: output.amount,
+        refund: refund != null || state.$1 == 'refunded', refundObservation: refundObservation);
+  }
 
-      return true;
-    } catch (e, s) {
-      printV("submitTxHash error: $e");
-      ExchangeProviderLogger.logError(
-        provider: ExchangeProviderDescription.pegaRoute,
-        function: "submitTxHash",
-        error: e,
-        stackTrace: s,
-        requestData: {"id": id, "txHash": txHash},
-      );
-      return false;
+  static bool _sameRefund(String chain, String? observed, String configured, String sender) =>
+      observed == null
+          ? PegarouteExecutionTerms.sameAddress(chain, configured, sender)
+          : PegarouteExecutionTerms.sameAddress(chain, observed, configured);
+
+  Future<void> notifySourceHash(Trade trade, String hash) async {
+    final captured = await store.latest(trade);
+    final record = PegarouteTradeRecord.read(captured);
+    validateHash(hash, record.source);
+    if (captured.txId != hash) throw StateError('Hash is not persisted funding evidence');
+    await apiClient.notifySourceHash(captured.id, hash, chain: record.source);
+  }
+
+  static void observationAmount(Object? value, {bool positive = false}) {
+    if (value is! String || value.length > 512 ||
+        !RegExp(r'^(0|[1-9][0-9]*)(\.[0-9]+)?$').hasMatch(value) ||
+        (positive && BigInt.parse(value.replaceAll('.', '')) == BigInt.zero)) {
+      throw const FormatException('Invalid observed amount');
     }
   }
 
-  // Cake currency tags that differ from PegaRoute chain ids (GET /chains)
-  static const _chainAliases = <String, String>{
-    "ARB": "ARBITRUM",
-    "AVAXC": "AVAX",
-    "POL": "POLYGON",
-    "TRX": "TRON",
-  };
-
-  String _chainFor(CryptoCurrency currency) {
-    final chain = (currency.tag ?? currency.title).toUpperCase();
-    return _chainAliases[chain] ?? chain;
-  }
-
-  String _tokenFor(CryptoCurrency currency) {
-    // ERC-20/SPL tokens are contract-qualified ('SYMBOL-<contract>');
-    // unsupported ids simply fail server-side with UNSUPPORTED_PAIR
-    if (currency is Erc20Token)
-      return "${currency.title.toUpperCase()}-${currency.contractAddress}";
-    if (currency is SPLToken) return "${currency.title.toUpperCase()}-${currency.mintAddress}";
-    return currency.title.toUpperCase();
-  }
-
-  CryptoCurrency? _parseCurrency(String? chain, String? token) {
-    if (token == null) return null;
-    final symbol = token.split("-").first;
-    final tag = chain != null && chain.toUpperCase() != symbol.toUpperCase() ? chain : null;
-    return CryptoCurrency.safeParseCurrencyFromString(symbol, tag: tag);
-  }
-
-  TradeState _tradeState(String internalStatus) {
-    switch (internalStatus) {
-      case "pending":
-        return TradeState.created;
-      case "submitted":
-        return TradeState.confirming;
-      case "executing":
-        return TradeState.exchanging;
-      case "confirming":
-        return TradeState.sending;
-      case "completed":
-        return TradeState.success;
-      case "failed":
-        return TradeState.failed;
-      case "refunded":
-        return TradeState.refunded;
-      default:
-        return TradeState.deserialize(raw: internalStatus);
-    }
-  }
-
-  double? _extractAmount(String message) {
-    final match = RegExp(r"\d+(?:\.\d+)?").firstMatch(message);
-    return match != null ? double.tryParse(match.group(0)!) : null;
-  }
-
-  static double? _toDouble(dynamic value) {
-    if (value is int) {
-      return value.toDouble();
-    } else if (value is double) {
-      return value;
-    } else if (value is String) {
-      return double.tryParse(value);
-    }
-    return null;
-  }
+  static void validateHash(String hash, String chain) => PegarouteTradeRecord.validateHash(hash, chain);
 }
