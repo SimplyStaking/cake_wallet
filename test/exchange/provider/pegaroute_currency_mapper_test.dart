@@ -21,6 +21,23 @@ void main() {
     expect(mapper.map(CryptoCurrency.bnb).chain, 'BSC');
   });
 
+  test('all native catalog tuples retain their exact token identity', () {
+    expect(PegarouteCurrencyMapper.nativeTokenByChain, hasLength(19));
+    for (final entry in PegarouteCurrencyMapper.nativeTokenByChain.entries) {
+      final asset = mapper.validateCanonicalTuple(
+          chain: entry.key, token: entry.value, nativeToken: entry.value);
+      expect(asset.chain, entry.key);
+      expect(asset.token, entry.value);
+      expect(asset.nativeToken, entry.value);
+      expect(() => mapper.validateCanonicalTuple(
+          chain: entry.key, token: 'UNKNOWN', nativeToken: entry.value),
+          throwsA(isA<PegarouteCurrencyException>()));
+      expect(() => mapper.validateCanonicalTuple(
+          chain: entry.key, token: entry.value, nativeToken: 'UNKNOWN'),
+          throwsA(isA<PegarouteCurrencyException>()));
+    }
+  });
+
   test('preserves exact contract-qualified EVM identity', () {
     final token = Erc20Token(
       name: 'USD Coin',

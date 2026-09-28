@@ -64,87 +64,30 @@ class PegarouteCurrencyMapper {
   // Cake asset intersection target: src/catalog/pegaroute.json at v0.5.3.
   // Last review: 177d6891aada4659ca9d24cf3de8cb336ce31442; this label change
   // is not a new catalog audit. Unknown user tokens must not become request IDs.
-  static const _catalogAssets = <String>{
-    'ETH/ETH',
-    'BSC/BNB',
-    'POLYGON/POL',
-    'AVAX/AVAX',
-    'ARBITRUM/ETH',
-    'BASE/ETH',
-    'BTC/BTC',
-    'BCH/BCH',
-    'LTC/LTC',
-    'DOGE/DOGE',
-    'DASH/DASH',
-    'ZEC/ZEC',
-    'XMR/XMR',
-    'XRP/XRP',
-    'TRON/TRX',
-    'SOL/SOL',
-    'CARDANO/ADA',
-    'STELLAR/XLM',
-    'THOR/RUNE',
-    'ETH/USDC-0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48',
-    'ETH/USDT-0xdac17f958d2ee523a2206206994597c13d831ec7',
-    'ETH/DAI-0x6b175474e89094c44da98b954eedeac495271d0f',
-    'ETH/WETH-0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2',
-    'ETH/WBTC-0x2260fac5e5542a773aa44fbcfedf7c193bc2c599',
-    'ETH/APE-0x4d224452801aced8b2f0aebe155379bb5d594381',
-    'ETH/MATIC-0x7d1afa7b718fb893db30a3abc0cfc608aacfebb0',
-    'ETH/PEPE-0x6982508145454ce325ddbe47a25d4ec3d2311933',
-    'ETH/SHIB-0x95ad61b0a150d79219dcf64e1e6cc01f0b64c4ce',
-    'ETH/PAXG-0x45804880de22913dafe09f4980848ece6ecbaf78',
+  static final _catalogAssets = Set<String>.unmodifiable({
+    for (final entry in nativeTokenByChain.entries) '${entry.key}/${entry.value}',
+    ..._genericAliases.values,
     'ETH/XAUT-0x68749665ff8d2d112fa859aa293f07a622782f38',
-    'ETH/MANA-0x0f5d2fb29fb7d3cfee444a200298f468908cc942',
-    'ETH/MKR-0x9f8f72aa9304c8b593d555f12ef6589cc3a579a2',
-    'ETH/UNI-0x1f9840a85d5af5bf1d1762f925bdaddc4201f984',
-    'ETH/AAVE-0x7fc66500c84a76ad7e9c93437bfc5ac33e2ddae9',
-    'ETH/BAT-0x0d8775f648430679a709e98d2b0cb6250d2887ef',
-    'ETH/COMP-0xc00e94cb662c3520282e6f5717214004a7f26888',
-    'ETH/ENS-0xc18360217d8f7ab5e7c516566761ea12ce7f9d72',
-    'ETH/FTM-0x4e15361fd6b4bb609fa63c81a2be19d873717870',
-    'ETH/FRAX-0x853d955acef822db058eb8505911ed77f175b99e',
-    'ETH/GUSD-0x056fd409e1d7a124bd7017459dfea2f387b6d5cd',
-    'ETH/GRT-0xc944e90c64b2c07662a292be6244bdf05cda44a7',
-    'ETH/LDO-0x5a98fcbea516cf06857215779fd812ca3bef1b32',
-    'ETH/STORJ-0xb64ef51c888972c908cfacf59b47c1afbc0ab8ac',
-    'ETH/TUSD-0x0000000000085d4780b73119b644ae5ecd22b376',
-    'ETH/ZRX-0xe41d2489571d322189246dafa5ebde1f4699f498',
-    'ETH/DYDX-0x92d6c1e31e14520e676a687f0a93788b716beff5',
-    'ETH/STETH-0xae7ab96520de3a18e5e111b5eaab095312d7fe84',
-    'ETH/FLIP-0x826180541412d574cf1336d22c0c0a287822678a',
-    'ETH/CBBTC-0xcbb7c0000ab88b473b1f5afd9ef808440eed33bf',
-    'ARBITRUM/ARB-0x912ce59144191c1204e64559fe8253a0e49e6548',
-    'ARBITRUM/USDT-0xfd086bc7cd5c481dcc9c85ebe478a1c0b69fcbb9',
-    'ARBITRUM/USDC-0xaf88d065e77c8cc2239327c5edb3a432268e5831',
     'ARBITRUM/USDC.E-0xff970a61a04b1ca14834a43f5de4533ebddb5cc8',
     'ARBITRUM/WBTC-0x2f2a2543b76a4166549f7aab2e75bef0aefc5b0f',
     'ARBITRUM/WETH-0x82af49447d8a07e3bd95bd0d56f35241523fbab1',
     'ARBITRUM/DAI-0xda10009cbd5d07dd0cecc66161fc93d7c9000da1',
     'ARBITRUM/LINK-0xf97f4df75117a78c1a5a0dbb814af92458539fb4',
     'BASE/USDC-0x833589fcd6edb6e08f4c7c32d4f71b54bda02913',
-    'BASE/USDE-0x5d3a1ff2b6bab83b63cd9ad0787074081a52ef34',
     'BASE/USDT-0xfde4c96c8593536e31f229ea8f37b2ada2699bb2',
     'BASE/DAI-0x50c5725949a6f0c72e6c4a641f24049a917db0cb',
     'BASE/WBTC-0x0555e30da8f98308edb960aa94c0db47230d2b9c',
     'BASE/SPX-0x50da645f148798f68ef2d7db7c1cb22a6819bb2c',
     'BASE/WETH-0x4200000000000000000000000000000000000006',
     'BSC/USDC-0x8ac76a51cc950d9822d68b83fe1ad97b32cd580d',
-    'BSC/USDT-0x55d398326f99059ff775485246999027b3197955',
     'BSC/USDE-0x5d3a1ff2b6bab83b63cd9ad0787074081a52ef34',
     'BSC/ETH-0x2170ed0880ac9a755fd29b2688956bd959f933f8',
-    'BSC/CAKE-0x0e09fabb73bd3ade0a17ecc321fd13a19e81ce82',
     'BSC/ADA-0x3ee2200efb3400fabb9aacf31297cbdd1d435d47',
     'BSC/PEPE-0x25d887ce7a35172c62febfd67a1856f20faebb00',
     'BSC/WBNB-0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c',
-    'POLYGON/USDT-0xc2132d05d31c914a87c6611c10748aeb04b58e8f',
-    'POLYGON/USDC-0x3c499c542cef5e3811e1192ce70d8cc03d5c3359',
-    'POLYGON/USDC.E-0x2791bca1f2de4661ed88a30c99a7a9449aa84174',
     'POLYGON/DAI-0x8f3cf7ad23cd3cadbd9735aff958023239c6a063',
     'POLYGON/WBTC-0x1bfd67037b42cf73acf2047067bd4f2c47d9bfd6',
     'POLYGON/WETH-0x7ceb23fd6bc0add59e62ac25578270cff1b9f619',
-    'SOL/USDT-Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB',
-    'SOL/USDC-EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
     'SOL/BONK-DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263',
     'SOL/RAY-4k3Dyjzvzp8eMZWUXbBCjEvwSkkk59S5iCNLY3QrkX6R',
     'SOL/SOETH-2FPyTwcZLUg1MDrwsyoP4D6s1tM7hAkHYRjkNb5w6Pxk',
@@ -167,115 +110,49 @@ class PegarouteCurrencyMapper {
     'SOL/SPYX-XsoCS1TfEyfFhfvj8EtZ528L3CaKBDBRqRapnBbDF2W',
     'SOL/TSLAX-XsDoVfqeBukxuZHWhdvWHBhgEHjGNst4MLodqsJHzoB',
     'SOL/UNHX-XszvaiXGPwvk2nwb3o9C1CX4K6zH8sez11E6uyup6fe',
-  };
+  });
 
-  static const _genericAliases = <String, PegarouteAssetId>{
-    'ape': PegarouteAssetId(
-        chain: 'ETH', token: 'APE-0x4d224452801aced8b2f0aebe155379bb5d594381', nativeToken: 'ETH'),
-    'arb': PegarouteAssetId(
-        chain: 'ARBITRUM',
-        token: 'ARB-0x912ce59144191c1204e64559fe8253a0e49e6548',
-        nativeToken: 'ETH'),
-    'aave': PegarouteAssetId(
-        chain: 'ETH', token: 'AAVE-0x7fc66500c84a76ad7e9c93437bfc5ac33e2ddae9', nativeToken: 'ETH'),
-    'cake': PegarouteAssetId(
-        chain: 'BSC', token: 'CAKE-0x0e09fabb73bd3ade0a17ecc321fd13a19e81ce82', nativeToken: 'BNB'),
-    'bat': PegarouteAssetId(
-        chain: 'ETH', token: 'BAT-0x0d8775f648430679a709e98d2b0cb6250d2887ef', nativeToken: 'ETH'),
-    'cbbtc': PegarouteAssetId(
-        chain: 'ETH',
-        token: 'CBBTC-0xcbb7c0000ab88b473b1f5afd9ef808440eed33bf',
-        nativeToken: 'ETH'),
-    'comp': PegarouteAssetId(
-        chain: 'ETH', token: 'COMP-0xc00e94cb662c3520282e6f5717214004a7f26888', nativeToken: 'ETH'),
-    'dydx': PegarouteAssetId(
-        chain: 'ETH', token: 'DYDX-0x92d6c1e31e14520e676a687f0a93788b716beff5', nativeToken: 'ETH'),
-    'dai': PegarouteAssetId(
-        chain: 'ETH', token: 'DAI-0x6b175474e89094c44da98b954eedeac495271d0f', nativeToken: 'ETH'),
-    'ens': PegarouteAssetId(
-        chain: 'ETH', token: 'ENS-0xc18360217d8f7ab5e7c516566761ea12ce7f9d72', nativeToken: 'ETH'),
-    'flip': PegarouteAssetId(
-        chain: 'ETH', token: 'FLIP-0x826180541412d574cf1336d22c0c0a287822678a', nativeToken: 'ETH'),
-    'ftm': PegarouteAssetId(
-        chain: 'ETH', token: 'FTM-0x4e15361fd6b4bb609fa63c81a2be19d873717870', nativeToken: 'ETH'),
-    'frax': PegarouteAssetId(
-        chain: 'ETH', token: 'FRAX-0x853d955acef822db058eb8505911ed77f175b99e', nativeToken: 'ETH'),
-    'grt': PegarouteAssetId(
-        chain: 'ETH', token: 'GRT-0xc944e90c64b2c07662a292be6244bdf05cda44a7', nativeToken: 'ETH'),
-    'gusd': PegarouteAssetId(
-        chain: 'ETH', token: 'GUSD-0x056fd409e1d7a124bd7017459dfea2f387b6d5cd', nativeToken: 'ETH'),
-    'ldo': PegarouteAssetId(
-        chain: 'ETH', token: 'LDO-0x5a98fcbea516cf06857215779fd812ca3bef1b32', nativeToken: 'ETH'),
-    'mana': PegarouteAssetId(
-        chain: 'ETH', token: 'MANA-0x0f5d2fb29fb7d3cfee444a200298f468908cc942', nativeToken: 'ETH'),
-    'mkr': PegarouteAssetId(
-        chain: 'ETH', token: 'MKR-0x9f8f72aa9304c8b593d555f12ef6589cc3a579a2', nativeToken: 'ETH'),
-    'matic': PegarouteAssetId(
-        chain: 'ETH',
-        token: 'MATIC-0x7d1afa7b718fb893db30a3abc0cfc608aacfebb0',
-        nativeToken: 'ETH'),
-    'paxg': PegarouteAssetId(
-        chain: 'ETH', token: 'PAXG-0x45804880de22913dafe09f4980848ece6ecbaf78', nativeToken: 'ETH'),
-    'pepe': PegarouteAssetId(
-        chain: 'ETH', token: 'PEPE-0x6982508145454ce325ddbe47a25d4ec3d2311933', nativeToken: 'ETH'),
-    'steth': PegarouteAssetId(
-        chain: 'ETH',
-        token: 'STETH-0xae7ab96520de3a18e5e111b5eaab095312d7fe84',
-        nativeToken: 'ETH'),
-    'shib': PegarouteAssetId(
-        chain: 'ETH', token: 'SHIB-0x95ad61b0a150d79219dcf64e1e6cc01f0b64c4ce', nativeToken: 'ETH'),
-    'storj': PegarouteAssetId(
-        chain: 'ETH',
-        token: 'STORJ-0xb64ef51c888972c908cfacf59b47c1afbc0ab8ac',
-        nativeToken: 'ETH'),
-    'tusd': PegarouteAssetId(
-        chain: 'ETH', token: 'TUSD-0x0000000000085d4780b73119b644ae5ecd22b376', nativeToken: 'ETH'),
-    'uni': PegarouteAssetId(
-        chain: 'ETH', token: 'UNI-0x1f9840a85d5af5bf1d1762f925bdaddc4201f984', nativeToken: 'ETH'),
-    'zrx': PegarouteAssetId(
-        chain: 'ETH', token: 'ZRX-0xe41d2489571d322189246dafa5ebde1f4699f498', nativeToken: 'ETH'),
-    'usdc': PegarouteAssetId(
-        chain: 'ETH', token: 'USDC-0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48', nativeToken: 'ETH'),
-    'usdcsol': PegarouteAssetId(
-        chain: 'SOL',
-        token: 'USDC-EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
-        nativeToken: 'SOL'),
-    'usdcpoly': PegarouteAssetId(
-        chain: 'POLYGON',
-        token: 'USDC-0x3c499c542cef5e3811e1192ce70d8cc03d5c3359',
-        nativeToken: 'POL'),
-    'usdcepoly': PegarouteAssetId(
-        chain: 'POLYGON',
-        token: 'USDC.E-0x2791bca1f2de4661ed88a30c99a7a9449aa84174',
-        nativeToken: 'POL'),
-    'usdcarb': PegarouteAssetId(
-        chain: 'ARBITRUM',
-        token: 'USDC-0xaf88d065e77c8cc2239327c5edb3a432268e5831',
-        nativeToken: 'ETH'),
-    'usde': PegarouteAssetId(
-        chain: 'BASE',
-        token: 'USDE-0x5d3a1ff2b6bab83b63cd9ad0787074081a52ef34',
-        nativeToken: 'ETH'),
-    'usdtarb': PegarouteAssetId(
-        chain: 'ARBITRUM',
-        token: 'USDT-0xfd086bc7cd5c481dcc9c85ebe478a1c0b69fcbb9',
-        nativeToken: 'ETH'),
-    'usdtbsc': PegarouteAssetId(
-        chain: 'BSC', token: 'USDT-0x55d398326f99059ff775485246999027b3197955', nativeToken: 'BNB'),
-    'usdterc20': PegarouteAssetId(
-        chain: 'ETH', token: 'USDT-0xdac17f958d2ee523a2206206994597c13d831ec7', nativeToken: 'ETH'),
-    'usdtpoly': PegarouteAssetId(
-        chain: 'POLYGON',
-        token: 'USDT-0xc2132d05d31c914a87c6611c10748aeb04b58e8f',
-        nativeToken: 'POL'),
-    'usdtsol': PegarouteAssetId(
-        chain: 'SOL',
-        token: 'USDT-Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB',
-        nativeToken: 'SOL'),
-    'wbtc': PegarouteAssetId(
-        chain: 'ETH', token: 'WBTC-0x2260fac5e5542a773aa44fbcfedf7c193bc2c599', nativeToken: 'ETH'),
-    'weth': PegarouteAssetId(
-        chain: 'ETH', token: 'WETH-0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2', nativeToken: 'ETH'),
+  static const _genericAliases = <String, String>{
+    'ape': 'ETH/APE-0x4d224452801aced8b2f0aebe155379bb5d594381',
+    'arb': 'ARBITRUM/ARB-0x912ce59144191c1204e64559fe8253a0e49e6548',
+    'aave': 'ETH/AAVE-0x7fc66500c84a76ad7e9c93437bfc5ac33e2ddae9',
+    'cake': 'BSC/CAKE-0x0e09fabb73bd3ade0a17ecc321fd13a19e81ce82',
+    'bat': 'ETH/BAT-0x0d8775f648430679a709e98d2b0cb6250d2887ef',
+    'cbbtc': 'ETH/CBBTC-0xcbb7c0000ab88b473b1f5afd9ef808440eed33bf',
+    'comp': 'ETH/COMP-0xc00e94cb662c3520282e6f5717214004a7f26888',
+    'dydx': 'ETH/DYDX-0x92d6c1e31e14520e676a687f0a93788b716beff5',
+    'dai': 'ETH/DAI-0x6b175474e89094c44da98b954eedeac495271d0f',
+    'ens': 'ETH/ENS-0xc18360217d8f7ab5e7c516566761ea12ce7f9d72',
+    'flip': 'ETH/FLIP-0x826180541412d574cf1336d22c0c0a287822678a',
+    'ftm': 'ETH/FTM-0x4e15361fd6b4bb609fa63c81a2be19d873717870',
+    'frax': 'ETH/FRAX-0x853d955acef822db058eb8505911ed77f175b99e',
+    'grt': 'ETH/GRT-0xc944e90c64b2c07662a292be6244bdf05cda44a7',
+    'gusd': 'ETH/GUSD-0x056fd409e1d7a124bd7017459dfea2f387b6d5cd',
+    'ldo': 'ETH/LDO-0x5a98fcbea516cf06857215779fd812ca3bef1b32',
+    'mana': 'ETH/MANA-0x0f5d2fb29fb7d3cfee444a200298f468908cc942',
+    'mkr': 'ETH/MKR-0x9f8f72aa9304c8b593d555f12ef6589cc3a579a2',
+    'matic': 'ETH/MATIC-0x7d1afa7b718fb893db30a3abc0cfc608aacfebb0',
+    'paxg': 'ETH/PAXG-0x45804880de22913dafe09f4980848ece6ecbaf78',
+    'pepe': 'ETH/PEPE-0x6982508145454ce325ddbe47a25d4ec3d2311933',
+    'steth': 'ETH/STETH-0xae7ab96520de3a18e5e111b5eaab095312d7fe84',
+    'shib': 'ETH/SHIB-0x95ad61b0a150d79219dcf64e1e6cc01f0b64c4ce',
+    'storj': 'ETH/STORJ-0xb64ef51c888972c908cfacf59b47c1afbc0ab8ac',
+    'tusd': 'ETH/TUSD-0x0000000000085d4780b73119b644ae5ecd22b376',
+    'uni': 'ETH/UNI-0x1f9840a85d5af5bf1d1762f925bdaddc4201f984',
+    'zrx': 'ETH/ZRX-0xe41d2489571d322189246dafa5ebde1f4699f498',
+    'usdc': 'ETH/USDC-0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48',
+    'usdcsol': 'SOL/USDC-EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
+    'usdcpoly': 'POLYGON/USDC-0x3c499c542cef5e3811e1192ce70d8cc03d5c3359',
+    'usdcepoly': 'POLYGON/USDC.E-0x2791bca1f2de4661ed88a30c99a7a9449aa84174',
+    'usdcarb': 'ARBITRUM/USDC-0xaf88d065e77c8cc2239327c5edb3a432268e5831',
+    'usde': 'BASE/USDE-0x5d3a1ff2b6bab83b63cd9ad0787074081a52ef34',
+    'usdtarb': 'ARBITRUM/USDT-0xfd086bc7cd5c481dcc9c85ebe478a1c0b69fcbb9',
+    'usdtbsc': 'BSC/USDT-0x55d398326f99059ff775485246999027b3197955',
+    'usdterc20': 'ETH/USDT-0xdac17f958d2ee523a2206206994597c13d831ec7',
+    'usdtpoly': 'POLYGON/USDT-0xc2132d05d31c914a87c6611c10748aeb04b58e8f',
+    'usdtsol': 'SOL/USDT-Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB',
+    'wbtc': 'ETH/WBTC-0x2260fac5e5542a773aa44fbcfedf7c193bc2c599',
+    'weth': 'ETH/WETH-0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2',
   };
 
   static String nativeTokenForChain(String chain) {
@@ -305,7 +182,11 @@ class PegarouteCurrencyMapper {
     if (native != null) return _catalogAsset(native);
 
     final alias = _genericAliases[currency.name];
-    if (alias != null) return _catalogAsset(alias);
+    if (alias != null) {
+      final parts = alias.split('/');
+      return validateCanonicalTuple(chain: parts[0], token: parts[1],
+          nativeToken: nativeTokenForChain(parts[0]));
+    }
 
     throw PegarouteCurrencyException('${currency.title}/${currency.tag ?? ''}');
   }
@@ -382,7 +263,7 @@ class PegarouteCurrencyMapper {
     final asset = PegarouteAssetId(
       chain: chain,
       token: '${symbol.toUpperCase()}-${contract.toLowerCase()}',
-      nativeToken: _nativeForChain(chain),
+      nativeToken: nativeTokenForChain(chain),
     );
     return _catalogAsset(asset);
   }
@@ -453,10 +334,6 @@ class PegarouteCurrencyMapper {
         !RegExp(r'^0x[0-9a-f]{40}$').hasMatch(asset.token.substring(separator + 1))) {
       throw const PegarouteCurrencyException('invalid qualified EVM token');
     }
-  }
-
-  String _nativeForChain(String chain) {
-    return nativeTokenForChain(chain);
   }
 
   static const _chainAliases = {
