@@ -196,6 +196,27 @@ void main() {
     );
   });
 
+  test('direct route constructors copy mutable inputs before retaining them', () {
+    final fields = {'provider'};
+    final nested = [1];
+    final fees = <String, dynamic>{'feeBps': 1, 'nested': nested};
+    final dexes = [const PegarouteOpenOceanDex(dexId: 1, dexCode: 'fixture')];
+    final route = PegarouteRoute(provider: 'openocean', expectedOutput: '1',
+        resolvedFee: fees, presentFields: fields, openOceanRoute: PegarouteOpenOceanRoute(dexes: dexes));
+    final provider = PegarouteProviderInfo(name: 'openocean', details: {'nested': nested});
+    fields.clear();
+    fees.clear();
+    nested.clear();
+    dexes.clear();
+    expect(route.presentFields, {'provider'});
+    expect(route.resolvedFee, {'feeBps': 1, 'nested': [1]});
+    expect(route.openOceanRoute!.dexes!.single.dexId, 1);
+    expect(provider.details, {'nested': [1]});
+    expect(() => route.presentFields.clear(), throwsUnsupportedError);
+    expect(() => route.openOceanRoute!.dexes!.clear(), throwsUnsupportedError);
+    expect(() => ((provider.details as Map)['nested'] as List).clear(), throwsUnsupportedError);
+  });
+
   test('Solana serialized execution requires and preserves its encoding label', () {
     final value = _executionVariants().firstWhere((value) => value['family'] == 'solana');
     final execution = PegarouteExecution.fromJson(value);

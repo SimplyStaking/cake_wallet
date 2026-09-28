@@ -551,44 +551,7 @@ Set<String> _executionKeys(String family, String mode) {
 }
 
 final class PegarouteRoute {
-  factory PegarouteRoute({
-    required String provider,
-    required String expectedOutput,
-    String? providerType,
-    String? subprovider,
-    PegaroutePrivateValue? privateValue,
-    String? memo,
-    String? inboundAddress,
-    String? router,
-    String? minAmount,
-    num? estimatedTimeSeconds,
-    PegarouteFees? fees,
-    Object? expiry,
-    String? gasRate,
-    Map<String, dynamic>? resolvedFee,
-    PegarouteOpenOceanRoute? openOceanRoute,
-    Set<String>? presentFields,
-  }) =>
-      PegarouteRoute._(
-        provider: provider,
-        expectedOutput: expectedOutput,
-        providerType: providerType,
-        subprovider: subprovider,
-        privateValue: privateValue,
-        memo: memo,
-        inboundAddress: inboundAddress,
-        router: router,
-        minAmount: minAmount,
-        estimatedTimeSeconds: estimatedTimeSeconds,
-        fees: fees,
-        expiry: expiry,
-        gasRate: gasRate,
-        resolvedFee: resolvedFee == null ? null : _freezeJsonMap(resolvedFee),
-        openOceanRoute: openOceanRoute,
-        presentFields: Set.unmodifiable(presentFields ?? const {}),
-      );
-
-  const PegarouteRoute._({
+  PegarouteRoute({
     required this.provider,
     required this.expectedOutput,
     this.providerType,
@@ -602,10 +565,11 @@ final class PegarouteRoute {
     this.fees,
     this.expiry,
     this.gasRate,
-    this.resolvedFee,
+    Map<String, dynamic>? resolvedFee,
     this.openOceanRoute,
-    required this.presentFields,
-  });
+    Set<String>? presentFields,
+  }) : resolvedFee = resolvedFee == null ? null : _freezeJsonMap(resolvedFee),
+       presentFields = Set.unmodifiable(presentFields ?? const {});
 
   factory PegarouteRoute.fromJson(Object? value) {
     final map = _object(value);
@@ -669,18 +633,8 @@ final class PegarouteRoute {
 }
 
 final class PegarouteOpenOceanRoute {
-  factory PegarouteOpenOceanRoute({
-    int? dexId,
-    String? dexCode,
-    List<PegarouteOpenOceanDex>? dexes,
-  }) =>
-      PegarouteOpenOceanRoute._(
-        dexId: dexId,
-        dexCode: dexCode,
-        dexes: dexes == null ? null : List.unmodifiable(dexes),
-      );
-
-  const PegarouteOpenOceanRoute._({this.dexId, this.dexCode, this.dexes});
+  PegarouteOpenOceanRoute({this.dexId, this.dexCode, List<PegarouteOpenOceanDex>? dexes})
+      : dexes = dexes == null ? null : List.unmodifiable(dexes);
 
   factory PegarouteOpenOceanRoute.fromJson(Object? value) {
     final map = _object(value);
@@ -774,25 +728,13 @@ class PegarouteWarning {
 }
 
 final class PegarouteQuoteResponse {
-  factory PegarouteQuoteResponse({
-    required String quoteId,
-    required String expiresAt,
-    required List<PegarouteRoute> routes,
-    required List<PegarouteWarning> warnings,
-  }) =>
-      PegarouteQuoteResponse._(
-        quoteId: quoteId,
-        expiresAt: expiresAt,
-        routes: List.unmodifiable(routes),
-        warnings: List.unmodifiable(warnings),
-      );
-
-  const PegarouteQuoteResponse._({
+  PegarouteQuoteResponse({
     required this.quoteId,
     required this.expiresAt,
-    required this.routes,
-    required this.warnings,
-  });
+    required List<PegarouteRoute> routes,
+    required List<PegarouteWarning> warnings,
+  }) : routes = List.unmodifiable(routes),
+       warnings = List.unmodifiable(warnings);
 
   factory PegarouteQuoteResponse.fromJson(Object? value) {
     final map = _object(value);
@@ -837,22 +779,15 @@ final class PegarouteValidatedQuote {
 }
 
 final class PegarouteProviderInfo {
-  factory PegarouteProviderInfo({required String name, String? referenceId, Object? details}) =>
-      PegarouteProviderInfo._(
-        name: name,
-        referenceId: referenceId,
-        details: details == null ? null : _freezeJsonValue(details),
-      );
-
-  const PegarouteProviderInfo._({required this.name, this.referenceId, this.details});
+  PegarouteProviderInfo({required this.name, this.referenceId, Object? details})
+      : details = _freezeJsonValue(details);
 
   factory PegarouteProviderInfo.fromJson(Object? value) {
     final map = _object(value);
-    final details = map['details'];
     return PegarouteProviderInfo(
       name: _requiredString(map, 'name'),
       referenceId: _requiredNullableString(map, 'referenceId'),
-      details: details == null ? null : _freezeJsonValue(details),
+      details: map['details'],
     );
   }
 
