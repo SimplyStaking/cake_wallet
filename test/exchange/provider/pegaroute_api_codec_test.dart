@@ -451,6 +451,27 @@ void main() {
     expect(calls, ['/quote?fromChain=ETH&fromToken=ETH&toChain=BTC&toToken=BTC&amount=1']);
   });
 
+  test('catalog reads keep exact IDs and reject invalid identity fields', () async {
+    Map<String, dynamic> body = {'chains': [{'id': 'ETH'}, {'id': 'ETH'}]};
+    final client = PegarouteApiClient(
+      configuration: const PegarouteConfiguration(baseUrl: 'https://example.test'),
+      get: (_, __) async => very_insecure_http_do_not_use.Response(json.encode(body), 200),
+    );
+    final chains = await client.chains();
+    expect(chains, {'ETH'});
+    expect(() => chains.add('BSC'), throwsUnsupportedError);
+    const mint = 'USDC-EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
+    body = {'chain': 'SOL', 'tokens': [{'id': mint, 'symbol': null}]};
+    expect(await client.tokens('SOL'), {mint});
+    await expectLater(client.tokens('ETH'), throwsA(isA<PegarouteCodecException>()));
+    for (final item in [{}, {'id': ''}, {'id': 1}]) {
+      body = {'chains': [item]};
+      await expectLater(client.chains(), throwsA(isA<PegarouteCodecException>()));
+      body = {'chain': 'ETH', 'tokens': [item]};
+      await expectLater(client.tokens('ETH'), throwsA(isA<PegarouteCodecException>()));
+    }
+  });
+
   test('rejects unknown execution modes', () {
     final value = json.decode(_fixture('swap.json')) as Map<String, dynamic>;
     (value['execution'] as Map<String, dynamic>)['mode'] = 'future-mode';

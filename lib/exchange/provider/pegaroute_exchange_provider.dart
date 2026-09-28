@@ -120,14 +120,10 @@ class PegaRouteExchangeProvider extends ExchangeProvider {
   }
 
   Future<void> _catalog(PegarouteAssetId source, PegarouteAssetId destination) async {
-    _chains ??= (await apiClient.chains()).chains.map((chain) => chain.id).toSet();
+    _chains ??= await apiClient.chains();
     for (final asset in [source, destination]) {
       if (!_chains!.contains(asset.chain)) throw StateError('Pegaroute chain unavailable');
-      if (!_tokens.containsKey(asset.chain)) {
-        final response = await apiClient.tokens(asset.chain);
-        if (response.chain != asset.chain) throw StateError('Catalog chain changed');
-        _tokens[asset.chain] = response.tokens.map((token) => token.id).toSet();
-      }
+      _tokens[asset.chain] ??= await apiClient.tokens(asset.chain);
       if (!_tokens[asset.chain]!.contains(asset.token)) throw StateError('Pegaroute asset unavailable');
     }
   }

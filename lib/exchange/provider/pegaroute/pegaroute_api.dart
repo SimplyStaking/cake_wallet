@@ -1116,66 +1116,6 @@ class PegarouteStatusOutput {
   final String? txHash;
 }
 
-class PegarouteCatalogResponse {
-  const PegarouteCatalogResponse(this.chains);
-
-  factory PegarouteCatalogResponse.fromJson(Object? value) {
-    final map = _object(value);
-    return PegarouteCatalogResponse(
-      _list(map, 'chains').map(PegarouteCatalogChain.fromJson).toList(),
-    );
-  }
-
-  final List<PegarouteCatalogChain> chains;
-}
-
-class PegarouteCatalogChain {
-  const PegarouteCatalogChain({required this.id, required this.name, this.chainId});
-
-  factory PegarouteCatalogChain.fromJson(Object? value) {
-    final map = _object(value);
-    return PegarouteCatalogChain(
-      id: _requiredString(map, 'id'),
-      name: _requiredString(map, 'name'),
-      chainId: _requiredNullableInt(map, 'chainId'),
-    );
-  }
-
-  final String id;
-  final String name;
-  final int? chainId;
-}
-
-class PegarouteTokenCatalogResponse {
-  const PegarouteTokenCatalogResponse({required this.chain, required this.tokens});
-
-  factory PegarouteTokenCatalogResponse.fromJson(Object? value) {
-    final map = _object(value);
-    return PegarouteTokenCatalogResponse(
-      chain: _requiredString(map, 'chain'),
-      tokens: _list(map, 'tokens').map(PegarouteCatalogToken.fromJson).toList(),
-    );
-  }
-
-  final String chain;
-  final List<PegarouteCatalogToken> tokens;
-}
-
-class PegarouteCatalogToken {
-  const PegarouteCatalogToken({required this.id, required this.symbol});
-
-  factory PegarouteCatalogToken.fromJson(Object? value) {
-    final map = _object(value);
-    return PegarouteCatalogToken(
-      id: _requiredString(map, 'id'),
-      symbol: _requiredString(map, 'symbol'),
-    );
-  }
-
-  final String id;
-  final String symbol;
-}
-
 /// A one-use POST capability for this client's exact public quote intent.
 /// Wallet intent belongs to the provider's creation context, not TradeRequest.
 final class PegarouteValidatedSwapPreflight {
@@ -1258,16 +1198,22 @@ class PegarouteApiClient {
     );
   }
 
-  Future<PegarouteCatalogResponse> chains() async {
+  Future<Set<String>> chains() async {
     final response = await _get(_uri('/chains'), _headers).timeout(readTimeout);
-    return _decode(response, PegarouteCatalogResponse.fromJson, expectedStatus: 200);
+    return _decode(response, (value) => _catalogIds(_object(value), 'chains'), expectedStatus: 200);
   }
 
-  Future<PegarouteTokenCatalogResponse> tokens(String chain) async {
+  Future<Set<String>> tokens(String chain) async {
     final normalized = chain.trim();
     if (normalized.isEmpty) throw const PegarouteCodecException('chain must not be blank');
     final response = await _get(_uri('/tokens', {'chain': normalized}), _headers).timeout(readTimeout);
-    return _decode(response, PegarouteTokenCatalogResponse.fromJson, expectedStatus: 200);
+    return _decode(response, (value) {
+      final map = _object(value);
+      if (_requiredString(map, 'chain') != normalized) {
+        throw const PegarouteCodecException('Catalog chain changed');
+      }
+      return _catalogIds(map, 'tokens');
+    }, expectedStatus: 200);
   }
 
   Future<PegarouteStatusResponse> status(String id) async {
@@ -1512,6 +1458,9 @@ void _rejectUnknown(Map<String, dynamic> map, Set<String> allowed) {
   }
 }
 
+Set<String> _catalogIds(Map<String, dynamic> map, String key) =>
+    Set.unmodifiable(_list(map, key).map((value) => _requiredString(_object(value), 'id')));
+
 List<dynamic> _list(Map<String, dynamic> map, String key) {
   if (map[key] is! List) throw PegarouteCodecException('$key must be an array');
   return map[key] as List<dynamic>;
@@ -1586,14 +1535,6 @@ String? _optionalNullableString(Map<String, dynamic> map, String key) {
 String? _requiredNullableString(Map<String, dynamic> map, String key) {
   if (!map.containsKey(key)) throw PegarouteCodecException('$key is required');
   return _optionalNullableString(map, key);
-}
-
-int? _requiredNullableInt(Map<String, dynamic> map, String key) {
-  if (!map.containsKey(key)) throw PegarouteCodecException('$key is required');
-  final value = map[key];
-  if (value == null) return null;
-  if (value is! int) throw PegarouteCodecException('$key must be an integer or null');
-  return value;
 }
 
 Object? _requiredNullableValue(Map<String, dynamic> map, String key) {
