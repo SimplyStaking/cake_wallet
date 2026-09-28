@@ -322,7 +322,7 @@ void main() {
     for (final mode in [false, true, 'zk', 'future-mode', 'false', 'x' * 64]) {
       route['private'] = mode;
       final decoded = PegarouteQuoteResponse.fromJson(value).routes.single.privateValue!;
-      expect(decoded.toJson(), mode);
+      expect(decoded.value, mode);
       expect(decoded.isEnabled, mode != false);
     }
     for (final mode in [null, '', '   ', 'x' * 65, 0, [], {}]) {
@@ -471,6 +471,15 @@ void main() {
       await expectLater(client.chains(), throwsA(isA<PegarouteCodecException>()));
       body = {'chain': 'ETH', 'tokens': [item]};
       await expectLater(client.tokens('ETH'), throwsA(isA<PegarouteCodecException>()));
+    }
+  });
+
+  test('creation still requires the pending status before returning a result', () {
+    final value = json.decode(_fixture('swap.json')) as Map<String, dynamic>;
+    expect(PegarouteSwapResponse.fromJson(value).transactionId, isNotEmpty);
+    for (final status in [null, '', 'completed', 'failed', 1]) {
+      value['status'] = status;
+      expect(() => PegarouteSwapResponse.fromJson(value), throwsA(isA<PegarouteCodecException>()));
     }
   });
 

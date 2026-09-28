@@ -148,8 +148,6 @@ final class PegaroutePrivateValue {
   // provider-declared string must never be interpreted by truthiness.
   bool get isEnabled => value != false;
 
-  Object toJson() => value;
-
 }
 
 final class PegarouteQuoteRequest {
@@ -1172,7 +1170,6 @@ class PegarouteApiClient {
       final response = await _post(uri, headers, preflight.requestJson);
       final decoded = _decode(response, PegarouteSwapResponse.fromJson, expectedStatus: 202);
       return PegarouteValidatedSwapResult._(
-        preflight: preflight,
         response: decoded,
         capability: _capability,
         origin: _origin,
@@ -1233,7 +1230,6 @@ class PegarouteApiClient {
 class PegarouteSwapResponse {
   const PegarouteSwapResponse({
     required this.transactionId,
-    required this.status,
     required this.providerType,
     required this.route,
     required this.execution,
@@ -1251,7 +1247,6 @@ class PegarouteSwapResponse {
     }
     return PegarouteSwapResponse(
       transactionId: _requiredString(map, 'transactionId'),
-      status: status,
       providerType: _requiredString(map, 'providerType'),
       route: route,
       execution: PegarouteExecution.fromJson(map['execution']),
@@ -1260,7 +1255,6 @@ class PegarouteSwapResponse {
   }
 
   final String transactionId;
-  final String status;
   final String providerType;
   final PegarouteRoute route;
   final PegarouteExecution execution;
@@ -1271,14 +1265,12 @@ class PegarouteSwapResponse {
 /// not come from the validated preflight POST boundary.
 final class PegarouteValidatedSwapResult {
   const PegarouteValidatedSwapResult._({
-    required this.preflight,
     required this.response,
     required _PegarouteApiCapability capability,
     required Uri origin,
   })  : _capability = capability,
         _origin = origin;
 
-  final PegarouteValidatedSwapPreflight preflight;
   final PegarouteSwapResponse response;
   final _PegarouteApiCapability _capability;
   final Uri _origin;
