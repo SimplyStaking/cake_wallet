@@ -60,25 +60,17 @@ final class PegarouteSwapAttemptException implements Exception {
 
   final String userMessage;
 
-  bool get requestMayHaveReached => true;
-
   @override
   String toString() => userMessage;
 }
 
-class PegarouteApiError implements Exception {
-  const PegarouteApiError({
+final class PegarouteApiError implements Exception {
+  const PegarouteApiError._({
     required this.httpStatus,
     required this.code,
-    required this.message,
     required this.userMessage,
-    required this.retryable,
-    this.retryAfterSeconds,
     this.provider,
-    this.details,
-    this.newQuote,
-    this.originalProvider,
-    this.newProvider,
+    this.minAmount,
   });
 
   factory PegarouteApiError.fromJson(int httpStatus, Object? value) {
@@ -90,30 +82,15 @@ class PegarouteApiError implements Exception {
     }
     final receivedCode = _requiredString(error, 'code');
     final code = publicCodes.contains(receivedCode) ? receivedCode : 'HTTP_ERROR';
-    final newQuote = root['newQuote'];
-    final originalProvider = root['originalProvider'];
-    final replacementProvider = root['newProvider'];
-    if (code == 'PROVIDER_CHANGED' &&
-        (newQuote == null ||
-            originalProvider is! String ||
-            originalProvider.isEmpty ||
-            replacementProvider is! String ||
-            replacementProvider.isEmpty)) {
-      throw const PegarouteCodecException('PROVIDER_CHANGED terms are incomplete');
-    }
-    return PegarouteApiError(
+    final minAmount = minimum(error);
+    // Errors cannot supply replacement quotes or permission to retry creation.
+    // Keep only the public code and numeric minimum; discard upstream prose.
+    return PegarouteApiError._(
       httpStatus: httpStatus,
       code: code,
-      message: 'Pegaroute $code',
-      userMessage: 'Pegaroute $code${minimum(error) == null ? '' : '; minimum: ${minimum(error)}'}',
-      retryable: _requiredBool(error, 'retryable'),
-      retryAfterSeconds: _optionalNullableNum(error, 'retryAfterSeconds'),
+      userMessage: 'Pegaroute $code${minAmount == null ? '' : '; minimum: $minAmount'}',
       provider: _optionalString(error, 'provider'),
-      details: minimum(error) == null ? null : {'minAmount': minimum(error)},
-      // Arbitrary upstream prose/details are not public diagnostics.
-      newQuote: code == 'PROVIDER_CHANGED' ? PegarouteQuoteResponse.fromJson(newQuote) : null,
-      originalProvider: code == 'PROVIDER_CHANGED' ? originalProvider as String : null,
-      newProvider: code == 'PROVIDER_CHANGED' ? replacementProvider as String : null,
+      minAmount: minAmount,
     );
   }
 
@@ -137,21 +114,11 @@ class PegarouteApiError implements Exception {
     return limit(match?.group(1));
   }
 
-  double? get minAmount => limit(details?['minAmount']);
-
   final int httpStatus;
   final String code;
-  final String message;
   final String userMessage;
-  final bool retryable;
-  final num? retryAfterSeconds;
   final String? provider;
-  final Map<String, dynamic>? details;
-  final PegarouteQuoteResponse? newQuote;
-  final String? originalProvider;
-  final String? newProvider;
-
-  bool get requiresReview => code == 'PROVIDER_CHANGED';
+  final double? minAmount;
 
   @override
   String toString() => 'PegarouteApiError($httpStatus, $code)';
@@ -1318,12 +1285,10 @@ class PegarouteApiClient {
       value = _json(response.body);
     } on PegarouteCodecException {
       if (response.statusCode < 200 || response.statusCode >= 300) {
-        throw PegarouteApiError(
+        throw PegarouteApiError._(
           httpStatus: response.statusCode,
           code: 'INVALID_RESPONSE',
-          message: 'The provider returned an invalid response',
           userMessage: 'The provider returned an invalid response',
-          retryable: false,
         );
       }
       rethrow;
@@ -1580,23 +1545,10 @@ Map<String, dynamic> _resolvedFee(Object? value) {
   return map;
 }
 
-bool _requiredBool(Map<String, dynamic> map, String key) {
-  if (map[key] is! bool) throw PegarouteCodecException('$key must be boolean');
-  return map[key] as bool;
-}
-
 num? _optionalNum(Map<String, dynamic> map, String key) {
   if (!map.containsKey(key)) return null;
   final value = map[key];
   if (value is! num) throw PegarouteCodecException('$key must be non-null numeric');
-  return value;
-}
-
-num? _optionalNullableNum(Map<String, dynamic> map, String key) {
-  if (!map.containsKey(key)) return null;
-  final value = map[key];
-  if (value == null) return null;
-  if (value is! num) throw PegarouteCodecException('$key must be numeric or null');
   return value;
 }
 

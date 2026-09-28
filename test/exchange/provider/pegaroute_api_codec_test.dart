@@ -245,7 +245,7 @@ void main() {
     expect(() => PegarouteStatusResponse.fromJson(value), throwsA(isA<PegarouteCodecException>()));
   });
 
-  test('preserves structured retry metadata but drops arbitrary diagnostic details', () {
+  test('errors retain public codes but discard retry and diagnostic metadata', () {
     final error = PegarouteApiError.fromJson(429, {
       'error': {
         'code': 'RATE_LIMITED',
@@ -258,10 +258,9 @@ void main() {
       },
     });
     expect(error.code, 'RATE_LIMITED');
-    expect(error.retryAfterSeconds, 3);
-    // R4's public-error boundary deliberately does not retain arbitrary
-    // upstream prose/details, which can contain credentials or private data.
-    expect(error.details, isNull);
+    expect(error.httpStatus, 429);
+    expect(error.minAmount, isNull);
+    expect(error.toString(), isNot(contains('retry later')));
     expect(error.userMessage, 'Pegaroute RATE_LIMITED');
   });
 
@@ -571,23 +570,33 @@ void main() {
     );
   });
 
-  test('retains strict provider changed replacement terms', () {
-    final quote = json.decode(_fixture('quote.json')) as Map<String, dynamic>;
-    final error = PegarouteApiError.fromJson(409, {
-      'error': {
-        'code': 'PROVIDER_CHANGED',
-        'message': 'changed',
-        'userMessage': 'Review terms',
-        'retryable': false,
+  test('provider replacement and retry metadata cannot permit another POST', () async {
+    final body = json.decode(_fixture('quote.json')) as Map<String, dynamic>;
+    body['expiresAt'] = '2099-01-01T00:00:00Z';
+    var posts = 0;
+    final client = PegarouteApiClient(
+      configuration: const PegarouteConfiguration(baseUrl: 'https://example.test'),
+      get: (_, __) async => very_insecure_http_do_not_use.Response(json.encode(body), 200),
+      post: (_, __, ___) async {
+        posts++;
+        return very_insecure_http_do_not_use.Response(json.encode({
+          'error': {'code': 'PROVIDER_CHANGED', 'message': 'Do not display this',
+            'userMessage': 'Do not display this', 'retryable': true, 'retryAfterSeconds': 0},
+          'newQuote': {'untrusted': true}, 'originalProvider': 'instaswap', 'newProvider': 'thorchain',
+        }), 409);
       },
-      'newQuote': quote,
-      'originalProvider': 'instaswap',
-      'newProvider': 'thorchain',
-    });
-    expect(error.requiresReview, isTrue);
-    expect(error.newQuote!.quoteId, 'quote-fixture');
-    expect(error.originalProvider, 'instaswap');
-    expect(error.newProvider, 'thorchain');
+    );
+    final quote = await client.quote(PegarouteQuoteRequest(fromChain: 'ETH', fromToken: 'ETH',
+        toChain: 'BTC', toToken: 'BTC', amount: '1', senderAddress: 'sender', destinationAddress: 'payout'));
+    final route = quote.response.routes.single;
+    final preflight = client.preflight(quote: quote, route: route,
+      request: PegarouteSwapRequest(fromChain: 'ETH', fromToken: 'ETH', toChain: 'BTC', toToken: 'BTC',
+        amount: '1', senderAddress: 'sender', destinationAddress: 'payout',
+        quoteId: quote.response.quoteId, routeProvider: route.provider));
+    await expectLater(client.swap(preflight), throwsA(isA<PegarouteSwapAttemptException>()
+        .having((error) => error.userMessage, 'safe message', 'Pegaroute PROVIDER_CHANGED')));
+    await expectLater(client.swap(preflight), throwsA(isA<PegarouteCodecException>()));
+    expect(posts, 1);
   });
 
   test('rejects non-positive request amounts and empty token queries', () async {
