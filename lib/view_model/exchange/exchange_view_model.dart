@@ -329,8 +329,7 @@ abstract class ExchangeViewModelBase extends WalletChangeListenerViewModel with 
         SwapsXyzExchangeProvider(),
         JupiterExchangeProvider(),
         NearIntentsExchangeProvider(),
-        PegaRouteExchangeProvider(providerPreferences: pegarouteProviderPreferences,
-            decentralizedOnly: () => forceDecentralizedExchanges),
+        PegaRouteExchangeProvider(providerPreferences: pegarouteProviderPreferences),
         TrocadorExchangeProvider(
             useTorOnly: _useTorOnly, providerStates: _settingsStore.trocadorProviderStates),
       ];

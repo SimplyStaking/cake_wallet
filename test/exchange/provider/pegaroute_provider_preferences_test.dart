@@ -19,7 +19,6 @@ void main() {
   late PegarouteProviderPreferences preferences;
   late Map<String, dynamic> quote;
   late PegaRouteExchangeProvider provider;
-  var decentralizedOnly = false;
   var gets = 0;
   var responseStatus = 200;
   Limits? quoteLimits;
@@ -38,7 +37,6 @@ void main() {
     gets = 0;
     responseStatus = 200;
     quoteLimits = null;
-    decentralizedOnly = false;
     beforeResponse = null;
     quote = jsonDecode(File('test/exchange/fixtures/pegaroute/quote.json').readAsStringSync())
         as Map<String, dynamic>;
@@ -52,7 +50,6 @@ void main() {
     ];
     provider = PegaRouteExchangeProvider(
       providerPreferences: preferences,
-      decentralizedOnly: () => decentralizedOnly,
       apiClient: PegarouteApiClient(
         configuration: const PegarouteConfiguration(baseUrl: 'https://fixture.invalid'),
         get: (uri, headers) async {
@@ -119,21 +116,16 @@ void main() {
     expect(gets, before);
   });
 
-  test('decentralized-only includes Instaswap and preserves explicit disable across mode toggles', () async {
-    decentralizedOnly = true;
+  test('decentralized provider includes Instaswap and preserves explicit disable on reload', () async {
+    expect(provider.description.isCentralized, false);
     expect(await rate(), 12);
     expect(preferences.isEnabled('instaswap'), true);
     await preferences.setEnabled('instaswap', false);
     expect(await rate(), 11);
-    decentralizedOnly = false;
-    expect(await rate(), 11);
-    decentralizedOnly = true;
-    expect(await rate(), 11);
     expect(PegarouteProviderPreferences(storage).isEnabled('instaswap'), false);
   });
 
-  test('decentralized-only quote limits include enabled Instaswap', () async {
-    decentralizedOnly = true;
+  test('quote limits include enabled Instaswap', () async {
     await preferences.setEnabled('openocean', false);
     await preferences.setEnabled('thorchain', false);
     expect(await rate(), 12);
@@ -144,7 +136,6 @@ void main() {
   });
 
   test('a provider disabled while HTTP is pending cannot supply the returned rate', () async {
-    decentralizedOnly = true;
     final waiting = Completer<void>();
     final entered = Completer<void>();
     beforeResponse = () {

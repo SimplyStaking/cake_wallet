@@ -342,8 +342,7 @@ void main() {
     final flow = DepositFixture(database);
     final preferences = PegarouteProviderPreferences(await SharedPreferences.getInstance());
     final provider = PegaRouteExchangeProvider(request: flow.request, store: flow.store,
-        configuration: testPegarouteConfiguration, providerPreferences: preferences,
-        decentralizedOnly: () => true);
+        configuration: testPegarouteConfiguration, providerPreferences: preferences);
     final (vm, trades) = await model(flow, FallbackProvider(),
         replacement: provider, decentralizedOnly: true);
     expect(vm.bestRate, greaterThan(0));
@@ -360,8 +359,7 @@ void main() {
     final flow = DepositFixture(database);
     final preferences = PegarouteProviderPreferences(await SharedPreferences.getInstance());
     final provider = PegaRouteExchangeProvider(request: flow.request, store: flow.store,
-        configuration: testPegarouteConfiguration, providerPreferences: preferences,
-        decentralizedOnly: () => true);
+        configuration: testPegarouteConfiguration, providerPreferences: preferences);
     final (vm, _) = await model(flow, FallbackProvider(),
         replacement: provider, decentralizedOnly: true);
     vm.forcedProvider = provider;
@@ -381,8 +379,7 @@ void main() {
     final flow = DepositFixture(database);
     final preferences = PegarouteProviderPreferences(await SharedPreferences.getInstance());
     final provider = PegaRouteExchangeProvider(request: flow.request, store: flow.store,
-        configuration: testPegarouteConfiguration, providerPreferences: preferences,
-        decentralizedOnly: () => true);
+        configuration: testPegarouteConfiguration, providerPreferences: preferences);
     final (vm, _) = await model(flow, FallbackProvider(),
         replacement: provider, decentralizedOnly: true);
     final entered = Completer<void>();

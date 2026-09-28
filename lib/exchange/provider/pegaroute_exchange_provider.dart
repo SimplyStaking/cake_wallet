@@ -31,7 +31,7 @@ typedef PegarouteRequest = Future<Map<String, dynamic>> Function(
 class PegaRouteExchangeProvider extends ExchangeProvider {
   PegaRouteExchangeProvider({PegarouteRequest? request, PegarouteApiClient? apiClient,
       PegarouteConfiguration? configuration, PegarouteTradeStore? store,
-      this.providerPreferences, this.decentralizedOnly, DateTime Function()? quoteClock})
+      this.providerPreferences, DateTime Function()? quoteClock})
       : _quoteClock = quoteClock ?? DateTime.now,
         apiClient = apiClient ?? PegarouteApiClient(configuration: configuration, clock: quoteClock,
           get: request == null ? null : (uri, headers) async =>
@@ -44,7 +44,6 @@ class PegaRouteExchangeProvider extends ExchangeProvider {
   final PegarouteApiClient apiClient;
   final PegarouteTradeStore store;
   final PegarouteProviderPreferences? providerPreferences;
-  final bool Function()? decentralizedOnly;
   final DateTime Function() _quoteClock;
   final Map<String, String> _selectedRoutes = {};
   final Map<String, Set<String>> _tokens = {};
