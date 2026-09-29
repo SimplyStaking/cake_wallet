@@ -32,6 +32,7 @@ import 'package:cake_wallet/exchange/provider/exolix_exchange_provider.dart';
 import 'package:cake_wallet/exchange/provider/near_Intents_exchange_provider.dart';
 import 'package:cake_wallet/exchange/provider/pegaroute_exchange_provider.dart';
 import 'package:cake_wallet/exchange/provider/pegaroute/pegaroute_provider_preferences.dart';
+import 'package:cake_wallet/exchange/provider/pegaroute/pegaroute_max_amount.dart';
 import 'package:collection/collection.dart' show MapEquality;
 import 'package:cake_wallet/exchange/provider/stealth_ex_exchange_provider.dart';
 import 'package:cake_wallet/exchange/provider/swapsxyz_exchange_provider.dart';
@@ -566,7 +567,7 @@ abstract class ExchangeViewModelBase extends WalletChangeListenerViewModel with 
   }
 
   bool get hasAllAmount {
-    if (_hasPegarouteTokenMax) return true;
+    if (_hasPegarouteMax) return true;
     if ([
       WalletType.monero,
       WalletType.bitcoin,
@@ -922,7 +923,7 @@ abstract class ExchangeViewModelBase extends WalletChangeListenerViewModel with 
       wallet, wallet.id, wallet.chainId, wallet.walletAddresses.address,
       _pegarouteRateAsset(depositCurrency), _pegarouteRateAsset(receiveCurrency),
       isFixedRateMode ? _receiveAmount?.toString() : depositAmountCanonical,
-      isFixedRateMode, isSendAllEnabled, isSendFromExternal, receiveAddressExtraId,
+      isFixedRateMode, isSendAllEnabled, _pegarouteMax, isSendFromExternal, receiveAddressExtraId,
       forcedProvider, forceDecentralizedExchanges,
       selectedProviders.map((p) => p.description.raw).join(','),
       jsonEncode(pegarouteProviderPreferences.states));
@@ -1148,12 +1149,22 @@ abstract class ExchangeViewModelBase extends WalletChangeListenerViewModel with 
         : LimitsLoadedSuccessfully(limits: limits);
   }
 
-  bool get _hasPegarouteTokenMax =>
+  bool get _hasPegarouteMax =>
       selectedProviders.any((p) => p is PegaRouteExchangeProvider) &&
-      PegaRouteExchangeProvider.supportsTokenMax(wallet, depositCurrency);
+      PegaRouteExchangeProvider.supportsMax(wallet, depositCurrency);
+
+  int _pegarouteMaxRequest = 0;
+  ({Object context, BigInt balance, String amount})? _pegarouteMax;
+  Object get _pegarouteMaxContext => (wallet, wallet.id, wallet.chainId,
+      wallet.walletAddresses.address, _pegarouteRateAsset(depositCurrency),
+      isSendAllEnabled, isFixedRateMode);
+  bool get _pegarouteMaxIsCurrent => _hasPegarouteMax &&
+      _pegarouteMax?.context == _pegarouteMaxContext &&
+      _pegarouteMax?.amount == depositAmountCanonical &&
+      _pegarouteMax?.balance == PegaRouteExchangeProvider.sourceBalance(wallet, depositCurrency)?.amount;
 
   bool get _canUsePegaroute =>
-      !isFixedRateMode && (!isSendAllEnabled || _hasPegarouteTokenMax) &&
+      !isFixedRateMode && (!isSendAllEnabled || _pegarouteMaxIsCurrent) &&
       (PegaRouteExchangeProvider.allowsExternal(ExchangeProviderDescription.pegaRoute) ||
           !isSendFromExternal) &&
       PegaRouteExchangeProvider.supportsWallet(wallet, depositCurrency) &&
@@ -1170,14 +1181,14 @@ abstract class ExchangeViewModelBase extends WalletChangeListenerViewModel with 
     final sender = wallet.walletAddresses.address;
     final chainId = wallet.chainId;
     final sendAll = isSendAllEnabled;
+    final maxBalance = _pegarouteMax?.balance;
     final request = TradeRequest(fromCurrency: depositCurrency, toCurrency: receiveCurrency,
         fromAmount: depositAmountCanonical, toAddress: receiveAddress, refundAddress: depositAddress);
     final principal = Money.parse(request.fromAmount, request.fromCurrency);
     bool hasPrincipal() {
       final balance = PegaRouteExchangeProvider.sourceBalance(boundWallet, request.fromCurrency);
-      return balance != null && (sendAll
-          ? balance.amount == principal.amount
-          : balance.amount >= principal.amount);
+      return balance != null && balance.amount >= principal.amount &&
+          (!sendAll || balance.amount == maxBalance);
     }
     bool current(PegaRouteExchangeProvider provider) =>
         _canUsePegaroute && sendAll == isSendAllEnabled && selectedProviders.contains(provider) &&
@@ -1548,10 +1559,33 @@ abstract class ExchangeViewModelBase extends WalletChangeListenerViewModel with 
 
   @action
   Future<void> calculateDepositAllAmount() async {
-    if (_hasPegarouteTokenMax) {
-      // Use canonical units, not the rounded or local display balance.
-      final balance = PegaRouteExchangeProvider.sourceBalance(wallet, depositCurrency)!;
-      await changeDepositAmount(amount: balance.toString(), isCanonical: true);
+    if (_hasPegarouteMax) {
+      final request = ++_pegarouteMaxRequest;
+      final context = _pegarouteMaxContext;
+      final boundWallet = wallet;
+      final currency = depositCurrency;
+      final balance = PegaRouteExchangeProvider.sourceBalance(boundWallet, currency)!;
+      _pegarouteMax = null;
+      bool current() => request == _pegarouteMaxRequest && context == _pegarouteMaxContext &&
+          _hasPegarouteMax &&
+          PegaRouteExchangeProvider.sourceBalance(boundWallet, currency)?.amount == balance.amount;
+      String amount = '0';
+      try {
+        final priority = _settingsStore.getPriority(boundWallet.type, chainId: boundWallet.chainId);
+        final maximum = await pegarouteMaxAmount(boundWallet, balance, priority);
+        if (!current()) return;
+        amount = maximum.toString();
+        _pegarouteMax = (context: context, balance: balance.amount, amount: amount);
+      } catch (_) {
+        if (!current()) return;
+        // Do not use the full native balance when a fee estimate fails.
+      }
+      await changeDepositAmount(amount: amount, isCanonical: true);
+      if (!current()) return;
+      await calculateBestRate();
+      if (current() && forcedProvider is PegaRouteExchangeProvider) {
+        await calculateForcedProviderRate();
+      }
       return;
     }
     if ([

@@ -87,12 +87,14 @@ class PegaRouteExchangeProvider extends ExchangeProvider {
     catch (_) { return false; }
   }
 
-  // Max selects an exact token amount. Native assets still need a route fee reserve.
-  static bool supportsTokenMax(WalletBase wallet, CryptoCurrency currency) {
+  // Max selects an exact amount before quoting. Native assets need a fee estimate.
+  static bool supportsMax(WalletBase wallet, CryptoCurrency currency) {
     try {
       PegarouteAssetIdentity.validateMetadata(currency);
       final asset = _mapper.map(currency);
-      return asset.token != asset.nativeToken && supportsWallet(wallet, currency);
+      return (asset.token != asset.nativeToken ||
+          PegarouteCapabilityGate.evmChains.containsKey(asset.chain) ||
+          PegarouteCapabilityGate.utxo.contains(asset.chain)) && supportsWallet(wallet, currency);
     } catch (_) { return false; }
   }
 
