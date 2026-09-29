@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:cake_wallet/entities/exchange_api_mode.dart';
 import 'package:cake_wallet/entities/preferences_key.dart';
@@ -21,6 +22,11 @@ import 'package:cake_wallet/view_model/exchange/exchange_trade_view_model.dart';
 import 'package:cake_wallet/exchange/provider/pegaroute/pegaroute_trade_record.dart';
 import 'package:cake_wallet/view_model/send/send_view_model_state.dart';
 import 'package:cw_core/crypto_currency.dart';
+import 'package:cw_core/amount/money.dart';
+import 'package:cw_core/balance.dart';
+import 'package:cw_core/erc20_token.dart';
+import 'package:cake_wallet/solana/solana.dart';
+import 'package:cake_wallet/exchange/provider/pegaroute/pegaroute_currency_mapper.dart';
 import 'package:cw_core/db/sqlite.dart' as sqlite;
 import 'package:cw_core/wallet_type.dart';
 import 'package:cake_wallet/evm/evm.dart';
@@ -31,8 +37,46 @@ import 'package:mocktail/mocktail.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 import 'pegaroute_flow_test.dart';
+import 'pegaroute_evm_callers_test.dart' show TokenFlow, tokenSend;
 
 class TemplateStore extends Mock implements ExchangeTemplateStore {}
+
+class ExactBalance extends Balance {
+  ExactBalance(CryptoCurrency currency, String amount)
+      : super(Money.parse(amount, currency), Money.zero(currency));
+}
+
+class SplMaxFlow extends DepositFixture {
+  SplMaxFlow(super.database) : super(source: 'SOL');
+  @override
+  String get principal => '3.681039';
+  @override
+  String get sender => '11111111111111111111111111111111';
+  @override
+  String get deposit => sender;
+  @override
+  TradeRequest get intent => TradeRequest(fromCurrency: CryptoCurrency.usdcsol,
+      toCurrency: CryptoCurrency.eth, fromAmount: principal, toAddress: payout,
+      refundAddress: sender);
+  @override
+  Future<Map<String, dynamic>> request(String method, Uri uri,
+      Map<String, String> headers, String? body) async {
+    if (uri.path == '/chains') return {'chains': [{'id': 'SOL'}, {'id': 'ETH'}]};
+    if (uri.path == '/tokens' && uri.queryParameters['chain'] == 'SOL') {
+      return {'chain': 'SOL', 'tokens': [
+        {'id': const PegarouteCurrencyMapper().map(intent.fromCurrency).token}]};
+    }
+    if (uri.path == '/swap') {
+      posts++;
+      expect((jsonDecode(body!) as Map)['amount'], principal);
+      return {'transactionId': 'order', 'status': 'pending', 'providerType': 'api-provider',
+        'provider': {'name': 'instaswap', 'referenceId': 'reference'}, 'route': route,
+        'execution': {'family': 'solana', 'mode': 'deposit-transfer', 'to': deposit,
+          'memo': null, 'amount': {'display': principal, 'baseUnits': '3681039'}}};
+    }
+    return super.request(method, uri, headers, body);
+  }
+}
 
 class InstallationMutationProvider extends PegaRouteExchangeProvider {
   InstallationMutationProvider(DepositFixture flow) : super(request: flow.request, store: flow.store,
@@ -174,8 +218,10 @@ void main() {
 
   Future<(OfflineExchange, CapturedTrades)> model(
       DepositFixture flow, FallbackProvider fallback,
-      {PegaRouteExchangeProvider? replacement, bool decentralizedOnly = false}) async {
+      {PegaRouteExchangeProvider? replacement, bool decentralizedOnly = false,
+      void Function(SendFixture)? configure}) async {
     final environment = SendFixture(flow, Trade(id: 'environment', amount: flow.principal));
+    configure?.call(environment);
     when(() => environment.settings.exchangeStatus).thenReturn(ExchangeApiMode.enabled);
     when(() => environment.settings.forceDecentralizedExchanges).thenReturn(decentralizedOnly);
     when(() => environment.settings.trocadorProviderStates)
@@ -203,6 +249,183 @@ void main() {
     expect(vm.bestRateProvider, same(provider));
     return (vm, trades);
   }
+
+  void tokenBalance(TestWallet wallet, TokenFlow flow, String amount) {
+    when(() => wallet.balance).thenReturn(ObservableMap.of({
+      CryptoCurrency.eth: TestBalance(CryptoCurrency.eth),
+      flow.token: ExactBalance(flow.token, amount),
+    }));
+  }
+
+  for (final call in [false, true]) {
+    test('token Max creates and prepares an exact amount (contract call: $call)', () async {
+      final flow = TokenFlow(database, call: call);
+      final fallback = FallbackProvider();
+      final (vm, trades) = await model(flow, fallback,
+          configure: (send) => tokenBalance(send.wallet, flow, flow.principal));
+      expect(vm.hasAllAmount, true);
+      vm.enableSendAllAmount();
+      await vm.calculateBestRate();
+      expect(vm.isSendAllEnabled, true);
+      expect(vm.bestRateProvider, same(flow.provider));
+      expect(vm.depositAmountCanonical, flow.principal);
+      vm.forcedProvider = flow.provider;
+      await vm.calculateForcedProviderRate();
+      expect(vm.forcedProviderRate, greaterThan(0));
+      await vm.createTrade();
+      expect(vm.tradeState, isA<TradeIsCreatedSuccessfully>());
+      final trade = trades.stored!;
+      expect(trade.amount, flow.principal);
+      expect(trade.isSendAll, isNot(true));
+      expect((await flow.store.read(trade.id)).isSendAll, isNot(true));
+      final (send, _) = tokenSend(flow, trade);
+      tokenBalance(send.wallet, flow, flow.principal);
+      final bridge = ExchangeTradeViewModel(wallet: send.wallet, tradesStore: trades,
+          sendViewModel: send.model, feesViewModel: TestFees(),
+          fiatConversionStore: FiatConversionStore(), pegarouteProvider: flow.provider);
+      addTearDown(() => bridge.timer?.cancel());
+      await bridge.confirmSending();
+      expect(send.model.pendingTransaction, isNotNull);
+      expect(send.model.outputs.single.sendAll, false);
+      expect(flow.posts, 1);
+      expect(fallback.orders, 0);
+    });
+  }
+
+  for (final amount in ['3.681039', '123456789012.123456']) {
+    test('token Max preserves all base units for $amount', () async {
+      final flow = TokenFlow(database);
+      final (vm, _) = await model(flow, FallbackProvider()..rateUnavailable = true,
+          configure: (send) => tokenBalance(send.wallet, flow, amount));
+      // The selection and the wallet token can have different display metadata.
+      vm.depositCurrency = CryptoCurrency.usdc;
+      vm.enableSendAllAmount();
+      await vm.calculateBestRate();
+      expect(vm.depositAmountCanonical, amount);
+      expect(flow.quoteAmounts.last, amount);
+      expect(vm.bestRateProvider, same(flow.provider));
+      expect(flow.posts, 0);
+    });
+  }
+
+  test('SPL Max is available only with Pegaroute and creates an exact trade', () async {
+    solana = CWSolana();
+    addTearDown(() => solana = null);
+    final flow = SplMaxFlow(database);
+    final (vm, trades) = await model(flow, FallbackProvider(), configure: (send) {
+      when(() => send.wallet.type).thenReturn(WalletType.solana);
+      when(() => send.wallet.chainId).thenReturn(null);
+      when(() => send.wallet.balance).thenReturn(ObservableMap.of({
+        CryptoCurrency.sol: TestBalance(CryptoCurrency.sol),
+        CryptoCurrency.usdcsol: ExactBalance(CryptoCurrency.usdcsol, flow.principal),
+      }));
+    });
+    expect(vm.hasAllAmount, true);
+    vm.enableSendAllAmount();
+    await vm.calculateBestRate();
+    expect(vm.bestRateProvider, same(flow.provider));
+    expect(vm.depositAmountCanonical, flow.principal);
+    await vm.createTrade();
+    expect(vm.tradeState, isA<TradeIsCreatedSuccessfully>());
+    expect(trades.stored!.isSendAll, isNot(true));
+    expect(trades.stored!.amount, flow.principal);
+    expect(flow.posts, 1);
+    vm.removeExchangeProvider(flow.provider);
+    expect(vm.hasAllAmount, false);
+  });
+
+  for (final balance in ['1', '2']) {
+    test('token Max rejects a balance change to $balance during the bound quote', () async {
+      final flow = TokenFlow(database);
+      final fallback = FallbackProvider();
+      late TestWallet wallet;
+      final (vm, trades) = await model(flow, fallback, configure: (send) {
+        wallet = send.wallet;
+        tokenBalance(wallet, flow, flow.principal);
+      });
+      vm.enableSendAllAmount();
+      await vm.calculateBestRate();
+      flow.duringBoundQuote = () async => tokenBalance(wallet, flow, balance);
+      await vm.createTrade();
+      expect(vm.tradeState, isA<TradeIsCreatedFailure>());
+      expect(trades.stored, isNull);
+      expect(flow.posts, 0);
+      expect(fallback.orders, 0);
+    });
+  }
+
+  test('token Max requires a new quote if the balance changes before creation', () async {
+    final flow = TokenFlow(database);
+    late TestWallet wallet;
+    final fallback = FallbackProvider();
+    final (vm, trades) = await model(flow, fallback, configure: (send) {
+      wallet = send.wallet;
+      tokenBalance(wallet, flow, flow.principal);
+    });
+    vm.enableSendAllAmount();
+    await vm.calculateBestRate();
+    tokenBalance(wallet, flow, '2');
+    await vm.createTrade();
+    expect(vm.tradeState, isA<TradeIsCreatedFailure>());
+    expect(flow.posts, 0);
+    expect(fallback.orders, 0);
+    expect(trades.stored, isNull);
+  });
+
+  test('changing Max mode during creation prevents POST', () async {
+    final flow = TokenFlow(database);
+    final (vm, _) = await model(flow, FallbackProvider(),
+        configure: (send) => tokenBalance(send.wallet, flow, flow.principal));
+    vm.enableSendAllAmount();
+    await vm.calculateBestRate();
+    flow.duringBoundQuote = () async => vm.isSendAllEnabled = false;
+    await vm.createTrade();
+    expect(vm.tradeState, isA<TradeIsCreatedFailure>());
+    expect(flow.posts, 0);
+  });
+
+  test('zero token Max clears quotes and cannot create an order', () async {
+    final flow = TokenFlow(database);
+    final (vm, _) = await model(flow, FallbackProvider()..rateUnavailable = true,
+        configure: (send) => tokenBalance(send.wallet, flow, '0'));
+    vm.enableSendAllAmount();
+    await vm.calculateBestRate();
+    expect(vm.bestRateProvider, isNull);
+    expect(vm.depositAmountCanonical, '0');
+    await vm.createTrade();
+    expect(flow.posts, 0);
+  });
+
+  test('token Max rejects wrong precision, ambiguous balances, and hardware wallets', () async {
+    final flow = TokenFlow(database);
+    final send = SendFixture(flow, Trade(id: 'environment', amount: flow.principal));
+    tokenBalance(send.wallet, flow, flow.principal);
+    expect(PegaRouteExchangeProvider.supportsTokenMax(send.wallet, flow.token), true);
+    final wrong = Erc20Token(name: 'USD Coin', symbol: 'USDC',
+        contractAddress: flow.token.contractAddress, decimal: 18, chainId: 1);
+    expect(PegaRouteExchangeProvider.supportsTokenMax(send.wallet, wrong), false);
+    when(() => send.wallet.isHardwareWallet).thenReturn(true);
+    expect(PegaRouteExchangeProvider.supportsTokenMax(send.wallet, flow.token), false);
+    when(() => send.wallet.isHardwareWallet).thenReturn(false);
+    send.wallet.balance[CryptoCurrency.usdc] = ExactBalance(CryptoCurrency.usdc, flow.principal);
+    expect(PegaRouteExchangeProvider.supportsTokenMax(send.wallet, flow.token), false);
+  });
+
+  test('native Max still blocks Pegaroute best and forced quotes', () async {
+    final flow = DepositFixture(database);
+    final fallback = FallbackProvider();
+    final (vm, _) = await model(flow, fallback);
+    final before = flow.quoteAmounts.length;
+    vm.isSendAllEnabled = true;
+    await vm.calculateBestRate();
+    expect(vm.bestRateProvider, same(fallback));
+    vm.forcedProvider = flow.provider;
+    await vm.calculateForcedProviderRate();
+    expect(vm.forcedProviderRate, 0);
+    expect(flow.quoteAmounts, hasLength(before));
+    expect(flow.posts, 0);
+    expect(PegaRouteExchangeProvider.supportsTokenMax(vm.wallet, CryptoCurrency.eth), false);
+  });
 
   test('current quote minima use the normal limits and clear after a valid quote', () async {
     final flow = MinimumFlow(database);

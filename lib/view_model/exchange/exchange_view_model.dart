@@ -566,6 +566,7 @@ abstract class ExchangeViewModelBase extends WalletChangeListenerViewModel with 
   }
 
   bool get hasAllAmount {
+    if (_hasPegarouteTokenMax) return true;
     if ([
       WalletType.monero,
       WalletType.bitcoin,
@@ -1147,8 +1148,12 @@ abstract class ExchangeViewModelBase extends WalletChangeListenerViewModel with 
         : LimitsLoadedSuccessfully(limits: limits);
   }
 
+  bool get _hasPegarouteTokenMax =>
+      selectedProviders.any((p) => p is PegaRouteExchangeProvider) &&
+      PegaRouteExchangeProvider.supportsTokenMax(wallet, depositCurrency);
+
   bool get _canUsePegaroute =>
-      !isFixedRateMode && !isSendAllEnabled &&
+      !isFixedRateMode && (!isSendAllEnabled || _hasPegarouteTokenMax) &&
       (PegaRouteExchangeProvider.allowsExternal(ExchangeProviderDescription.pegaRoute) ||
           !isSendFromExternal) &&
       PegaRouteExchangeProvider.supportsWallet(wallet, depositCurrency) &&
@@ -1164,15 +1169,18 @@ abstract class ExchangeViewModelBase extends WalletChangeListenerViewModel with 
     final walletId = wallet.id;
     final sender = wallet.walletAddresses.address;
     final chainId = wallet.chainId;
+    final sendAll = isSendAllEnabled;
     final request = TradeRequest(fromCurrency: depositCurrency, toCurrency: receiveCurrency,
         fromAmount: depositAmountCanonical, toAddress: receiveAddress, refundAddress: depositAddress);
     final principal = Money.parse(request.fromAmount, request.fromCurrency);
     bool hasPrincipal() {
       final balance = PegaRouteExchangeProvider.sourceBalance(boundWallet, request.fromCurrency);
-      return balance != null && balance.amount >= principal.amount;
+      return balance != null && (sendAll
+          ? balance.amount == principal.amount
+          : balance.amount >= principal.amount);
     }
     bool current(PegaRouteExchangeProvider provider) =>
-        _canUsePegaroute && selectedProviders.contains(provider) &&
+        _canUsePegaroute && sendAll == isSendAllEnabled && selectedProviders.contains(provider) &&
         decentralizedOnly == forceDecentralizedExchanges &&
         const MapEquality<String, bool>().equals(preferences, pegarouteProviderPreferences.states) &&
         identical(wallet, boundWallet) && wallet.id == walletId &&
@@ -1182,7 +1190,7 @@ abstract class ExchangeViewModelBase extends WalletChangeListenerViewModel with 
         depositAmountCanonical == request.fromAmount && receiveAddress == request.toAddress &&
         depositAddress == request.refundAddress && hasPrincipal();
     return (current: current, create: (provider) async {
-      if (!hasPrincipal()) throw StateError('Insufficient source balance');
+      if (!hasPrincipal()) throw StateError('Source balance changed or is insufficient. Request a new quote.');
       if (!current(provider)) throw StateError('Wallet or quote intent changed');
       return provider.createBoundTrade(request: request, walletId: walletId, sender: sender,
           chainId: chainId, isFixedRateMode: false, isSendAll: false,
@@ -1540,6 +1548,12 @@ abstract class ExchangeViewModelBase extends WalletChangeListenerViewModel with 
 
   @action
   Future<void> calculateDepositAllAmount() async {
+    if (_hasPegarouteTokenMax) {
+      // Use canonical units, not the rounded or local display balance.
+      final balance = PegaRouteExchangeProvider.sourceBalance(wallet, depositCurrency)!;
+      await changeDepositAmount(amount: balance.toString(), isCanonical: true);
+      return;
+    }
     if ([
       WalletType.litecoin,
       WalletType.bitcoin,
