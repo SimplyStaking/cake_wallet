@@ -96,7 +96,7 @@ class ExchangeProviderDescription extends EnumerableItem<int> with Serializable<
       image: 'assets/new-ui/trade_providers/jupiter.svg',
       isCentralized: false);
   static const pegaRoute = ExchangeProviderDescription(
-      title: 'PegaRoute',
+      title: 'Pegaroute',
       raw: 17,
       image: 'assets/new-ui/trade_providers/pegaroute.svg',
       isCentralized: false);
