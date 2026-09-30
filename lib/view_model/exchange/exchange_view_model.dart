@@ -1203,14 +1203,42 @@ abstract class ExchangeViewModelBase extends WalletChangeListenerViewModel with 
     return (current: current, create: (provider) async {
       if (!hasPrincipal()) throw StateError('Source balance changed or is insufficient. Request a new quote.');
       if (!current(provider)) throw StateError('Wallet or quote intent changed');
+      // Preview waits for a quote for this input, not a displayed rate for an older input.
+      final rate = await provider.fetchRateExact(from: request.fromCurrency,
+          to: request.toCurrency, amount: request.fromAmount)
+          .timeout(_pegarouteQuoteTimeout, onTimeout: () => 0.0);
+      if (!current(provider)) throw StateError('Wallet or quote intent changed');
+      if (rate <= 0) throw StateError('No quote is available for this amount. Request a new quote.');
       return provider.createBoundTrade(request: request, walletId: walletId, sender: sender,
           chainId: chainId, isFixedRateMode: false, isSendAll: false,
           isCurrent: () => current(provider));
     });
   }
 
+  Future<void>? _tradeCreation;
+
   @action
-  Future<void> createTrade() async {
+  Future<void> createTrade() =>
+      _tradeCreation ??= _createTrade().whenComplete(() => _tradeCreation = null);
+
+  Future<void> _createTrade() async {
+    if (_canUsePegaroute && selectedProviders.any((p) => p is PegaRouteExchangeProvider) &&
+        _depositAmount != null && _depositAmount!.amount > BigInt.zero &&
+        (_receiveAmount == null || _receiveAmount!.amount <= BigInt.zero)) {
+      final context = _pegarouteRateContext;
+      tradeState = TradeIsCreating();
+      try {
+        await calculateBestRate();
+        if (forcedProvider is PegaRouteExchangeProvider) await calculateForcedProviderRate();
+        if (context != _pegarouteRateContext) throw StateError('Wallet or quote intent changed');
+        final rate = forcedProvider == null ? bestRate : forcedProviderRate;
+        if (rate <= 0) throw StateError('No quote is available for this amount. Request a new quote.');
+        _receiveAmount = (double.parse(depositAmountCanonical) * rate).tryToMoney(receiveCurrency);
+      } catch (error) {
+        tradeState = TradeIsCreatedFailure(title: S.current.trade_not_created, error: error.toString());
+        return;
+      }
+    }
     final pegarouteIntent = selectedProviders.any((p) => p is PegaRouteExchangeProvider)
         ? _capturePegarouteCreation()
         : null;

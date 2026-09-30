@@ -378,14 +378,12 @@ class _NewSwapPageState extends State<NewSwapPage> {
               ? Debounce(const Duration(milliseconds: 1000))
               : Debounce(const Duration(milliseconds: 500));
 
+          widget.exchangeViewModel.isReceiveAmountEntered = false;
+          widget.exchangeViewModel.isFixedRateMode = false;
+          // Store the input before a preview or a debounced quote can start.
+          widget.exchangeViewModel.changeDepositAmount(amount: depositAmountController.text);
           _depositAmountDebounce.run(() {
             widget.exchangeViewModel.calculateBestRate();
-            if (depositAmountController.text != widget.exchangeViewModel.depositAmount &&
-                depositAmountController.text != S.of(context).all) {
-              widget.exchangeViewModel.changeDepositAmount(amount: depositAmountController.text);
-            }
-            widget.exchangeViewModel.isReceiveAmountEntered = false;
-            widget.exchangeViewModel.isFixedRateMode = false;
             if (receiveKey.currentState != null &&
                 !receiveKey.currentState!.amountFocusNode.hasFocus) {
               receiveKey.currentState!.updateFiatAmount();

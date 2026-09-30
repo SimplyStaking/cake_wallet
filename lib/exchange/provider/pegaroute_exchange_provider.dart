@@ -46,6 +46,7 @@ class PegaRouteExchangeProvider extends ExchangeProvider {
   final PegarouteProviderPreferences? providerPreferences;
   final DateTime Function() _quoteClock;
   final Map<String, String> _selectedRoutes = {};
+  final Map<String, Future<({double rate, Limits? limits})>> _pendingRates = {};
   final Map<String, Set<String>> _tokens = {};
   Set<String>? _chains;
   bool _creating = false;
@@ -207,12 +208,35 @@ class PegaRouteExchangeProvider extends ExchangeProvider {
 
   Future<double> fetchRateExact({required CryptoCurrency from, required CryptoCurrency to,
       required String amount, void Function(Limits)? onLimits}) async {
-    if (!supportsPair(from, to) || !isAvailable) return 0;
-    _selectedRoutes.remove(_key(from, to, amount));
+    if (_creating || !supportsPair(from, to) || !isAvailable) return 0;
+    final key = _key(from, to, amount);
+    var pending = _pendingRates[key];
+    if (pending == null) {
+      _selectedRoutes.remove(key);
+      Limits? limits;
+      late final Future<({double rate, Limits? limits})> fresh;
+      fresh = _fetchRateExact(from: from, to: to, amount: amount,
+          isCurrent: () => identical(_pendingRates[key], fresh),
+          onLimits: (value) => limits = value).then((rate) => (rate: rate, limits: limits));
+      _pendingRates[key] = pending = fresh;
+    }
+    try {
+      final result = await pending;
+      if (result.limits != null) onLimits?.call(result.limits!);
+      return result.rate;
+    } finally {
+      if (identical(_pendingRates[key], pending)) _pendingRates.remove(key);
+    }
+  }
+
+  Future<double> _fetchRateExact({required CryptoCurrency from, required CryptoCurrency to,
+      required String amount, required bool Function() isCurrent,
+      void Function(Limits)? onLimits}) async {
     if (!PegarouteCapabilityGate.providers.any(_enabled)) return 0;
     try {
       if (BigInt.parse(PegarouteExecutionTerms.toBaseUnits(amount, from.decimals)) <= BigInt.zero) return 0;
       final quote = await _quote(from, to, amount);
+      if (!isCurrent()) return 0;
       final route = _route(quote, _mapper.map(from), onLimits: onLimits);
       final rate = double.parse(route.expectedOutput) / double.parse(amount);
       if (!rate.isFinite || rate <= 0) return 0;
@@ -220,6 +244,7 @@ class PegaRouteExchangeProvider extends ExchangeProvider {
       onLimits?.call(Limits(min: PegarouteApiError.limit(route.minAmount) ?? 0, max: null));
       return rate;
     } on PegarouteApiError catch (error) {
+      if (!isCurrent()) return 0;
       if (error.code == 'AMOUNT_TOO_LOW' && error.minAmount != null &&
           error.provider != null && _enabled(error.provider!)) {
         onLimits?.call(Limits(min: error.minAmount, max: null));
@@ -262,6 +287,10 @@ class PegaRouteExchangeProvider extends ExchangeProvider {
         throw StateError('Source principal must be positive');
       }
       final key = _key(request.fromCurrency, request.toCurrency, request.fromAmount);
+      if (!isCurrent()) throw StateError('Wallet or quote intent changed');
+      // A background refresh can clear the selected route before preview starts.
+      final pending = _pendingRates[key];
+      if (pending != null) await pending;
       final selected = _selectedRoutes[key];
       if (selected == null) throw StateError('Exact quote required before creation');
       if (!isCurrent()) throw StateError('Wallet or quote intent changed');
