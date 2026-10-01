@@ -49,6 +49,12 @@ Future<void> importSecretsConfig() async {
   final nanoOutput =
       nanoInput.keys.fold('', (String acc, String val) => acc + generateConst(val, nanoInput));
 
+  final bitcoinOutputFile = File(bitcoinOutputPath);
+  final bitcoinInput =
+      json.decode(File(bitcoinConfigPath).readAsStringSync()) as Map<String, dynamic>;
+  final bitcoinOutput = bitcoinInput.keys
+      .fold('', (String acc, String val) => acc + generateConst(val, bitcoinInput));
+
   if (outputFile.existsSync()) {
     await outputFile.delete();
   }
@@ -78,4 +84,10 @@ Future<void> importSecretsConfig() async {
   }
 
   await nanoOutputFile.writeAsString(nanoOutput);
+
+  if (bitcoinOutputFile.existsSync()) {
+    await bitcoinOutputFile.delete();
+  }
+
+  await bitcoinOutputFile.writeAsString(bitcoinOutput);
 }

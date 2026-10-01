@@ -576,13 +576,6 @@ packages:
       relative: true
     source: path
     version: "0.0.1"
-  cw_decred:
-    dependency: "direct main"
-    description:
-      path: cw_decred
-      relative: true
-    source: path
-    version: "0.0.1"
   cw_dogecoin:
     dependency: "direct main"
     description:
@@ -639,20 +632,6 @@ packages:
       relative: true
     source: path
     version: "0.0.1"
-  cw_zano:
-    dependency: "direct main"
-    description:
-      path: cw_zano
-      relative: true
-    source: path
-    version: "0.0.1"
-  cw_zcash:
-    dependency: "direct main"
-    description:
-      path: cw_zcash
-      relative: true
-    source: path
-    version: "1.0.0"
   dart_style:
     dependency: "direct overridden"
     description:
@@ -1272,7 +1251,7 @@ packages:
     source: git
     version: "2.11.1"
   flutter_secure_storage:
-    dependency: "direct main"
+    dependency: "direct overridden"
     description:
       path: flutter_secure_storage
       ref: ca897a08677edb443b366352dd7412735e098e7b
@@ -3492,4 +3471,4 @@ packages:
     version: "6.24.0"
 sdks:
   dart: ">=3.9.0 <4.0.0"
-  flutter: ">=3.19.0"
+  flutter: ">=3.3.0"

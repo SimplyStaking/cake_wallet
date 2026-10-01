@@ -29,7 +29,7 @@ universal_sed "s/\${BUNDLE_ID}/${APP_MACOS_BUNDLE_ID}/g" ./macos/Runner/DebugPro
 universal_sed "s/\${BUNDLE_ID}/${APP_MACOS_BUNDLE_ID}/g" ./macos/Runner/Release.entitlements
 universal_sed "s/\${BUNDLE_ID}/${APP_MACOS_BUNDLE_ID}/g" ./macos/Runner/Runner.entitlements
 universal_sed "s/\${PRODUCT_NAME}/${APP_MACOS_NAME}/g" ./macos/Runner/Configs/AppInfo.xcconfig
-universal_sed "s/PRODUCT_BUNDLE_IDENTIFIER = .*;/PRODUCT_BUNDLE_IDENTIFIER = $APP_MACOS_BUNDLE_ID;/g" ./macos/Runner/Configs/AppInfo.xcconfig
+universal_sed "s/PRODUCT_BUNDLE_IDENTIFIER = .*/PRODUCT_BUNDLE_IDENTIFIER = $APP_MACOS_BUNDLE_ID/g" ./macos/Runner/Configs/AppInfo.xcconfig
 CONFIG_ARGS=""
 
 case $APP_MACOS_TYPE in
@@ -38,6 +38,10 @@ case $APP_MACOS_TYPE in
         $CAKEWALLET)
 		CONFIG_ARGS="--monero --bitcoin --ethereum --polygon --nano --bitcoinCash --solana --tron --wownero --dogecoin --base --arbitrum --bsc";;
 esac
+
+if [ "${CAKE_MACOS_SKIP_SECURE_STORAGE:-0}" = "1" ]; then
+	CONFIG_ARGS="$CONFIG_ARGS --excludeFlutterSecureStorage"
+fi
 
 cp -rf pubspec_description.yaml pubspec.yaml
 flutter pub get

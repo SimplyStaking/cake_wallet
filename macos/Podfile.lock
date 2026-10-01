@@ -1,7 +1,7 @@
 PODS:
   - bitbox_flutter (0.0.1):
     - FlutterMacOS
-  - breez_sdk_spark_flutter (0.14.0):
+  - breez_sdk_spark_flutter (0.23.0):
     - FlutterMacOS
   - connectivity_plus (0.0.1):
     - FlutterMacOS
@@ -22,8 +22,6 @@ PODS:
   - flutter_local_authentication (1.2.0):
     - FlutterMacOS
   - flutter_local_notifications (0.0.1):
-    - FlutterMacOS
-  - flutter_secure_storage_macos (6.1.1):
     - FlutterMacOS
   - FlutterMacOS (1.0.0)
   - in_app_review (2.0.0):
@@ -89,7 +87,6 @@ DEPENDENCIES:
   - flutter_inappwebview_macos (from `Flutter/ephemeral/.symlinks/plugins/flutter_inappwebview_macos/macos`)
   - flutter_local_authentication (from `Flutter/ephemeral/.symlinks/plugins/flutter_local_authentication/macos`)
   - flutter_local_notifications (from `Flutter/ephemeral/.symlinks/plugins/flutter_local_notifications/macos`)
-  - flutter_secure_storage_macos (from `Flutter/ephemeral/.symlinks/plugins/flutter_secure_storage_macos/macos`)
   - FlutterMacOS (from `Flutter/ephemeral`)
   - in_app_review (from `Flutter/ephemeral/.symlinks/plugins/in_app_review/macos`)
   - package_info_plus (from `Flutter/ephemeral/.symlinks/plugins/package_info_plus/macos`)
@@ -133,8 +130,6 @@ EXTERNAL SOURCES:
     :path: Flutter/ephemeral/.symlinks/plugins/flutter_local_authentication/macos
   flutter_local_notifications:
     :path: Flutter/ephemeral/.symlinks/plugins/flutter_local_notifications/macos
-  flutter_secure_storage_macos:
-    :path: Flutter/ephemeral/.symlinks/plugins/flutter_secure_storage_macos/macos
   FlutterMacOS:
     :path: Flutter/ephemeral
   in_app_review:
@@ -162,7 +157,7 @@ EXTERNAL SOURCES:
 
 SPEC CHECKSUMS:
   bitbox_flutter: b3c6d3c4970b134a78a17fddef0ef429cfec2593
-  breez_sdk_spark_flutter: 0da35c86276ec740d938139262e198a475586548
+  breez_sdk_spark_flutter: 0041ddadcea42244824bdc3b436d44ecd2fa27ae
   connectivity_plus: 4adf20a405e25b42b9c9f87feff8f4b6fde18a4e
   cw_mweb: 4746a3b5cc5bd4afe6fadd2481c4f7b239e391d0
   device_info_plus: b0fafc687fb901e2af612763340f1b0d4352f8e5
@@ -173,7 +168,6 @@ SPEC CHECKSUMS:
   flutter_inappwebview_macos: c2d68649f9f8f1831bfcd98d73fd6256366d9d1d
   flutter_local_authentication: 2f9a2682f498abcc12d7e9729b5007a947170fdc
   flutter_local_notifications: 4bf37a31afde695b56091b4ae3e4d9c7a7e6cda0
-  flutter_secure_storage_macos: 3dacac420d84c4d0dc5e868194ee43c8664ec797
   FlutterMacOS: d0db08ddef1a9af05a5ec4b724367152bb0500b1
   in_app_review: 66e7680752b632d83f4f0e88b34d52ed303fbff4
   OrderedSet: e539b66b644ff081c73a262d24ad552a69be3a94
@@ -191,4 +185,4 @@ SPEC CHECKSUMS:
 
 PODFILE CHECKSUM: 65ec1541137fb5b35d00490dec1bb48d4d9586bb
 
-COCOAPODS: 1.16.2
+COCOAPODS: 1.17.0

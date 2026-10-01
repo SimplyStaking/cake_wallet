@@ -2132,18 +2132,31 @@ class DefaultSecureStorage extends SecureStorage {
  }""";
   const fakeSecureStorage = """
 class FakeSecureStorage extends SecureStorage {
+  final Map<String, String> _values = {};
+
   @override
-  Future<String?> read({required String key}) async => null;
+  Future<String?> read({required String key}) async => _values[key];
+
   @override
-  Future<void> write({required String key, required String? value}) async {}
+  Future<void> write({required String key, required String? value}) async {
+    if (value == null) {
+      _values.remove(key);
+    } else {
+      _values[key] = value;
+    }
+  }
+
   @override
-  Future<void> delete({required String key}) async {}
+  Future<void> delete({required String key}) async => _values.remove(key);
+
   @override
-  Future<void> deleteAll() async {}
+  Future<void> deleteAll() async => _values.clear();
+
   @override
-  Future<String?> readNoIOptions({required String key}) async => null;
+  Future<String?> readNoIOptions({required String key}) async => _values[key];
+
   @override
-  Future<Map<String, String>> readAll() async => {};
+  Future<Map<String, String>> readAll() async => Map.of(_values);
  }""";
   final outputFile = File(secureStoragePath);
   final header = hasFlutterSecureStorage
